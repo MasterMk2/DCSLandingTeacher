@@ -1,0 +1,509 @@
+/* DCS Landing Teacher — dark radar-green theme, desktop-first, print-ready. */
+
+:root {
+  --bg: #0b1410;
+  --bg-panel: #10241a;
+  --bg-scope: #07130d;
+  --border: #2f5c44;
+  --text: #d7efe0;
+  --text-dim: #9fb8a8;
+  --accent: #39d98a;
+  --accent-dim: #1f7a4f;
+  --warn: #ffd166;
+  --danger: #ff6b6b;
+  --info: #6ab7ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+  font-size: 14px;
+}
+
+.app-nav {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-title {
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.app-subtitle {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+main {
+  padding: 16px 20px 40px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.view-header h1 {
+  font-size: 20px;
+  margin: 8px 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-live {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ---------- Filters ---------- */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 12px;
+  margin: 12px 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.filter-bar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.filter-bar input,
+.filter-bar select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  min-width: 130px;
+  font-size: 13px;
+}
+
+/* ---------- Table ---------- */
+
+.landing-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.landing-table th,
+.landing-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.landing-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  background: rgba(57, 217, 138, 0.06);
+}
+
+.landing-row {
+  cursor: pointer;
+}
+
+.landing-row:hover,
+.landing-row:focus {
+  background: rgba(57, 217, 138, 0.1);
+  outline: none;
+}
+
+.empty-message,
+.loading-message,
+.error-message {
+  padding: 16px;
+  color: var(--text-dim);
+}
+
+.error-message {
+  color: var(--danger);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------- Grades ---------- */
+
+.grade-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 700;
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+
+.grade-large {
+  font-size: 22px;
+  padding: 6px 16px;
+}
+
+.grade-ok {
+  color: #0b1410;
+  background: var(--accent);
+}
+
+.grade-ok-minus {
+  color: var(--accent);
+  background: rgba(57, 217, 138, 0.15);
+  border-color: var(--accent);
+}
+
+.grade-paren-ok {
+  color: var(--warn);
+  background: rgba(255, 209, 102, 0.12);
+  border-color: var(--warn);
+}
+
+.grade-no-grade {
+  color: var(--text-dim);
+  background: rgba(159, 184, 168, 0.12);
+  border-color: var(--text-dim);
+}
+
+.grade-cut {
+  color: #fff;
+  background: var(--danger);
+}
+
+.grade-other,
+.grade-none {
+  color: var(--text);
+  background: transparent;
+  border-color: var(--border);
+}
+
+/* ---------- Detail / scopes ---------- */
+
+.detail section {
+  margin-top: 24px;
+}
+
+.detail h2 {
+  font-size: 16px;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.print-sheet {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 20px;
+}
+
+.sheet-title {
+  font-size: 18px;
+  margin: 0 0 12px;
+  color: var(--accent);
+}
+
+.info-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.info-table th,
+.info-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.info-table th {
+  color: var(--text-dim);
+  width: 130px;
+  background: rgba(57, 217, 138, 0.05);
+}
+
+.sheet-footer {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 16px;
+}
+
+.gca-scopes {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.scope-svg {
+  width: 340px;
+  max-width: 100%;
+  height: auto;
+}
+
+.topdown-view .scope-svg {
+  width: 480px;
+}
+
+.scope-bg {
+  fill: var(--bg-scope);
+  stroke: var(--border);
+}
+
+.scope-ring {
+  stroke: #1f4432;
+  stroke-width: 1;
+}
+
+.scope-ideal {
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+
+.scope-threshold {
+  stroke: var(--warn);
+  stroke-width: 3;
+}
+
+.scope-trail-line {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.scope-trail-dot {
+  fill: #aef3cf;
+}
+
+.scope-touchdown {
+  fill: var(--danger);
+}
+
+.scope-title {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.scope-label {
+  fill: var(--text-dim);
+  font-size: 10px;
+}
+
+/* ---------- Grade summary ---------- */
+
+.grade-headline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.grade-sub {
+  color: var(--text-dim);
+}
+
+.grade-comment {
+  background: rgba(57, 217, 138, 0.08);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+.factor-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.factor-table th,
+.factor-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.factor-table th {
+  color: var(--text-dim);
+  background: rgba(57, 217, 138, 0.05);
+}
+
+.factor-name {
+  font-weight: 700;
+  color: var(--warn);
+}
+
+.factor-evidence {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.metrics-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px 20px;
+  margin: 8px 0;
+}
+
+.metrics-row {
+  display: flex;
+  gap: 10px;
+  border-bottom: 1px dashed var(--border);
+  padding: 4px 0;
+}
+
+.metrics-row dt {
+  color: var(--text-dim);
+  min-width: 110px;
+}
+
+.metrics-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Charts ---------- */
+
+.timeseries {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.timeseries h3 {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 4px;
+}
+
+/* ---------- Print (FR-6 data sheet) ---------- */
+
+@media print {
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  .no-print,
+  .app-nav {
+    display: none !important;
+  }
+
+  main {
+    padding: 0;
+    max-width: none;
+  }
+
+  .print-sheet {
+    border: 1px solid #999;
+    background: #fff;
+    color: #000;
+    page-break-inside: avoid;
+  }
+
+  .sheet-title {
+    color: #000;
+  }
+
+  .info-table th,
+  .factor-table th {
+    background: #eee;
+    color: #333;
+  }
+
+  .info-table th,
+  .info-table td,
+  .factor-table th,
+  .factor-table td {
+    border-color: #999;
+    color: #000;
+  }
+
+  /* Keep the radar-scope colors in the printed sheet. */
+  .scope-svg {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .grade-badge {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
+
+/* ---------- Responsive (desktop-first) ---------- */
+
+@media (max-width: 900px) {
+  .landing-table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .gca-scopes {
+    flex-direction: column;
+    align-items: center;
+  }
+}
