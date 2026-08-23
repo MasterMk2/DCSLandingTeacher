@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     reconnect_initial_delay: float = 1.0
     reconnect_max_delay: float = 30.0
 
+    # Grading thresholds (YAML); relative to the working directory.
+    grading_config_path: str = "config/grading.yaml"
+
 
 def get_settings() -> Settings:
     return Settings()

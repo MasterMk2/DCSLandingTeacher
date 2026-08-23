@@ -89,20 +89,24 @@ class Track(Base):
 
 
 class Landing(Base):
-    """Landing / carrier-arrestment event.
-
-    Placeholder for Phase 1: detection and grading tasks will fill in the
-    evaluation columns.
-    """
+    """Landing / carrier-arrestment event with grading results (FR-2..FR-4)."""
 
     __tablename__ = "landings"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     flight_id: Mapped[int] = mapped_column(ForeignKey("flights.id", ondelete="CASCADE"), index=True)
     object_id: Mapped[int] = mapped_column(ForeignKey("objects.id", ondelete="CASCADE"), index=True)
+    carrier_object_id: Mapped[int | None] = mapped_column(
+        ForeignKey("objects.id", ondelete="SET NULL"), nullable=True
+    )
 
     kind: Mapped[str | None] = mapped_column(String(16), nullable=True)  # "land" / "carrier"
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # "full_stop" | "touch_and_go" | "bolter"
     touchdown_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Venue (carrier name or airbase/static object name when known)
+    venue_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # Touchdown position / state
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -112,8 +116,17 @@ class Landing(Base):
     speed: Mapped[float | None] = mapped_column(Float, nullable=True)
     descent_rate: Mapped[float | None] = mapped_column(Float, nullable=True)  # m/s at touchdown
 
-    # Evaluation results (populated by grading tasks)
+    # Evaluation results (populated by the grading engine)
     grade: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    comment: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     factors: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Raw approach segment + computed deviations, kept for re-evaluation (FR-7)
+    approach_track: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    grading_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

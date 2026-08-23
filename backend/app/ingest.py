@@ -1,13 +1,21 @@
 """Ingest pipeline: ACMI parser events -> ORM entities -> SQLite.
 
-Phase 1 scope. Lines are parsed incrementally and persisted in batches:
-a single session is reused across events and committed once
-``max_batch_size`` pending writes have accumulated (or on :meth:`close`).
-This avoids one transaction per telemetry line while keeping memory bounded.
+Lines are parsed incrementally and persisted in batches: a single session is
+reused across events and committed once ``max_batch_size`` pending writes
+have accumulated (or on :meth:`close`). This avoids one transaction per
+telemetry line while keeping memory bounded.
+
+Landing detection (FR-2) hooks in here: aircraft samples are mirrored into
+rolling buffers, carrier/static objects into lightweight state holders, and
+:class:`app.detection.detector.analyze_track` runs after every update. New
+landing events are forwarded to the optional ``landing_listener`` callback
+(the grading pipeline).
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from logging import getLogger
 
 from sqlalchemy import select
@@ -21,9 +29,43 @@ from app.acmi.models import (
     ObjectUpdateEvent,
 )
 from app.acmi.parser import AcmiParseError, AcmiParser
+from app.detection.classify import ObjectClass, classify_object_type
+from app.detection.detector import (
+    CarrierState,
+    LandingEvent,
+    RollingTrackBuffer,
+    TrackSample,
+    analyze_track,
+)
+from app.detection.geometry import haversine_m
 from app.models.entities import DcsObject, Flight, Track
 
 logger = getLogger(__name__)
+
+#: Radius (m) within which a static object / carrier is used as the ground
+#: elevation reference for WOW estimation.
+GROUND_REFERENCE_RADIUS_M = 5000.0
+
+
+@dataclass
+class LandingContext:
+    """Everything the grading pipeline needs about one detected landing.
+
+    ``object_row_id`` / ``carrier_row_id`` carry the ORM row ids already
+    resolved by the ingestor; the pipeline must not re-query them because
+    the ingest transaction may not be committed yet.
+    """
+
+    flight_id: int | None
+    acmi_object_id: str
+    pilot: str | None
+    airframe: str | None
+    event: LandingEvent
+    object_row_id: int | None = None
+    carrier_row_id: int | None = None
+
+
+LandingListener = Callable[[LandingContext], Awaitable[None]]
 
 
 class TrackIngestor:
@@ -34,6 +76,8 @@ class TrackIngestor:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         max_batch_size: int = 200,
+        landing_listener: LandingListener | None = None,
+        sample_buffer_s: float = 600.0,
     ) -> None:
         self._session_factory = session_factory
         self._max_batch_size = max(1, max_batch_size)
@@ -44,9 +88,23 @@ class TrackIngestor:
         self._session: AsyncSession | None = None
         self._pending = 0
 
+        # --- landing detection state (FR-2) -------------------------------
+        self._landing_listener = landing_listener
+        self._sample_buffer_s = sample_buffer_s
+        self._aircraft_buffers: dict[str, RollingTrackBuffer] = {}
+        self._carrier_states: dict[str, CarrierState] = {}
+        #: static object id -> (lat, lon, altitude)
+        self._static_positions: dict[str, tuple[float, float, float]] = {}
+        #: (acmi id, touchdown time) pairs already reported.
+        self._reported_landings: set[tuple[str, float]] = set()
+
     @property
     def parser(self) -> AcmiParser:
         return self._parser
+
+    @property
+    def carrier_states(self) -> dict[str, CarrierState]:
+        return self._carrier_states
 
     async def handle_line(self, line: str) -> None:
         """Process one raw line coming from the stream client."""
@@ -62,9 +120,7 @@ class TrackIngestor:
             elif isinstance(event, ObjectRemoveEvent):
                 await self._handle_remove(event)
             elif isinstance(event, MissionEvent):
-                # Landing detection (next subtask) will consume Landed /
-                # TakenOff / Destroyed events; log them for now.
-                logger.info(
+                logger.debug(
                     "mission event %s at t=%.2f ids=%s text=%r",
                     event.event_type,
                     event.time,
@@ -169,6 +225,11 @@ class TrackIngestor:
             self._pending += 1
         await self._flush()
 
+        if source is not None:
+            self._update_detection_state(event.obj_id, source)
+            if classify_object_type(source.type) == ObjectClass.AIRCRAFT:
+                await self._maybe_detect_landing(event.obj_id)
+
     async def _handle_remove(self, event: ObjectRemoveEvent) -> None:
         object_row_id = self._object_row_ids.get(event.obj_id)
         if object_row_id is None or self._flight_id is None:
@@ -180,6 +241,150 @@ class TrackIngestor:
             dcs_object.last_seen = event.time
             self._pending += 1
             await self._flush()
+        # A disappearing aircraft may have been on deck: run a final detection
+        # pass so end-of-track landings are still reported.
+        source = self._parser.objects.get(event.obj_id)
+        if source is not None and classify_object_type(source.type) == ObjectClass.AIRCRAFT:
+            await self._maybe_detect_landing(event.obj_id, force_final=True)
+
+    # ------------------------------------------------------------------
+    # Landing detection hooks (FR-2)
+    # ------------------------------------------------------------------
+
+    def _update_detection_state(self, obj_id: str, source: AcmiObject) -> None:
+        obj_class = classify_object_type(source.type)
+        if obj_class == ObjectClass.CARRIER:
+            state = self._carrier_states.setdefault(obj_id, CarrierState(obj_id, source.name))
+            state.name = source.name
+            if (
+                source.latitude is not None
+                and source.longitude is not None
+                and source.altitude is not None
+            ):
+                sample = (
+                    source.last_seen,
+                    source.latitude,
+                    source.longitude,
+                    source.altitude,
+                    source.heading or 0.0,
+                    source.speed or 0.0,
+                )
+                if not state.samples or state.samples[-1][0] != sample[0]:
+                    state.samples.append(sample)
+        elif obj_class == ObjectClass.STATIC:
+            if (
+                source.latitude is not None
+                and source.longitude is not None
+                and source.altitude is not None
+            ):
+                self._static_positions[obj_id] = (
+                    source.latitude,
+                    source.longitude,
+                    source.altitude,
+                )
+        elif obj_class == ObjectClass.AIRCRAFT:
+            if source.latitude is not None and source.longitude is not None:
+                self.record_aircraft_sample(
+                    obj_id,
+                    TrackSample(
+                        time=source.last_seen,
+                        latitude=source.latitude,
+                        longitude=source.longitude,
+                        altitude=source.altitude,
+                        agl=source.agl,
+                        speed=source.speed,
+                        heading=source.heading,
+                        aoa=source.aoa,
+                        on_ground=source.on_ground,
+                    ),
+                )
+
+    def _ground_altitude_for(
+        self, latitude: float | None, longitude: float | None
+    ) -> float | None:
+        """Elevation of the nearest carrier deck / static within range."""
+        best: float | None = None
+        best_distance = GROUND_REFERENCE_RADIUS_M
+        if latitude is None or longitude is None:
+            return None
+        for state in self._carrier_states.values():
+            if not state.samples:
+                continue
+            t, lat, lon, alt, *_ = state.samples[-1]
+            distance = haversine_m(latitude, longitude, lat, lon)
+            if distance <= best_distance:
+                best_distance = distance
+                best = alt
+        for lat, lon, alt in self._static_positions.values():
+            distance = haversine_m(latitude, longitude, lat, lon)
+            if distance <= best_distance:
+                best_distance = distance
+                best = alt
+        return best
+
+    async def _maybe_detect_landing(
+        self, obj_id: str, *, force_final: bool = False
+    ) -> None:
+        # Landing events are rare; commit pending ingest writes first so the
+        # grading pipeline can open its own write transaction without
+        # hitting SQLite's single-writer lock.
+        await self._flush(force=True)
+        buffer = self._aircraft_buffers.get(obj_id)
+        if buffer is None:
+            buffer = RollingTrackBuffer(self._sample_buffer_s)
+            self._aircraft_buffers[obj_id] = buffer
+
+        source = self._parser.objects.get(obj_id)
+        samples = buffer.snapshot()
+        if not samples:
+            return
+        last = samples[-1]
+        ground_altitude = self._ground_altitude_for(last.latitude, last.longitude)
+
+        events = analyze_track(
+            samples,
+            ground_altitude,
+            self._carrier_states,
+            current_time=None if force_final else last.time,
+        )
+        for landing in events:
+            if not force_final and not landing.finalized:
+                continue
+            key = (obj_id, round(landing.touchdown.time, 3))
+            if key in self._reported_landings:
+                continue
+            self._reported_landings.add(key)
+            context = LandingContext(
+                flight_id=self._flight_id,
+                acmi_object_id=obj_id,
+                pilot=source.pilot if source else None,
+                airframe=source.name if source else None,
+                event=landing,
+                object_row_id=self._object_row_ids.get(obj_id),
+                carrier_row_id=(
+                    self._object_row_ids.get(landing.carrier_obj_id)
+                    if landing.carrier_obj_id
+                    else None
+                ),
+            )
+            logger.info(
+                "landing detected: obj=%s kind=%s outcome=%s t=%.2f",
+                obj_id,
+                landing.kind,
+                landing.outcome,
+                landing.touchdown.time,
+            )
+            if self._landing_listener is not None:
+                try:
+                    await self._landing_listener(context)
+                except Exception:
+                    logger.exception("landing listener failed")
+
+    def record_aircraft_sample(self, obj_id: str, sample: TrackSample) -> None:
+        """Public hook so tests/hosts can feed detection buffers directly."""
+        self._aircraft_buffers.setdefault(
+            obj_id, RollingTrackBuffer(self._sample_buffer_s)
+        ).append(sample)
 
     def _build_track(
         self,

@@ -1,0 +1,202 @@
+"""Landing grading pipeline: detection event -> grade -> DB -> notification.
+
+Connects the ingestor's landing listener to the graders and persistence
+(FR-3, FR-4, FR-7). The raw approach segment with computed deviations is
+stored alongside the evaluation so thresholds can be re-applied later via
+``POST /api/landings/{id}/regrade`` without re-parsing any ACMI data.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from logging import getLogger
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.detection.detector import LandingEvent
+from app.grading.config import GradingConfig
+from app.grading.deviations import ApproachAnalysis, build_approach_analysis
+from app.grading.land_grader import LandGradeResult, grade_land_landing
+from app.grading.lso_grader import LsoGradeResult, grade_carrier_approach
+from app.ingest import LandingContext
+from app.models.entities import DcsObject, Landing
+
+logger = getLogger(__name__)
+
+GRADING_VERSION = "1"
+
+
+class LandingPipeline:
+    """Grade detected landings, persist them, and fan out notifications."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        grading_config: GradingConfig,
+        notifier: Any | None = None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._config = grading_config
+        self._notifier = notifier
+
+    async def handle_landing(self, context: LandingContext) -> int | None:
+        """Grade + persist one detected landing; returns the row id."""
+        event = context.event
+        analysis = build_approach_analysis(
+            event, self._config.glideslope_for(event.kind)
+        )
+        if event.kind == "carrier":
+            result = grade_carrier_approach(analysis, self._config)
+            score = None
+        else:
+            result = grade_land_landing(analysis, self._config)
+            score = result.score
+
+        landing_id = await self._persist(context, analysis, result, score)
+
+        if self._notifier is not None and landing_id is not None:
+            try:
+                await self._notifier.broadcast_landing(
+                    {
+                        "id": landing_id,
+                        "kind": event.kind,
+                        "outcome": event.outcome,
+                        "grade": result.grade,
+                        "pilot": context.pilot,
+                        "airframe": context.airframe,
+                        "venue_name": event.carrier_name if event.kind == "carrier" else None,
+                        "touchdown_time": event.touchdown.time,
+                    }
+                )
+            except Exception:
+                logger.exception("landing notification failed")
+        return landing_id
+
+    async def regrade(
+        self, landing: Landing, overrides: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Re-apply current thresholds to a stored approach track (FR-7).
+
+        ``overrides`` is an optional nested dict merged on top of the YAML
+        configuration for this single call (e.g. tightened HIGH threshold).
+        """
+        if not landing.approach_track:
+            raise ValueError("landing has no stored approach track")
+        config = self._config
+        if overrides:
+            from app.grading.config import apply_config_overrides
+
+            config = apply_config_overrides(config, overrides)
+        analysis = ApproachAnalysis.from_dict(landing.approach_track)
+        if landing.kind == "carrier":
+            result = grade_carrier_approach(analysis, config)
+            score = None
+        else:
+            result = grade_land_landing(analysis, config)
+            score = result.score
+
+        async with self._session_factory() as session:
+            # The caller may hold the entity in a different session; merge it.
+            landing = await session.merge(landing)
+            landing.grade = result.grade
+            landing.score = score
+            landing.comment = result.comment
+            landing.factors = result.factors_payload()
+            landing.metrics = dict(result.metrics)
+            landing.grading_version = GRADING_VERSION
+            landing.graded_at = _utcnow()
+            await session.commit()
+        return {
+            "id": landing.id,
+            "grade": result.grade,
+            "score": score,
+            "comment": result.comment,
+            "factors": result.factors_payload(),
+            "metrics": dict(result.metrics),
+        }
+
+    # ------------------------------------------------------------------
+
+    async def _persist(
+        self,
+        context: LandingContext,
+        analysis: ApproachAnalysis,
+        result: LandGradeResult | LsoGradeResult,
+        score: float | None,
+    ) -> int | None:
+        event: LandingEvent = context.event
+        touchdown = event.touchdown
+        async with self._session_factory() as session:
+            # Row ids come from the ingestor: the ingest transaction may not
+            # be committed yet, so re-querying could miss the rows.
+            carrier_row_id = context.carrier_row_id
+            if carrier_row_id is None:
+                carrier_row_id = await self._resolve_object_row(
+                    session, context.flight_id, event.carrier_obj_id
+                )
+            aircraft_row_id = context.object_row_id
+            if aircraft_row_id is None:
+                aircraft_row_id = await self._resolve_object_row(
+                    session, context.flight_id, context.acmi_object_id
+                )
+            if aircraft_row_id is None or context.flight_id is None:
+                logger.warning(
+                    "cannot persist landing: missing object/flight rows (obj=%s)",
+                    context.acmi_object_id,
+                )
+                return None
+
+            venue = None
+            if event.kind == "carrier":
+                venue = event.carrier_name
+
+            landing = Landing(
+                flight_id=context.flight_id,
+                object_id=aircraft_row_id,
+                carrier_object_id=carrier_row_id,
+                kind=event.kind,
+                outcome=event.outcome,
+                touchdown_time=touchdown.time,
+                venue_name=venue,
+                latitude=touchdown.latitude,
+                longitude=touchdown.longitude,
+                altitude=touchdown.altitude,
+                heading=touchdown.heading,
+                speed=touchdown.speed,
+                descent_rate=touchdown.descent_rate_ms,
+                grade=result.grade,
+                score=score,
+                comment=result.comment,
+                factors=result.factors_payload(),
+                metrics=dict(result.metrics),
+                approach_track=analysis.as_dict(),
+                grading_version=GRADING_VERSION,
+                graded_at=_utcnow(),
+            )
+            session.add(landing)
+            await session.commit()
+            await session.refresh(landing)
+            logger.info(
+                "landing #%d graded %s (%s)", landing.id, result.grade, event.kind
+            )
+            return landing.id
+
+    async def _resolve_object_row(
+        self, session: AsyncSession, flight_id: int | None, acmi_id: str | None
+    ) -> int | None:
+        from sqlalchemy import select
+
+        if flight_id is None or not acmi_id:
+            return None
+        result = await session.execute(
+            select(DcsObject.id).where(
+                DcsObject.flight_id == flight_id,
+                DcsObject.acmi_id == acmi_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
