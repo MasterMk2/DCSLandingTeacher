@@ -1,0 +1,14 @@
+FileType=text/acmi/tacview
+FileVersion=2.2
+0,ReferenceTime=2011-06-02T05:00:00Z
+0,DataSource=DCS 2.9.4
+0,DataRecorder=Tacview 1.9.0
+// This comment line must be ignored
+#0.00
+101,T=41.6251307|41.5910417|2000.14|0|5|90,Type=Air+FixedWing,Name=C172,Pilot=Viggen,Group=Training,Country=us,TAS=75
+102,T=41.62|41.58|0|0|0|85,Type=Sea+Watercraft+AircraftCarrier,Name=Kuznetsov
+#47.13
+101,T=41.626||2000.00|||91,TAS=80
+-102
+#8.62
+101,T=41.63||1999.50,AGL=1501.2
