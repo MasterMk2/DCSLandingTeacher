@@ -1,0 +1,43 @@
+# DCS Landing Teacher - single-container deployment.
+# FastAPI serves both the REST/WebSocket API and the built frontend (SPA).
+#
+#   docker compose up --build
+#
+# Configuration is read from ./.env (see .env.example). Only the variables
+# that must differ from the defaults are repeated below; container-specific
+# paths (SQLite on the persistent volume, baked-in config/frontend) are fixed.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: dcs-landing-teacher:latest
+    restart: unless-stopped
+    ports:
+      - "${DLT_PORT:-8000}:8000"
+    env_file:
+      # Optional; copy .env.example to .env to customize Tacview host/port,
+      # password, CORS origins, etc.
+      - path: .env
+        required: false
+    environment:
+      # SQLite lives on the named volume below (survives container rebuilds).
+      DLT_DATABASE_URL: sqlite+aiosqlite:////data/dlt.db
+      DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
+      DLT_FRONTEND_DIST_DIR: /app/frontend/dist
+      # Default: reach a Tacview exporter running on the Docker host
+      # (works on Windows/macOS natively and on Linux via extra_hosts).
+      DLT_TACVIEW_HOST: ${DLT_TACVIEW_HOST:-host.docker.internal}
+      DLT_TACVIEW_PORT: ${DLT_TACVIEW_PORT:-31010}
+    volumes:
+      - dlt-data:/data
+      # Mount grading thresholds read-only so they can be tuned live;
+      # remove this line to use the copy baked into the image.
+      - ./config:/app/config:ro
+    extra_hosts:
+      # Linux equivalent of host.docker.internal (no-op elsewhere).
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  dlt-data:
