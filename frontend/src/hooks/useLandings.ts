@@ -1,0 +1,85 @@
+/** Dashboard data hook: paged fetch + real-time WS insertion. */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listLandings } from "../api/client";
+import { LandingSocket } from "../api/ws";
+import type {
+  LandingFilters,
+  LandingListResponse,
+  LandingSummary,
+} from "../types/api";
+
+export interface UseLandingsResult {
+  data: LandingListResponse | null;
+  loading: boolean;
+  error: string | null;
+  /** Number of live-inserted rows not yet confirmed by a refetch. */
+  liveCount: number;
+  refresh: () => void;
+}
+
+const PAGE_SIZE = 50;
+
+export function useLandings(
+  filters: LandingFilters,
+  offset: number,
+): UseLandingsResult {
+  const [data, setData] = useState<LandingListResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [liveCount, setLiveCount] = useState(0);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  // Stable JSON key so the effect does not re-run on every render.
+  const filterKey = JSON.stringify(filters);
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listLandings(JSON.parse(filterKey) as LandingFilters, PAGE_SIZE, offset)
+      .then((res) => {
+        if (!cancelled) {
+          setData(res);
+          setError(null);
+          setLiveCount(0);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filterKey, offset, reloadTick]);
+
+  useEffect(() => {
+    const socket = new LandingSocket((msg) => {
+      const landing = msg.landing as Partial<LandingSummary>;
+      if (landing.id === undefined) return;
+      setData((prev) => {
+        if (!prev) return prev;
+        if (prev.items.some((it) => it.id === landing.id)) return prev;
+        // Only prepend on the first page; deeper pages just bump the badge.
+        if (offset === 0) {
+          const item = landing as LandingSummary;
+          return { ...prev, items: [item, ...prev.items], total: prev.total + 1 };
+        }
+        return { ...prev, total: prev.total + 1 };
+      });
+      setLiveCount((c) => c + 1);
+    });
+    socket.connect();
+    return () => socket.close();
+  }, [offset]);
+
+  const refresh = useCallback(() => setReloadTick((t) => t + 1), []);
+
+  return { data, loading, error, liveCount, refresh };
+}
+
+export { PAGE_SIZE as LANDING_PAGE_SIZE };
