@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     # Grading thresholds (YAML); relative to the working directory.
     grading_config_path: str = "config/grading.yaml"
 
+    # CORS origins allowed to call the API from a browser. Empty list means
+    # same-origin only (no CORS headers are emitted), which is the default
+    # single-container deployment where the frontend is served by this app.
+    # Example: DLT_CORS_ORIGINS=["http://localhost:5173","https://dlt.example.com"]
+    cors_origins: list[str] = []
+
+    # Built frontend directory served in production. When the directory does
+    # not exist the API runs without static file hosting (dev mode).
+    frontend_dist_dir: str = "frontend/dist"
+
 
 def get_settings() -> Settings:
     return Settings()

@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from logging import getLogger
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.acmi.stream import AcmiStreamClient
 from app.api.notifier import LandingNotifier
@@ -84,5 +88,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    # CORS: only enabled when explicitly configured. The default (empty list)
+    # is the single-container deployment where this app also serves the
+    # frontend, so no cross-origin requests are expected.
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+        )
+
     app.include_router(api_router)
+    _mount_frontend(app, Path(settings.frontend_dist_dir))
     return app
+
+
+def _mount_frontend(app: FastAPI, dist_dir: Path) -> None:
+    """Serve the built frontend (SPA) when ``frontend/dist`` exists.
+
+    Vite emits ``index.html`` plus an ``assets/`` directory. Static assets are
+    served via StaticFiles; every other non-API GET path falls back to
+    ``index.html`` so client-side routing keeps working.
+    """
+    if not dist_dir.is_dir():
+        logger.info("Frontend dist not found at %s; API-only mode", dist_dir)
+        return
+
+    assets_dir = dist_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    dist_root = str(dist_dir.resolve())
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
+        candidate = (dist_dir / full_path).resolve()
+        if full_path and candidate.is_file() and str(candidate).startswith(dist_root):
+            return FileResponse(candidate)
+        return FileResponse(dist_dir / "index.html")
+
+    logger.info("Serving frontend from %s", dist_dir)

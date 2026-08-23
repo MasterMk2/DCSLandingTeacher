@@ -7,7 +7,6 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.schemas import (
     ApproachTrackOut,
@@ -20,7 +19,6 @@ from app.api.schemas import (
     RegradeResponse,
     TouchdownState,
 )
-from app.grading.config import GradingConfig
 from app.models.entities import DcsObject, Landing
 
 router = APIRouter(prefix="/api")
