@@ -8,6 +8,7 @@ import pytest
 
 from app.acmi.models import (
     HeaderEvent,
+    MissionEvent,
     ObjectRemoveEvent,
     ObjectUpdateEvent,
     TimeEvent,
@@ -36,9 +37,10 @@ def test_header_lines() -> None:
 
 def test_global_object_metadata() -> None:
     parser = AcmiParser()
-    event = parser.feed_line("0,ReferenceTime=2011-06-02T05:00:00Z")
-    assert isinstance(event, ObjectUpdateEvent)
-    assert event.obj_id == "0"
+    events = parser.feed_line("0,ReferenceTime=2011-06-02T05:00:00Z")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    assert updates[0].obj_id == "0"
     assert parser.header["ReferenceTime"] == "2011-06-02T05:00:00Z"
 
 
@@ -46,22 +48,22 @@ def test_frame_time_accumulation() -> None:
     parser = AcmiParser()
     first = parser.feed_line("#47.13")
     second = parser.feed_line("#8.62")
-    assert isinstance(first, TimeEvent) and first.time == pytest.approx(47.13)
-    assert isinstance(second, TimeEvent) and second.time == pytest.approx(55.75)
+    assert isinstance(first[0], TimeEvent) and first[0].time == pytest.approx(47.13)
+    assert isinstance(second[0], TimeEvent) and second[0].time == pytest.approx(55.75)
 
 
 def test_comments_and_blank_lines_ignored() -> None:
     parser = AcmiParser()
-    assert parser.feed_line("// a comment") is None
-    assert parser.feed_line("") is None
-    assert parser.feed_line("   ") is None
+    assert parser.feed_line("// a comment") == []
+    assert parser.feed_line("") == []
+    assert parser.feed_line("   ") == []
 
 
 def test_bom_on_first_line_is_stripped() -> None:
     parser = AcmiParser()
-    event = parser.feed_line("\ufeffFileType=text/acmi/tacview")
-    assert isinstance(event, HeaderEvent)
-    assert event.value == "text/acmi/tacview"
+    events = parser.feed_line("\ufeffFileType=text/acmi/tacview")
+    assert isinstance(events[0], HeaderEvent)
+    assert events[0].value == "text/acmi/tacview"
 
 
 def test_object_add_update_remove_from_fixture() -> None:
@@ -74,15 +76,16 @@ def test_object_add_update_remove_from_fixture() -> None:
     consumed = 0
     for idx, line in enumerate(lines):
         consumed = idx + 1
-        event = parser.feed_line(line)
-        if isinstance(event, ObjectUpdateEvent):
-            updates.append(event)
-            if event.obj_id == "102":
-                carrier = parser.objects["102"]
-                assert carrier.type == "Sea+Watercraft+AircraftCarrier"
-                assert carrier.name == "Kuznetsov"
-        elif isinstance(event, ObjectRemoveEvent):
-            removals.append(event)
+        for event in parser.feed_line(line):
+            if isinstance(event, ObjectUpdateEvent):
+                updates.append(event)
+                if event.obj_id == "102":
+                    carrier = parser.objects["102"]
+                    assert carrier.type == "Sea+Watercraft+AircraftCarrier"
+                    assert carrier.name == "Kuznetsov"
+            elif isinstance(event, ObjectRemoveEvent):
+                removals.append(event)
+        if removals:
             break
 
     # 3 global metadata lines + 2 object adds + 1 partial update before removal
@@ -106,7 +109,6 @@ def test_object_add_update_remove_from_fixture() -> None:
     assert aircraft.country == "us"
     # First update at t=0, second at t=47.13, third at t=55.75
     assert aircraft.last_seen == pytest.approx(55.75)
-
 
 
 def test_transform_full_syntax_typed_values() -> None:
@@ -171,10 +173,11 @@ def test_on_ground_property() -> None:
 
 def test_escaped_comma_in_value() -> None:
     parser = AcmiParser()
-    event = parser.feed_line("101,Comments=Touchdown\\, smooth arrival,Name=A")
-    assert isinstance(event, ObjectUpdateEvent)
-    assert event.properties["Comments"] == "Touchdown, smooth arrival"
-    assert event.properties["Name"] == "A"
+    events = parser.feed_line("101,Comments=Touchdown\\, smooth arrival,Name=A")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    assert updates[0].properties["Comments"] == "Touchdown, smooth arrival"
+    assert updates[0].properties["Name"] == "A"
 
 
 def test_hexadecimal_ids_normalized_to_uppercase() -> None:
@@ -198,3 +201,56 @@ def test_expand_transform_empty_components() -> None:
         "Altitude": "2000",
         "Yaw": "91",
     }
+
+
+# ---------------------------------------------------------------------------
+# Mission events (Event property)
+# ---------------------------------------------------------------------------
+
+
+def test_mission_event_bookmark() -> None:
+    parser = AcmiParser()
+    parser.feed_line("#8.62")
+    events = parser.feed_line("0,Event=Bookmark|Starting precautionary landing practice")
+
+    mission_events = [e for e in events if isinstance(e, MissionEvent)]
+    assert len(mission_events) == 1
+    event = mission_events[0]
+    assert event.event_type == "Bookmark"
+    assert event.object_ids == ()
+    assert event.text == "Starting precautionary landing practice"
+    assert event.time == pytest.approx(8.62)
+
+
+def test_mission_event_with_object_id() -> None:
+    parser = AcmiParser()
+    parser.feed_line("#114.76")
+    events = parser.feed_line("0,Event=Landed|705|Maverick has landed on the USS Ranger")
+
+    landed = [e for e in events if isinstance(e, MissionEvent)][0]
+    assert landed.event_type == "Landed"
+    assert landed.object_ids == ("705",)
+    assert landed.text == "Maverick has landed on the USS Ranger"
+
+
+def test_mission_events_do_not_pollute_object_properties() -> None:
+    parser = AcmiParser()
+    parser.feed_line("0,Event=Bookmark|test")
+    assert "Event" not in parser.header
+
+
+def test_multiple_mission_events_on_one_line() -> None:
+    parser = AcmiParser()
+    events = parser.feed_line(
+        "0,Event=Message|101|first,Event=Message|102|second"
+    )
+    mission_events = [e for e in events if isinstance(e, MissionEvent)]
+    assert [e.text for e in mission_events] == ["first", "second"]
+    assert [e.object_ids for e in mission_events] == [("101",), ("102",)]
+
+
+def test_object_update_with_inline_event_yields_both() -> None:
+    parser = AcmiParser()
+    events = parser.feed_line("101,T=1|2|3,Event=Landed|101|touchdown")
+    kinds = {type(e).__name__ for e in events}
+    assert kinds == {"ObjectUpdateEvent", "MissionEvent"}

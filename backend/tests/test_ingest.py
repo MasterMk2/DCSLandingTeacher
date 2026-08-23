@@ -1,13 +1,14 @@
-"""Tests for the minimal ingest pipeline (parser events -> DB)."""
+"""Tests for the ingest pipeline (parser events -> DB), incl. batching."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.ingest import TrackIngestor
+from app.models.database import create_engine, create_session_factory, init_db
 from app.models.entities import DcsObject, Flight, Track
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -21,6 +22,7 @@ async def feed_sample(ingestor: TrackIngestor) -> None:
 async def test_ingest_persists_flight_objects_tracks(session_factory) -> None:
     ingestor = TrackIngestor(session_factory)
     await feed_sample(ingestor)
+    await ingestor.close()
 
     async with session_factory() as session:
         flights = (await session.execute(select(Flight))).scalars().all()
@@ -65,7 +67,58 @@ async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
     await ingestor.handle_line("#not-a-number")  # must not raise
     await ingestor.handle_line("FileType=text/acmi/tacview")
     await ingestor.handle_line("101,T=41.6|41.5|100")
+    await ingestor.close()
 
     async with session_factory() as session:
         tracks = (await session.execute(select(Track))).scalars().all()
     assert len(tracks) == 1
+
+
+async def test_ingest_batches_commits(tmp_path) -> None:
+    """Pending writes are committed only when max_batch_size is reached."""
+    from sqlalchemy.orm import Session
+
+    db_path = (tmp_path / "batch.db").as_posix()
+    engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
+    await init_db(engine)
+
+    commit_count = {"n": 0}
+
+    def _count_commit(session):  # noqa: ANN001
+        commit_count["n"] += 1
+
+    event.listen(Session, "after_commit", _count_commit)
+
+    session_factory = create_session_factory(engine)
+    ingestor = TrackIngestor(session_factory, max_batch_size=2)
+    try:
+        # Three object updates -> two commits expected at batch size 2,
+        # plus one pending write flushed by close().
+        await ingestor.handle_line("FileType=text/acmi/tacview")
+        await ingestor.handle_line("FileVersion=2.2")
+        await ingestor.handle_line("#0.00")
+        await ingestor.handle_line("101,T=41.60|41.50|100")
+        await ingestor.handle_line("#1.00")
+        await ingestor.handle_line("101,T=41.61||101")
+        await ingestor.handle_line("#2.00")
+        await ingestor.handle_line("101,T=41.62||102")
+
+        commits_before_close = commit_count["n"]
+        await ingestor.close()
+
+        async with session_factory() as session:
+            tracks = (
+                await session.execute(select(Track).order_by(Track.mission_time))
+            ).scalars().all()
+        assert len(tracks) == 3
+        # Batching: fewer commits than writes.
+        assert commits_before_close == 2
+        assert commit_count["n"] == 3  # final flush on close
+    finally:
+        event.remove(Session, "after_commit", _count_commit)
+        await engine.dispose()
+
+
+async def test_ingest_close_without_data_is_noop(session_factory) -> None:
+    ingestor = TrackIngestor(session_factory)
+    await ingestor.close()  # must not raise even though nothing was written

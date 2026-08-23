@@ -208,3 +208,24 @@ class ObjectRemoveEvent(AcmiEvent):
 
     obj_id: str
     time: float
+
+
+@dataclass(frozen=True)
+class MissionEvent(AcmiEvent):
+    """A mission event declared through the ``Event`` property.
+
+    Per the specification, events are declared like properties but may be
+    repeated within the same frame without overriding each other::
+
+        Event = EventType | FirstObjectId | ... | EventText
+
+    Known event types include ``Message``, ``Bookmark``, ``Debug``,
+    ``LeftArea``, ``Destroyed``, ``TakenOff``, ``Landed`` and ``Timeout``.
+    ``Landed`` / ``TakenOff`` are of particular interest for the future
+    landing-detection task.
+    """
+
+    event_type: str
+    object_ids: tuple[str, ...]
+    text: str
+    time: float

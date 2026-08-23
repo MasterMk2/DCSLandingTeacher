@@ -9,6 +9,7 @@ Line kinds handled:
 - Frame time:       ``#<seconds>`` (offset accumulated onto current time)
 - Object update:    ``<id>,Property=Value,...`` (id in hexadecimal)
 - Object removal:   ``-<id>``
+- Mission events:   ``Event=Type|Id|...|Text`` property (repeatable per frame)
 - Comments:         ``// ...`` (ignored)
 
 The special ``T`` (Transform) property supports all four documented position
@@ -33,6 +34,7 @@ from app.acmi.models import (
     AcmiEvent,
     AcmiObject,
     HeaderEvent,
+    MissionEvent,
     ObjectRemoveEvent,
     ObjectUpdateEvent,
     TimeEvent,
@@ -40,6 +42,8 @@ from app.acmi.models import (
 
 FILE_TYPE_KEY = "FileType"
 FILE_VERSION_KEY = "FileVersion"
+
+EVENT_KEY = "Event"
 
 #: Canonical property names for the 9 transform slots, in documented order.
 _TRANSFORM_FIELDS = (
@@ -100,9 +104,31 @@ def expand_transform(value: str) -> dict[str, str]:
     return expanded
 
 
-def parse_properties(properties_text: str) -> dict[str, str]:
-    """Parse the comma-separated ``Property=Value`` part of an object line."""
+def parse_event_value(value: str) -> tuple[str, tuple[str, ...], str]:
+    """Parse an ``Event`` property value into ``(type, object_ids, text)``.
+
+    Structure per the specification:
+    ``Event = EventType | FirstObjectId | ... | EventText``
+    The event text is always the last element.
+    """
+    parts = split_unescaped(value, "|")
+    event_type = parts[0].strip()
+    if len(parts) == 1:
+        return event_type, (), ""
+    return event_type, tuple(part.strip() for part in parts[1:-1]), parts[-1]
+
+
+def parse_properties(
+    properties_text: str,
+) -> tuple[dict[str, str], list[tuple[str, tuple[str, ...], str]]]:
+    """Parse the comma-separated ``Property=Value`` part of an object line.
+
+    Returns the plain properties plus any mission events found on the line.
+    Events are kept separate because several may be declared in the same
+    frame without overriding each other.
+    """
     properties: dict[str, str] = {}
+    events: list[tuple[str, tuple[str, ...], str]] = []
     for pair in split_unescaped(properties_text, ","):
         if not pair:
             continue
@@ -111,8 +137,12 @@ def parse_properties(properties_text: str) -> dict[str, str]:
             # Not a valid property assignment; skip rather than abort the
             # whole stream (real-time telemetry should be resilient).
             continue
-        properties[key.strip()] = value
-    return properties
+        stripped_key = key.strip()
+        if stripped_key == EVENT_KEY:
+            events.append(parse_event_value(value))
+        else:
+            properties[stripped_key] = value
+    return properties, events
 
 
 def normalize_object_id(raw_id: str) -> str:
@@ -136,8 +166,12 @@ class AcmiParser:
     # Public API
     # ------------------------------------------------------------------
 
-    def feed_line(self, raw_line: str) -> AcmiEvent | None:
-        """Consume one line and return the corresponding event (or None).
+    def feed_line(self, raw_line: str) -> list[AcmiEvent]:
+        """Consume one line and return every event it produced.
+
+        A single line may yield multiple events (e.g. an object update that
+        also declares one or more ``Event`` properties). Returns an empty
+        list for blank/comment lines.
 
         Raises :class:`AcmiParseError` for structurally invalid lines
         (malformed frame time, unknown header, unparsable object id).
@@ -150,19 +184,19 @@ class AcmiParser:
 
         stripped = line.strip()
         if not stripped or stripped.startswith("//"):
-            return None
+            return []
 
         if stripped.startswith("#"):
-            return self._handle_time(stripped)
+            return [self._handle_time(stripped)]
 
         first, sep, rest = line.partition(",")
 
         # Removal lines ("-<id>") may appear without any trailing comma.
         if first.startswith("-"):
-            return self._handle_remove(first, rest if sep else "")
+            return [self._handle_remove(first, rest if sep else "")]
 
         if not sep:
-            return self._handle_headerless_line(stripped)
+            return [self._handle_headerless_line(stripped)]
 
         return self._handle_update(first, rest)
 
@@ -170,9 +204,7 @@ class AcmiParser:
         """Convenience helper: parse a multi-line chunk of ACMI text."""
         events: list[AcmiEvent] = []
         for line in text.splitlines():
-            event = self.feed_line(line)
-            if event is not None:
-                events.append(event)
+            events.extend(self.feed_line(line))
         return events
 
     # ------------------------------------------------------------------
@@ -187,7 +219,7 @@ class AcmiParser:
         self.time += offset
         return TimeEvent(time=self.time)
 
-    def _handle_headerless_line(self, stripped: str) -> AcmiEvent | None:
+    def _handle_headerless_line(self, stripped: str) -> AcmiEvent:
         key, eq, value = stripped.partition("=")
         if eq and key in (FILE_TYPE_KEY, FILE_VERSION_KEY):
             self.header[key] = value
@@ -201,12 +233,12 @@ class AcmiParser:
         self.objects.pop(obj_id, None)
         return ObjectRemoveEvent(obj_id=obj_id, time=self.time)
 
-    def _handle_update(self, first: str, rest: str) -> ObjectUpdateEvent:
+    def _handle_update(self, first: str, rest: str) -> list[AcmiEvent]:
         obj_id = normalize_object_id(first)
         if not obj_id:
             raise AcmiParseError(f"missing object id in update line: {first!r}")
 
-        properties = parse_properties(rest)
+        properties, mission_events = parse_properties(rest)
         if "T" in properties:
             transform = expand_transform(properties.pop("T"))
             properties.update(transform)
@@ -222,4 +254,16 @@ class AcmiParser:
         obj.properties.update(properties)
         obj.last_seen = self.time
 
-        return ObjectUpdateEvent(obj_id=obj_id, properties=dict(properties), time=self.time)
+        events: list[AcmiEvent] = [
+            ObjectUpdateEvent(obj_id=obj_id, properties=dict(properties), time=self.time)
+        ]
+        for event_type, object_ids, text in mission_events:
+            events.append(
+                MissionEvent(
+                    event_type=event_type,
+                    object_ids=object_ids,
+                    text=text,
+                    time=self.time,
+                )
+            )
+        return events

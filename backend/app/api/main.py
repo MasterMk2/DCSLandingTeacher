@@ -28,12 +28,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         acmi_client: AcmiStreamClient | None = None
         acmi_task: asyncio.Task | None = None
+        ingestor: TrackIngestor | None = None
         if settings.acmi_enabled:
             ingestor = TrackIngestor(session_factory)
             acmi_client = AcmiStreamClient(
                 settings.tacview_host,
                 settings.tacview_port,
                 ingestor.handle_line,
+                client_name=settings.tacview_client_name,
+                password=settings.tacview_password,
                 initial_delay=settings.reconnect_initial_delay,
                 max_delay=settings.reconnect_max_delay,
             )
@@ -59,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await acmi_task
             except asyncio.CancelledError:
                 pass
+        if ingestor is not None:
+            await ingestor.close()
         await engine.dispose()
 
     app = FastAPI(

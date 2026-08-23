@@ -1,9 +1,18 @@
-"""TCP transport for ACMI streams.
+"""TCP transport for Tacview Real-Time Telemetry streams.
 
-The transport layer is intentionally dumb: it only assembles received bytes
-into lines and hands each complete line to a callback. All parsing lives in
-:class:`app.acmi.parser.AcmiParser`, which can be exercised without any
-network.
+Based on the official protocol documentation:
+https://www.tacview.net/documentation/realtime/en/
+
+The real-time protocol transmits *uncompressed* ACMI 2.x text over TCP after
+a short XtraLib handshake (see :mod:`app.acmi.handshake`). The transport
+layer is intentionally dumb: it performs the handshake, assembles received
+bytes into lines, and hands each complete line to a callback. All parsing
+lives in :class:`app.acmi.parser.AcmiParser`, which can be exercised without
+any network.
+
+Note on compression: zip-wrapped ACMI is a *file* format concern; the
+real-time protocol itself is uncompressed by specification. For reading
+zip-wrapped ACMI files see :mod:`app.acmi.file_reader`.
 """
 
 from __future__ import annotations
@@ -11,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+
+from app.acmi.handshake import HandshakeError, perform_client_handshake
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +63,14 @@ class AcmiStreamClient:
 
     Behavior:
 
-    - Connects to ``host:port`` and streams lines to ``on_line``.
-    - On connection loss or failure, reconnects automatically using
-      exponential backoff (``initial_delay`` doubling up to ``max_delay``),
-      resetting backoff after each successful connection.
+    - Connects to ``host:port`` and performs the XtraLib client handshake
+      (``client_name`` / ``password``) before streaming lines to ``on_line``.
+    - On connection loss, handshake failure or connect error, reconnects
+      automatically using exponential backoff (``initial_delay`` doubling up
+      to ``max_delay``), resetting backoff after each successful connection.
     - :meth:`stop` requests a graceful shutdown; the running task exits after
       the current read loop unwinds.
-
-    Note on compression: Tacview can serve zip-compressed ACMI streams.
-    Text streams are handled here; transparent zip decompression is planned —
-    see TODO below.
     """
-
-    # TODO(acmi-zip): detect zip-compressed streams (e.g. via a wrapper
-    # decoder injected between the socket reader and the LineAssembler) and
-    # decompress incrementally before line assembly.
 
     def __init__(
         self,
@@ -74,12 +78,16 @@ class AcmiStreamClient:
         port: int,
         on_line: LineHandler,
         *,
+        client_name: str = "DCSLandingTeacher",
+        password: str = "",
         initial_delay: float = 1.0,
         max_delay: float = 30.0,
     ) -> None:
         self.host = host
         self.port = port
         self._on_line = on_line
+        self._client_name = client_name
+        self._password = password
         self._initial_delay = max(initial_delay, 0.1)
         self._max_delay = max(max_delay, self._initial_delay)
         self._stopping = False
@@ -92,6 +100,23 @@ class AcmiStreamClient:
         while not self._stopping:
             reader, writer = await self._connect(backoff)
             if reader is None:
+                continue
+
+            try:
+                await self._handshake(reader, writer)
+            except asyncio.CancelledError:
+                raise
+            except HandshakeError as exc:
+                logger.warning(
+                    "ACMI handshake with %s:%d failed: %s", self.host, self.port, exc
+                )
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except (ConnectionError, OSError):  # pragma: no cover
+                    pass
+                await self._sleep(backoff)
+                backoff = min(backoff * 2, self._max_delay)
                 continue
 
             backoff = self._initial_delay
@@ -159,14 +184,20 @@ class AcmiStreamClient:
         await self._sleep(backoff)
         return None, None
 
+    async def _handshake(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        host_name = await perform_client_handshake(
+            reader, writer, self._client_name, self._password
+        )
+        logger.debug("ACMI handshake completed with host %r", host_name)
+
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
         assembler = LineAssembler()
         while not self._stopping:
             chunk = await reader.read(READ_CHUNK_SIZE)
             if not chunk:
                 break
-            # TODO(acmi-zip): route through a decompression wrapper when the
-            # stream turns out to be zip-compressed.
             text = chunk.decode("utf-8", errors="replace")
             for line in assembler.feed(text):
                 await self._on_line(line)

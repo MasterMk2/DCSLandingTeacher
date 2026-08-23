@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     tacview_host: str = "127.0.0.1"
     tacview_port: int = 31010
 
+    # Real-Time Telemetry handshake identity (client side).
+    # Leave tacview_password empty when the session is unprotected.
+    tacview_client_name: str = "DCSLandingTeacher"
+    tacview_password: str = ""
+
     # Disable to run API-only without the background ACMI client
     acmi_enabled: bool = True
 
