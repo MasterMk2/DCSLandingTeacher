@@ -1,0 +1,138 @@
+# DCS Landing Teacher - grading thresholds and geometry.
+# All values are tunable without code changes; loaded by app.grading.config.
+#
+# Coordinate conventions used by the graders:
+#   - "along"  : meters from the touchdown/reference point, positive TOWARDS
+#                the approach (i.e. distance-to-go before touchdown).
+#   - "lateral": meters from the centerline, positive to the RIGHT of the
+#                approach course.
+#   - "gs_dev" : meters above (+) / below (-) the ideal glideslope at the
+#                sample's distance-to-go.
+
+version: 1
+
+geometry:
+  # FLOLS-style glideslope for carrier approaches (ramp-referenced).
+  carrier_glideslope_deg: 3.5
+  # Typical visual slope indicator angle for land aerodromes.
+  land_glideslope_deg: 3.0
+  earth_radius_m: 6371000.0
+
+approach:
+  # Final-approach segment cut out before touchdown (FR-2: ~2nm / ~60 s).
+  window_s: 60.0
+  distance_m: 3704.0   # 2 nm
+
+detection:
+  # Weight-on-wheels equivalent: AGL at or below this is "on deck".
+  wow_agl_threshold_m: 3.0
+  # Descent rate (m/s) above which a ground contact is treated as a crash,
+  # not a landing attempt.
+  max_touchdown_descent_ms: 8.0
+  # Ground time after which a touchdown is a full-stop landing.
+  full_stop_dwell_s: 15.0
+  # If the aircraft climbs out within this time after touchdown it is a
+  # touch-and-go (land) or bolter (carrier).
+  touch_and_go_max_dwell_s: 45.0
+  # Vertical speed (m/s) considered "climbing out" after a bounce/bolter.
+  climb_out_vertical_ms: 1.5
+  # Touchdown counts as a carrier arrestment when a carrier is within this
+  # horizontal distance.
+  carrier_proximity_m: 800.0
+  # Rolling buffer of samples kept per aircraft for real-time detection.
+  sample_buffer_s: 600.0
+
+land_grading:
+  # Score components are 0..100 each; total is the weighted mean.
+  weights:
+    descent_rate: 0.30
+    touchdown_speed: 0.20
+    glideslope: 0.25
+    centerline: 0.25
+  # Touchdown descent rate bands in feet per minute.
+  descent_rate_fpm:
+    excellent: 120   # <= this -> 100 pts
+    good: 250        # <= this -> 80 pts
+    fair: 450        # <= this -> 55 pts
+    hard: 650        # <= this -> 30 pts, else 5 pts
+  # Touchdown speed judged RELATIVE to the mean approach speed of the final
+  # segment (airframe independent). ratio = touchdown speed / mean speed.
+  touchdown_speed_ratio:
+    good_band: 0.05      # within +/-5% -> 100 pts
+    fair_band: 0.12      # within +/-12% -> 65 pts
+    # beyond -> 30 pts
+  # Glideslope tracking: mean |gs deviation| over the final 15 s, meters.
+  glideslope_deviation_m:
+    good: 1.0
+    fair: 2.5
+    poor: 5.0
+  # Centerline keeping: max |lateral offset| over the final segment, meters.
+  centerline_deviation_m:
+    good: 3.0
+    fair: 8.0
+    poor: 20.0
+  # Final letter grades by weighted score.
+  letters:
+    A: 90
+    B: 78
+    C: 62
+    D: 45   # below -> E
+
+lso_grading:
+  # Grades in US Navy style (FR-3).
+  grades:
+    ok: "OK"
+    ok_minus: "OK-"
+    ok_paren: "(OK)"
+    no_grade: "_NO_GRADE_"
+    cut: "CUT"
+  # Window (seconds before touchdown) used for "at the ramp" evaluations.
+  at_ramp_window_s: 3.0
+  factors:
+    HIGH:
+      severity: major
+      # Mean glideslope deviation over the at-ramp window above this -> HIGH.
+      gs_deviation_m: 3.0
+    LOW:
+      severity: major
+      gs_deviation_m: -2.0
+    FAST:
+      severity: major
+      # touchdown speed / mean final-approach speed above this -> FAST.
+      speed_ratio: 1.07
+    SLOW:
+      severity: major
+      speed_ratio: 0.93
+    OFFLINE:
+      severity: major
+      # |lateral offset| at the ramp above this -> OFFLINE.
+      lateral_deviation_m: 3.0
+    POWER:
+      severity: minor
+      # Airspeed excursions (max-min) over the last 20 s above this -> POWER.
+      speed_range_ms: 8.0
+    BOLTER:
+      severity: major
+      # Set automatically when the outcome is a bolter.
+      auto: true
+    # The following factors require data Tacview does not reliably provide
+    # (hook/rudder/engine states). They are declared here so the UI can list
+    # them, but the detector currently never emits them.
+    ARCON: { severity: minor, enabled: false }
+    AOC:   { severity: minor, enabled: false }
+    AOS:   { severity: minor, enabled: false }
+    INTAKE: { severity: minor, enabled: false }
+    IMMAT: { severity: minor, enabled: false }
+    T&R:   { severity: minor, enabled: false }
+    NWS:   { severity: minor, enabled: false }
+    OPEN:  { severity: minor, enabled: false }
+    BURBLE: { severity: minor, enabled: false }
+  # Grade decision rules, evaluated in order.
+  decision:
+    # A mean glideslope deviation below this at the ramp is a wave-off.
+    cut_low_gs_deviation_m: -4.5
+    # Any of these conditions -> CUT.
+    cut_if_severe_low: true
+    cut_if_major_count: 3     # >= 3 major factors -> CUT
+    # Exactly this many major factors -> (OK); one -> OK-; none -> OK.
+    ok_paren_major_count: 2
