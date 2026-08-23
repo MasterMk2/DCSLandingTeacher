@@ -27,6 +27,7 @@ data/
 # Node (frontend, later phases)
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # Editors / OS
 .vscode/
