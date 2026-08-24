@@ -157,6 +157,23 @@ async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> No
         # write, since the trigger is only evaluated when a flush runs),
         # not by close() below.
         assert len(tracks) == 2
+
+        # A *second* batch on the same (reused) session must also stamp its
+        # own opening time. Regression: _get_session() only recorded
+        # _batch_opened_at when creating a brand new AsyncSession, but the
+        # session survives a commit (only the transaction ends), so every
+        # batch after the first one was falling back to `close()` alone --
+        # exactly what reproduced "database is locked" against a concurrent
+        # writer again, even with the age trigger deployed.
+        await ingestor.handle_line("#2.00")
+        await ingestor.handle_line("101,T=41.62||102")
+        await asyncio.sleep(0.1)
+        await ingestor.handle_line("#3.00")
+        await ingestor.handle_line("101,T=41.63||103")
+
+        async with session_factory() as session:
+            tracks = (await session.execute(select(Track))).scalars().all()
+        assert len(tracks) == 4
     finally:
         await ingestor.close()
         await engine.dispose()

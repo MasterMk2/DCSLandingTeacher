@@ -167,6 +167,12 @@ class TrackIngestor:
         if self._session is None:
             self._session = self._session_factory()
             self._pending = 0
+        # The session object is reused across commits (a commit ends the
+        # transaction, not the session), so a new batch starting on an
+        # *existing* session must still stamp its own opening time -
+        # otherwise _batch_opened_at, cleared by the previous _flush(),
+        # stays None forever and the age trigger only ever fires once.
+        if self._pending == 0:
             self._batch_opened_at = time.monotonic()
         return self._session
 
