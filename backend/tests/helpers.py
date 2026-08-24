@@ -55,6 +55,8 @@ def make_approach_samples(
     duration_before_s: float = 55.0,
     ground_time_s: float = 25.0,
     deck_altitude_m: float = DECK_ALTITUDE_M,
+    offset_east_m: float = 0.0,
+    offset_north_m: float = 0.0,
 ) -> list[TrackSample]:
     """Build a 1 Hz synthetic approach ending with a landing.
 
@@ -74,6 +76,8 @@ def make_approach_samples(
     n_before = int(duration_before_s)
     n_after = max(int(ground_time_s), 12 if outcome != "full_stop" else int(ground_time_s))
 
+    east = _lon_offset(offset_east_m)
+    north = _lat_offset(offset_north_m)
     for t in range(-n_before, n_after + 1):
         if t < 0:
             dtg = abs(t) * approach_speed_ms
@@ -83,18 +87,18 @@ def make_approach_samples(
                 agl = max(0.0, -t * pre_touchdown_descent_ms)
             else:
                 agl = ideal_agl
-            latitude = LAT0 - _lat_offset(dtg)
-            longitude = LON0 + _lon_offset(lateral_offset_m)
+            latitude = LAT0 - _lat_offset(dtg) + north
+            longitude = LON0 + _lon_offset(lateral_offset_m) + east
             altitude = deck_altitude_m + agl
             speed = approach_speed_ms
             on_ground = False
         else:
             dtg = 0.0
-            latitude = LAT0
+            latitude = LAT0 + north
             # The touchdown point sits on the centerline; the lateral offset
             # applies to the inbound segment only, so graders see a real
             # centerline deviation instead of a shifted reference frame.
-            longitude = LON0
+            longitude = LON0 + east
             if outcome == "full_stop":
                 agl = 0.0
                 on_ground = True
@@ -170,4 +174,63 @@ def make_acmi_text(
         if sample.speed is not None:
             properties.append(f"TAS={sample.speed:g}")
         lines.append(f"{aircraft_obj_id},{','.join(properties)}")
+    return "\n".join(lines) + "\n"
+
+
+def make_acmi_text_multi(
+    aircraft: list[dict],
+    *,
+    include_carrier: bool = True,
+    carrier_obj_id: str = "102",
+    base_time: float = 1000.0,
+) -> str:
+    """Render several aircraft as ONE interleaved ACMI text stream.
+
+    ``aircraft`` items are dicts with keys ``obj_id`` and ``samples``
+    (a :class:`TrackSample` list from :func:`make_approach_samples`) plus
+    optional ``name`` / ``pilot`` / ``type``. Updates from all aircraft are
+    merged and sorted by absolute time so the stream interleaves both
+    tracks (Issue #6 regression coverage).
+    """
+    lines = [
+        "FileType=text/acmi/tacview",
+        "FileVersion=2.2",
+        "0,ReferenceTime=2024-01-01T00:00:00Z,DataSource=Test,Title=synthetic",
+    ]
+    if include_carrier:
+        lines.append("#0")
+        lines.append(
+            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,"
+            f"T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
+        )
+
+    events: list[tuple[float, int, str, TrackSample, dict]] = []
+    for index, spec in enumerate(aircraft):
+        for order, sample in enumerate(spec["samples"]):
+            absolute = base_time + sample.time
+            events.append((absolute, index, spec["obj_id"], sample, spec))
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    previous: float | None = None
+    seen_ids: set[str] = set()
+    for absolute, _index, obj_id, sample, spec in events:
+        delta = 0.0 if previous is None else absolute - previous
+        previous = absolute
+        lines.append(f"#{delta:g}")
+        transform = (
+            f"T={sample.longitude:g}|{sample.latitude:g}|{sample.altitude:g}|||"
+            f"{sample.heading or 0:g}"
+        )
+        properties = [transform]
+        if obj_id not in seen_ids:
+            # Identity properties are emitted once, on the first update.
+            seen_ids.add(obj_id)
+            properties.append(f"Type={spec.get('type', 'Air+FixedWing')}")
+            properties.append(f"Name={spec.get('name', 'F/A-18C')}")
+            properties.append(f"Pilot={spec.get('pilot', 'Viggen')}")
+        if sample.on_ground is not None:
+            properties.append(f"OnGround={'1' if sample.on_ground else '0'}")
+        if sample.speed is not None:
+            properties.append(f"TAS={sample.speed:g}")
+        lines.append(f"{obj_id},{','.join(properties)}")
     return "\n".join(lines) + "\n"
