@@ -10,7 +10,10 @@ import type {
   LandingSummary,
 } from "../types/api";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+// Derived from the page's own URL (not a build-time constant) so the same
+// build works both at the domain root and behind a reverse-proxy subpath
+// (e.g. "/landing-teacher/"): "/foo/" -> "/foo", "/" -> "".
+const BASE = new URL(".", window.location.href).pathname.replace(/\/$/, "");
 
 export class ApiError extends Error {
   constructor(

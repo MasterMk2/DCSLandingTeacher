@@ -9,6 +9,9 @@ const PING_INTERVAL_MS = 25_000;
 const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 30_000;
 
+// Same reverse-proxy subpath derivation as src/api/client.ts.
+const BASE = new URL(".", window.location.href).pathname.replace(/\/$/, "");
+
 export type LandingListener = (msg: WsLandingMessage) => void;
 
 export class LandingSocket {
@@ -31,7 +34,7 @@ export class LandingSocket {
     const token = getToken();
     if (token) params.set("token", token);
     const qs = params.toString();
-    const url = `${proto}//${location.host}/api/ws/landings${qs ? `?${qs}` : ""}`;
+    const url = `${proto}//${location.host}${BASE}/api/ws/landings${qs ? `?${qs}` : ""}`;
     try {
       this.ws = new WebSocket(url);
     } catch {
