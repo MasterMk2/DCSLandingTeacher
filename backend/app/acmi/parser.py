@@ -6,7 +6,8 @@ https://www.tacview.net/documentation/acmi/en/
 Line kinds handled:
 
 - Mandatory header: ``FileType=text/acmi/tacview`` / ``FileVersion=2.2``
-- Frame time:       ``#<seconds>`` (offset accumulated onto current time)
+- Frame time:       ``#<seconds>`` (absolute offset from ReferenceTime, replaces
+                    the current time; it is not a per-frame delta to sum)
 - Object update:    ``<id>,Property=Value,...`` (id in hexadecimal)
 - Object removal:   ``-<id>``
 - Mission events:   ``Event=Type|Id|...|Text`` property (repeatable per frame)
@@ -216,7 +217,7 @@ class AcmiParser:
             offset = float(stripped[1:])
         except ValueError as exc:
             raise AcmiParseError(f"invalid frame time line: {stripped!r}") from exc
-        self.time += offset
+        self.time = offset
         return TimeEvent(time=self.time)
 
     def _handle_headerless_line(self, stripped: str) -> AcmiEvent:
