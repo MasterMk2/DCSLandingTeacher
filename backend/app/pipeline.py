@@ -41,37 +41,100 @@ class LandingPipeline:
         self._notifier = notifier
 
     async def handle_landing(self, context: LandingContext) -> int | None:
-        """Grade + persist one detected landing; returns the row id."""
+        """Grade + persist one detected landing; returns the row id.
+
+        Two-phase confirmation (Issue #5): a touchdown whose outcome is still
+        under observation (bolter / touch-and-go dwell) is persisted as
+        ``outcome_status="provisional"`` and broadcast immediately; the final
+        verdict arrives later via :meth:`finalize_landing`.
+        """
+        event = context.event
+        analysis, result, score = self._grade(context)
+        status = "final" if event.finalized else "provisional"
+        landing_id = await self._persist(context, analysis, result, score, status)
+
+        if self._notifier is not None and landing_id is not None:
+            try:
+                await self._notifier.broadcast_landing(
+                    self._payload(landing_id, context, result, score, status),
+                    message_type="landing",
+                )
+            except Exception:
+                logger.exception("landing notification failed")
+        return landing_id
+
+    async def finalize_landing(self, landing_id: int, context: LandingContext) -> None:
+        """Confirm a provisional landing once its outcome is settled (Issue #5).
+
+        Re-grades the (now longer) approach segment, updates the stored row in
+        place, and broadcasts a ``landing_update`` message so connected
+        clients can replace the provisional entry.
+        """
+        event = context.event
+        analysis, result, score = self._grade(context)
+        async with self._session_factory() as session:
+            landing = await session.get(Landing, landing_id)
+            if landing is None:
+                logger.warning(
+                    "cannot finalize landing #%d: row disappeared", landing_id
+                )
+                return
+            landing.kind = event.kind
+            landing.outcome = event.outcome
+            landing.outcome_status = "final"
+            landing.grade = result.grade
+            landing.score = score
+            landing.comment = result.comment
+            landing.factors = result.factors_payload()
+            landing.metrics = dict(result.metrics)
+            landing.approach_track = analysis.as_dict()
+            landing.grading_version = GRADING_VERSION
+            landing.graded_at = _utcnow()
+            await session.commit()
+
+        if self._notifier is not None:
+            try:
+                await self._notifier.broadcast_landing(
+                    self._payload(landing_id, context, result, score, "final"),
+                    message_type="landing_update",
+                )
+            except Exception:
+                logger.exception("landing update notification failed")
+
+    # ------------------------------------------------------------------
+
+    def _grade(
+        self, context: LandingContext
+    ) -> tuple[ApproachAnalysis, LandGradeResult | LsoGradeResult, float | None]:
         event = context.event
         analysis = build_approach_analysis(
             event, self._config.glideslope_for(event.kind)
         )
         if event.kind == "carrier":
-            result = grade_carrier_approach(analysis, self._config)
-            score = None
-        else:
-            result = grade_land_landing(analysis, self._config)
-            score = result.score
+            return analysis, grade_carrier_approach(analysis, self._config), None
+        result = grade_land_landing(analysis, self._config)
+        return analysis, result, result.score
 
-        landing_id = await self._persist(context, analysis, result, score)
-
-        if self._notifier is not None and landing_id is not None:
-            try:
-                await self._notifier.broadcast_landing(
-                    {
-                        "id": landing_id,
-                        "kind": event.kind,
-                        "outcome": event.outcome,
-                        "grade": result.grade,
-                        "pilot": context.pilot,
-                        "airframe": context.airframe,
-                        "venue_name": event.carrier_name if event.kind == "carrier" else None,
-                        "touchdown_time": event.touchdown.time,
-                    }
-                )
-            except Exception:
-                logger.exception("landing notification failed")
-        return landing_id
+    def _payload(
+        self,
+        landing_id: int,
+        context: LandingContext,
+        result: LandGradeResult | LsoGradeResult,
+        score: float | None,
+        status: str,
+    ) -> dict[str, Any]:
+        event = context.event
+        return {
+            "id": landing_id,
+            "kind": event.kind,
+            "outcome": event.outcome,
+            "outcome_status": status,
+            "grade": result.grade,
+            "pilot": context.pilot,
+            "airframe": context.airframe,
+            "venue_name": event.carrier_name if event.kind == "carrier" else None,
+            "touchdown_time": event.touchdown.time,
+        }
 
     async def regrade(
         self, landing: Landing, overrides: dict[str, Any] | None = None
@@ -124,6 +187,7 @@ class LandingPipeline:
         analysis: ApproachAnalysis,
         result: LandGradeResult | LsoGradeResult,
         score: float | None,
+        outcome_status: str = "final",
     ) -> int | None:
         event: LandingEvent = context.event
         touchdown = event.touchdown
@@ -157,6 +221,7 @@ class LandingPipeline:
                 carrier_object_id=carrier_row_id,
                 kind=event.kind,
                 outcome=event.outcome,
+                outcome_status=outcome_status,
                 touchdown_time=touchdown.time,
                 venue_name=venue,
                 latitude=touchdown.latitude,

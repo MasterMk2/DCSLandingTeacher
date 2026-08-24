@@ -232,6 +232,13 @@ main {
   background: var(--danger);
 }
 
+/* Provisional landing awaiting its final outcome (Issue #5). */
+.grade-provisional {
+  color: var(--warn);
+  background: rgba(255, 209, 102, 0.12);
+  border-color: var(--warn);
+}
+
 .grade-other,
 .grade-none {
   color: var(--text);

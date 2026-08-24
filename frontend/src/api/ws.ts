@@ -40,7 +40,9 @@ export class LandingSocket {
         const data = JSON.parse(ev.data as string) as
           | WsLandingMessage
           | { type: "pong" };
-        if (data.type === "landing") this.listener(data);
+        if (data.type === "landing" || data.type === "landing_update") {
+          this.listener(data);
+        }
       } catch {
         // Ignore malformed frames.
       }

@@ -5,6 +5,11 @@
 
 export type LandingKind = "carrier" | "land";
 export type LandingOutcome = "full_stop" | "touch_and_go" | "bolter";
+/**
+ * Two-phase confirmation (Issue #5): "provisional" while the outcome is
+ * still under observation (bolter / touch-and-go dwell), "final" once set.
+ */
+export type OutcomeStatus = "provisional" | "final";
 
 /** LandingSummary (GET /api/landings rows, WS notification payload). */
 export interface LandingSummary {
@@ -12,6 +17,7 @@ export interface LandingSummary {
   flight_id: number;
   kind: string | null;
   outcome: string | null;
+  outcome_status?: OutcomeStatus;
   venue_name: string | null;
   pilot: string | null;
   airframe: string | null;
@@ -93,8 +99,12 @@ export interface LandingFilters {
   date_to?: string;
 }
 
-/** WS message pushed by /api/ws/landings: {"type":"landing","landing":{...}}. */
+/**
+ * WS messages pushed by /api/ws/landings:
+ * - {"type":"landing","landing":{...}}        new landing (may be provisional)
+ * - {"type":"landing_update","landing":{...}} provisional landing confirmed
+ */
 export interface WsLandingMessage {
-  type: "landing";
+  type: "landing" | "landing_update";
   landing: Partial<LandingSummary>;
 }

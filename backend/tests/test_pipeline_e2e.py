@@ -16,6 +16,7 @@ async def _run(session_factory, samples_text: str) -> list[Landing]:
     ingestor = TrackIngestor(
         session_factory,
         landing_listener=pipeline.handle_landing,
+        landing_finalize_listener=pipeline.finalize_landing,
         sample_buffer_s=600.0,
     )
     try:
@@ -37,6 +38,9 @@ async def test_carrier_arrestment_flows_through_pipeline(session_factory) -> Non
     landing = landings[0]
     assert landing.kind == "carrier"
     assert landing.outcome == "full_stop"
+    # Live ingestion reports the touchdown provisionally first, then
+    # confirms it once the full-stop dwell has elapsed (Issue #5).
+    assert landing.outcome_status == "final"
     assert landing.grade in ("OK", "OK-", "(OK)", "_NO_GRADE_", "CUT")
     assert landing.venue_name == "CV-59"
     assert landing.carrier_object_id is not None
@@ -75,6 +79,8 @@ async def test_bolter_flows_through_pipeline(session_factory) -> None:
     landing = landings[0]
     assert landing.kind == "carrier"
     assert landing.outcome == "bolter"
+    # The provisional full-stop guess was corrected to bolter in place.
+    assert landing.outcome_status == "final"
     assert landing.grade == "_NO_GRADE_"
 
 

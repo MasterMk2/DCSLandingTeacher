@@ -105,6 +105,11 @@ class Landing(Base):
     # "full_stop" | "touch_and_go" | "bolter"
     touchdown_time: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Two-phase confirmation (Issue #5): a landing detected at touchdown is
+    # stored as "provisional" (outcome may still turn into touch_and_go /
+    # bolter) and flipped to "final" once the outcome can no longer change.
+    outcome_status: Mapped[str] = mapped_column(String(16), default="final")
+
     # Venue (carrier name or airbase/static object name when known)
     venue_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 

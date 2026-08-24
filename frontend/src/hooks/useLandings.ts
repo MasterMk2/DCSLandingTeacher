@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listLandings } from "../api/client";
 import { LandingSocket } from "../api/ws";
+import { applyLandingMessage } from "../lib/landings";
 import type {
   LandingFilters,
   LandingListResponse,
-  LandingSummary,
 } from "../types/api";
 
 export interface UseLandingsResult {
@@ -59,19 +59,13 @@ export function useLandings(
 
   useEffect(() => {
     const socket = new LandingSocket((msg) => {
-      const landing = msg.landing as Partial<LandingSummary>;
-      if (landing.id === undefined) return;
-      setData((prev) => {
-        if (!prev) return prev;
-        if (prev.items.some((it) => it.id === landing.id)) return prev;
-        // Only prepend on the first page; deeper pages just bump the badge.
-        if (offset === 0) {
-          const item = landing as LandingSummary;
-          return { ...prev, items: [item, ...prev.items], total: prev.total + 1 };
-        }
-        return { ...prev, total: prev.total + 1 };
-      });
-      setLiveCount((c) => c + 1);
+      // "landing" inserts a new (possibly provisional) row; "landing_update"
+      // replaces the provisional row with its confirmed outcome (Issue #5).
+      const isNew = msg.type === "landing";
+      setData((prev) =>
+        prev ? applyLandingMessage(prev, msg, offset) : prev,
+      );
+      if (isNew) setLiveCount((c) => c + 1);
     });
     socket.connect();
     return () => socket.close();

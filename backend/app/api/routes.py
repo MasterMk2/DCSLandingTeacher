@@ -55,6 +55,7 @@ def _summary(landing: Landing, dcs_object: DcsObject | None) -> LandingSummary:
         flight_id=landing.flight_id,
         kind=landing.kind,
         outcome=landing.outcome,
+        outcome_status=landing.outcome_status or "final",
         venue_name=landing.venue_name,
         pilot=dcs_object.pilot if dcs_object else None,
         airframe=dcs_object.name if dcs_object else None,

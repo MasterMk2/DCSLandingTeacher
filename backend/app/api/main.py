@@ -44,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ingestor = TrackIngestor(
                 session_factory,
                 landing_listener=pipeline.handle_landing,
+                landing_finalize_listener=pipeline.finalize_landing,
                 sample_buffer_s=float(grading_config.detection.get("sample_buffer_s", 600.0)),
             )
             acmi_client = AcmiStreamClient(
