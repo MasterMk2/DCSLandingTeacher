@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Grading thresholds (YAML); relative to the working directory.
     grading_config_path: str = "config/grading.yaml"
 
+    # Per-carrier FLOLS geometry (Issue #3). Values are unverified
+    # estimates; see the comments in config/carriers.yaml.
+    carriers_config_path: str = "config/carriers.yaml"
+
     # Apply Alembic migrations automatically at startup (Issue #7). When
     # disabled, the legacy create_all bootstrap is used instead (dev mode).
     migrations_on_startup: bool = True

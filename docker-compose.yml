@@ -25,6 +25,7 @@ services:
       # SQLite lives on the named volume below (survives container rebuilds).
       DLT_DATABASE_URL: sqlite+aiosqlite:////data/dlt.db
       DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
+      DLT_CARRIERS_CONFIG_PATH: /app/config/carriers.yaml
       DLT_FRONTEND_DIST_DIR: /app/frontend/dist
       # Alembic migrations are applied automatically at startup; set to
       # "false" to fall back to the legacy create_all bootstrap.

@@ -34,6 +34,7 @@ flowchart LR
 | [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与 |
 | [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
 | [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
+| [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別 FLOLS ジオメトリ、Issue #3）の読み込みと解決。未知の艦はタッチダウン基準の近似へフォールバック。**収録値は未検証の推定値**であり、実データでの検証が残っている |
 | [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）も担当 |
 | [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸レコードには進入区間の生サンプルも JSON 保存（FR-7 再評価要件）。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
 | [`api/routes.py`](../backend/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
@@ -94,7 +95,12 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 ## 設定
 
 すべて環境変数（プレフィックス `DLT_`、[`backend/app/config.py`](../backend/app/config.py)）と
-YAML（[`config/grading.yaml`](../config/grading.yaml)）で外部化されている。一覧は [`.env.example`](../.env.example) 参照。
+YAML（[`config/grading.yaml`](../config/grading.yaml)、
+[`config/carriers.yaml`](../config/carriers.yaml)）で外部化されている。一覧は [`.env.example`](../.env.example) 参照。
+
+> `config/carriers.yaml` の艦別 FLOLS ジオメトリ（Issue #3）の数値は
+> **出典不明の推定値・仮置き値**である。実データ（DCS 内での計測等）による
+> 検証が完了するまで、グレード結果を絶対評価として扱わないこと。
 
 ## CI
 

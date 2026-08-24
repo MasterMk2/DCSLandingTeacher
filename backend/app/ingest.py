@@ -267,8 +267,11 @@ class TrackIngestor:
     def _update_detection_state(self, obj_id: str, source: AcmiObject) -> None:
         obj_class = classify_object_type(source.type)
         if obj_class == ObjectClass.CARRIER:
-            state = self._carrier_states.setdefault(obj_id, CarrierState(obj_id, source.name))
+            state = self._carrier_states.setdefault(
+                obj_id, CarrierState(obj_id, source.name, source.type)
+            )
             state.name = source.name
+            state.type = source.type
             if (
                 source.latitude is not None
                 and source.longitude is not None

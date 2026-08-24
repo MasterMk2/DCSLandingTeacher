@@ -16,6 +16,7 @@ from app.acmi.stream import AcmiStreamClient
 from app.api.notifier import LandingNotifier
 from app.api.routes import router as api_router
 from app.config import Settings
+from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
 from app.models.database import create_engine, create_session_factory, init_db
@@ -30,6 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     grading_config = load_grading_config(settings.grading_config_path)
+    carrier_geometry_book = load_carrier_geometry_book(settings.carriers_config_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -41,7 +43,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await init_db(engine)
 
         notifier = LandingNotifier()
-        pipeline = LandingPipeline(session_factory, grading_config, notifier=notifier)
+        pipeline = LandingPipeline(
+            session_factory,
+            grading_config,
+            notifier=notifier,
+            carrier_geometry_book=carrier_geometry_book,
+        )
 
         acmi_client: AcmiStreamClient | None = None
         acmi_task: asyncio.Task | None = None

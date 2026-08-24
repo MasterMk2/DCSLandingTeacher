@@ -77,6 +77,31 @@ def transform_to_frame(
     return along, lateral
 
 
+def offset_position(
+    lat_deg: float,
+    lon_deg: float,
+    heading_deg: float,
+    along_m: float,
+    lateral_m: float,
+) -> tuple[float, float]:
+    """Inverse of :func:`transform_to_frame` for small offsets.
+
+    Given an origin and a body frame heading, return the (lat, lon) of the
+    point ``along_m`` meters ahead (+) / behind (-) and ``lateral_m`` meters
+    right (+) / left (-) of the origin. Accurate for the ~100 m scale of
+    ship-deck offsets.
+    """
+    theta = math.radians(heading_deg)
+    sin_h, cos_h = math.sin(theta), math.cos(theta)
+    x_east = along_m * sin_h + lateral_m * cos_h
+    y_north = along_m * cos_h - lateral_m * sin_h
+    lat = lat_deg + math.degrees(y_north / EARTH_RADIUS_M)
+    lon = lon_deg + math.degrees(
+        x_east / (EARTH_RADIUS_M * math.cos(math.radians(lat_deg)))
+    )
+    return lat, lon
+
+
 def interpolate_position(
     track: list[tuple[float, float, float]],
     time: float,

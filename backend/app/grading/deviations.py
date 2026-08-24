@@ -3,23 +3,32 @@
 Given the cut-out final-approach segment and the touchdown point, computes
 per-sample:
 
-- ``distance_to_go``      : meters to the touchdown point along the course,
-- ``glideslope_deviation``: meters above (+) / below (-) the ideal slope
-  referenced to the touchdown elevation ("ramp reference"),
+- ``distance_to_go``      : meters to the reference point along the course,
+- ``glideslope_deviation``: meters above (+) / below (-) the ideal slope,
 - ``centerline_deviation``: signed lateral offset, right of course (+).
 
-The course is taken from the aircraft heading at touchdown (falling back to
-the mean inbound track). All positions are projected onto a local tangent
-plane via :func:`app.detection.geometry.transform_to_frame`.
+Two reference frames exist (Issue #3):
+
+- With resolved per-carrier FLOLS geometry the deviations are referenced to
+  the RAMP (FLOLS datum on the angled deck): origin = ship position plus
+  ramp offsets at the touchdown instant, course = ship heading + angled-deck
+  offset, AGL measured against the deck altitude, slope from the geometry.
+- Without it (unknown carrier) the legacy approximation applies: everything
+  is referenced to the touchdown point itself.
+
+All positions are projected onto a local tangent plane via
+:func:`app.detection.geometry.transform_to_frame`.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.detection.detector import LandingEvent, TrackSample
-from app.detection.geometry import transform_to_frame
+from app.detection.geometry import offset_position, transform_to_frame
+from app.grading.carriers import FlolsGeometry
 
 
 @dataclass
@@ -64,6 +73,9 @@ class ApproachAnalysis:
     touchdown_speed_ms: float | None
     touchdown_descent_rate_ms: float
     samples: list[DeviationSample] = field(default_factory=list)
+    #: Per-carrier FLOLS geometry used for this analysis (Issue #3).
+    #: ``None`` means the legacy touchdown-referenced approximation.
+    geometry: dict[str, Any] | None = None
 
     def window(self, seconds_before_touchdown: float) -> list[DeviationSample]:
         """Samples strictly before touchdown within the given lookback.
@@ -86,6 +98,7 @@ class ApproachAnalysis:
             "touchdown_time": self.touchdown_time,
             "touchdown_speed_ms": self.touchdown_speed_ms,
             "touchdown_descent_rate_ms": round(self.touchdown_descent_rate_ms, 3),
+            "geometry": self.geometry,
             "samples": [s.as_dict() for s in self.samples],
         }
 
@@ -124,6 +137,7 @@ class ApproachAnalysis:
                 else None
             ),
             touchdown_descent_rate_ms=float(data.get("touchdown_descent_rate_ms", 0.0)),
+            geometry=data.get("geometry"),
             samples=samples,
         )
 
@@ -151,30 +165,60 @@ def build_approach_analysis(
     event: LandingEvent,
     glideslope_deg: float,
     ground_altitude_m: float | None = None,
+    geometry: FlolsGeometry | None = None,
 ) -> ApproachAnalysis:
-    """Compute the deviation time series for one detected landing event."""
+    """Compute the deviation time series for one detected landing event.
+
+    With ``geometry`` (Issue #3) the deviations are referenced to the
+    carrier's FLOLS ramp: the origin is the ramp position at the touchdown
+    instant (ship position + along/lateral offsets), the course is the ship
+    heading plus the angled-deck offset, AGL is measured against the deck
+    altitude from the geometry and the slope angle comes from the geometry
+    as well. Without it the legacy approximation applies: everything is
+    referenced to the touchdown point itself.
+    """
     touchdown = event.touchdown
-    deck_elevation = (
-        ground_altitude_m if ground_altitude_m is not None else touchdown.ground_altitude_m
-    )
-    course = estimate_course_deg(event.approach, touchdown.heading)
+
+    if geometry is not None and event.carrier_latitude is not None:
+        course = (
+            (event.carrier_heading_deg or 0.0) + geometry.landing_course_offset_deg
+        ) % 360.0
+        ref_lat, ref_lon = offset_position(
+            event.carrier_latitude,
+            event.carrier_longitude,
+            event.carrier_heading_deg or 0.0,
+            geometry.ramp_along_m,
+            geometry.ramp_lateral_m,
+        )
+        deck_elevation: float | None = geometry.deck_altitude_m
+        slope_deg = geometry.glideslope_deg
+        geometry_payload = geometry.as_dict()
+    else:
+        course = estimate_course_deg(event.approach, touchdown.heading)
+        ref_lat, ref_lon = touchdown.latitude, touchdown.longitude
+        deck_elevation = (
+            ground_altitude_m if ground_altitude_m is not None else touchdown.ground_altitude_m
+        )
+        slope_deg = glideslope_deg
+        geometry_payload = None
 
     analysis = ApproachAnalysis(
         kind=event.kind,
         outcome=event.outcome,
-        glideslope_deg=glideslope_deg,
+        glideslope_deg=slope_deg,
         course_deg=course,
         touchdown_time=touchdown.time,
         touchdown_speed_ms=touchdown.speed,
         touchdown_descent_rate_ms=touchdown.descent_rate_ms,
+        geometry=geometry_payload,
     )
 
-    tan_slope = math.tan(math.radians(glideslope_deg))
+    tan_slope = math.tan(math.radians(slope_deg))
     for sample in event.approach:
         if sample.latitude is None or sample.longitude is None:
             continue
         along, lateral = transform_to_frame(
-            sample.latitude, sample.longitude, touchdown.latitude, touchdown.longitude, course
+            sample.latitude, sample.longitude, ref_lat, ref_lon, course
         )
         distance_to_go = max(0.0, -along)
 

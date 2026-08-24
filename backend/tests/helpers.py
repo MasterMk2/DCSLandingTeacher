@@ -32,11 +32,13 @@ def make_carrier_state(
     lon: float = LON0,
     altitude: float = DECK_ALTITUDE_M,
     heading: float = 0.0,
+    type_str: str | None = None,
 ) -> CarrierState:
     """A stationary carrier at the touchdown point."""
     return CarrierState(
         obj_id=obj_id,
         name=name,
+        type=type_str,
         samples=[(0.0, lat, lon, altitude, heading, 0.0)],
     )
 
