@@ -126,7 +126,20 @@ lso_grading:
     T&R:   { severity: minor, enabled: false }
     NWS:   { severity: minor, enabled: false }
     OPEN:  { severity: minor, enabled: false }
-    BURBLE: { severity: minor, enabled: false }
+    # Issue #4 (O-3): ACMI 2.2 has NO wind properties (global properties are
+    # recording metadata only; object properties cover kinematics/aircraft
+    # state), so wind-over-deck based detection is impossible. BURBLE is
+    # instead inferred from a sudden increase of the derived descent rate
+    # just before touchdown vs. the preceding final-approach baseline --
+    # the characteristic burble sink. Thresholds below are UNVALIDATED
+    # estimates; tune them against real DCS approach data before trusting
+    # the factor.
+    BURBLE:
+      severity: minor
+      enabled: true
+      window_s: 3.0            # sink evaluation window before touchdown
+      baseline_window_s: 12.0  # stable-approach reference window before that
+      extra_descent_ms: 1.5    # mean extra sink (m/s) over baseline to trigger
   # Grade decision rules, evaluated in order.
   decision:
     # A mean glideslope deviation below this at the ramp is a wave-off.

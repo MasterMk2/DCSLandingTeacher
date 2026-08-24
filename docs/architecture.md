@@ -31,7 +31,7 @@ flowchart LR
 | [`acmi/file_reader.py`](../backend/app/acmi/file_reader.py) | 保存済み .acmi / .acmi.zip ファイルの再生（テスト・再評価用） |
 | [`ingest.py`](../backend/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給 |
 | [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
-| [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与 |
+| [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与。BURBLE のみヒューリスティック検出（下記「BURBLE 検出について」） |
 | [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
 | [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
 | [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別 FLOLS ジオメトリ、Issue #3）の読み込みと解決。未知の艦はタッチダウン基準の近似へフォールバック。**収録値は未検証の推定値**であり、実データでの検証が残っている |
@@ -51,6 +51,25 @@ flowchart LR
    タッチダウン直後は outcome 未確定のため `outcome_status: "provisional"` として即時通知し、
    full-stop 滞地時間の経過などで確定した時点で同一レコードを更新する
    `{"type": "landing_update", ...}` を送る二段階方式（Issue #5）
+
+### BURBLE 検出について（Issue #4 / O-3 調査結果）
+
+**ACMI 2.2 仕様上、風情報は取得できない。** ACMI のグローバルプロパティは
+記録メタデータ（`ReferenceTime` / `RecordingTime` / `Title` / `DataSource` /
+`DataRecorder` / `Author` / `Comments` / `Category` / `Briefing` /
+`Debriefing`）のみで、オブジェクトプロパティも運動学と機体状態
+（`Type` / `Latitude` / `Longitude` / `Altitude` / `Speed` / `Throttle` /
+`Tailhook` 等）に限られる。`WindDirection` / `WindSpeed` /
+甲板風（WOD）相当のフィールドは存在しないため、風データに基づく BURBLE
+検出はこのデータソースでは不可能。
+
+そのため [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) では、
+バーブル特有の**接地直前の沈下率急増**をヒューリスティック検出する:
+進入終盤の安定基準区間（既定 12 秒）に対し、接地直前 3 秒の派生沈下率平均が
+閾値（既定 +1.5 m/s）以上増加した場合に minor ファクター BURBLE を付与する。
+閾値は [`config/grading.yaml`](../config/grading.yaml) の `BURBLE` セクションで
+調整可能。**閾値は未検証の推定値**であり、実 DCS データでの妥当性確認が
+完了するまでグレード根拠として絶対視しないこと。
 
 ## フロントエンド（frontend/src）
 

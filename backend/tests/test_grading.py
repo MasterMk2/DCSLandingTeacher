@@ -213,3 +213,75 @@ def test_lso_disabled_factors_never_emitted() -> None:
     }
     assert disabled  # config declares them
     assert all(f.name not in disabled for f in result.factors)
+
+
+# ---------------------------------------------------------------------------
+# BURBLE heuristic (Issue #4 / O-3)
+# ---------------------------------------------------------------------------
+
+
+def test_lso_burble_detected_on_sudden_sink() -> None:
+    # Steady approach at ~4.3 m/s sink, then ~7 m/s over the last 3 s:
+    # the characteristic burble sink.
+    event = _carrier_event(pre_touchdown_descent_ms=7.0)
+    analysis = build_approach_analysis(event, 3.5)
+    result = grade_carrier_approach(analysis, CONFIG)
+
+    burble = next((f for f in result.factors if f.name == "BURBLE"), None)
+    assert burble is not None
+    assert burble.severity == "minor"
+    assert burble.evidence["method"] == "descent_rate_increase_heuristic"
+    assert (
+        burble.evidence["extra_descent_ms"] >= burble.evidence["threshold_ms"]
+    )
+    assert (
+        burble.evidence["recent_descent_ms"]
+        > burble.evidence["baseline_descent_ms"]
+    )
+
+
+def test_lso_smooth_pass_has_no_burble() -> None:
+    event = _carrier_event()
+    analysis = build_approach_analysis(event, 3.5)
+    result = grade_carrier_approach(analysis, CONFIG)
+
+    assert all(f.name != "BURBLE" for f in result.factors)
+    assert result.grade == "OK"
+
+
+def test_lso_burble_respects_enabled_flag() -> None:
+    from app.grading.config import apply_config_overrides
+
+    disabled_config = apply_config_overrides(
+        CONFIG,
+        {"lso_grading": {"factors": {"BURBLE": {"enabled": False}}}},
+    )
+
+    event = _carrier_event(pre_touchdown_descent_ms=7.0)
+    analysis = build_approach_analysis(event, 3.5)
+    result = grade_carrier_approach(analysis, disabled_config)
+
+    assert all(f.name != "BURBLE" for f in result.factors)
+
+
+def test_lso_burble_insufficient_samples_is_silent() -> None:
+    # A very short approach segment cannot support the baseline comparison;
+    # the detector must stay silent rather than guess.
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+    from app.grading.lso_grader import _detect_burble
+
+    analysis = ApproachAnalysis(
+        kind="carrier",
+        outcome="full_stop",
+        glideslope_deg=3.5,
+        course_deg=0.0,
+        touchdown_time=0.0,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=2.0,
+        samples=[DeviationSample(time=-1.0, distance_to_go=70.0,
+                                 glideslope_deviation=0.0,
+                                 centerline_deviation=0.0, agl=6.0)],
+    )
+    assert _detect_burble(
+        analysis, {"enabled": True, "extra_descent_ms": 1.5}
+    ) is None
