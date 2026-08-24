@@ -60,6 +60,8 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
           status: started.status,
           created_at: new Date().toISOString(),
           frames_processed: 0,
+          total_frames: 0,
+          progress_percent: null,
           landings_detected: 0,
           duplicates_skipped: 0,
         });
@@ -132,18 +134,37 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
           />
 
           {job && (
-            <p className="import-status">
-              <span className={`import-badge status-${job.status}`}>
-                {importStatusLabel(job.status)}
-              </span>{" "}
-              {job.filename}
-              {!isActiveImportStatus(job.status) && (
-                <> — {formatImportSummary(job)}</>
+            <>
+              <p className="import-status">
+                <span className={`import-badge status-${job.status}`}>
+                  {importStatusLabel(job.status)}
+                </span>{" "}
+                {job.filename}
+                {!isActiveImportStatus(job.status) && (
+                  <> — {formatImportSummary(job)}</>
+                )}
+                {job.status === "failed" && job.error && (
+                  <span className="error-message"> {job.error}</span>
+                )}
+              </p>
+              {isActiveImportStatus(job.status) && job.total_frames > 0 && (
+                <div className="import-progress">
+                  <div
+                    className="import-progress-bar"
+                    style={{ width: `${job.progress_percent ?? 0}%` }}
+                    role="progressbar"
+                    aria-valuenow={job.progress_percent ?? 0}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`解析進捗 ${job.progress_percent ?? 0}%`}
+                  />
+                  <span className="import-progress-text">
+                    {job.frames_processed} / {job.total_frames} フレーム
+                    ({job.progress_percent ?? 0}%)
+                  </span>
+                </div>
               )}
-              {job.status === "failed" && job.error && (
-                <span className="error-message"> {job.error}</span>
-              )}
-            </p>
+            </>
           )}
           {error && <p className="error-message">インポートエラー: {error}</p>}
         </div>

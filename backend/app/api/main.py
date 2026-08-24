@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.acmi.multi_source import MultiSourceAcmiManager
 from app.acmi.stream import AcmiStreamClient
 from app.api.imports import router as import_router
 from app.api.notifier import LandingNotifier
@@ -52,31 +53,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             carrier_geometry_book=carrier_geometry_book,
         )
 
-        acmi_client: AcmiStreamClient | None = None
-        acmi_task: asyncio.Task | None = None
-        ingestor: TrackIngestor | None = None
-        if settings.acmi_enabled:
-            ingestor = TrackIngestor(
+        multi_source_manager: MultiSourceAcmiManager | None = None
+        acmi_client: AcmiStreamClient | None = None  # Legacy compatibility
+        if settings.acmi_enabled and settings.tacview_enabled:
+            multi_source_manager = MultiSourceAcmiManager(
                 session_factory,
                 landing_listener=pipeline.handle_landing,
                 landing_finalize_listener=pipeline.finalize_landing,
-                sample_buffer_s=float(grading_config.detection.get("sample_buffer_s", 600.0)),
             )
-            acmi_client = AcmiStreamClient(
-                settings.tacview_host,
-                settings.tacview_port,
-                ingestor.handle_line,
-                client_name=settings.tacview_client_name,
-                password=settings.tacview_password,
-                initial_delay=settings.reconnect_initial_delay,
-                max_delay=settings.reconnect_max_delay,
-            )
-            acmi_task = asyncio.create_task(acmi_client.run(), name="acmi-stream-client")
-            logger.info(
-                "ACMI client started (target %s:%d)",
-                settings.tacview_host,
-                settings.tacview_port,
-            )
+            await multi_source_manager.start()
+            # Legacy compatibility: expose first source's client as acmi_client
+            first_source = multi_source_manager.get_source("default")
+            if first_source is not None:
+                acmi_client = first_source.client
+            logger.info("Multi-source ACMI manager started with %d source(s)", len(multi_source_manager._sources))
         else:
             logger.info("ACMI client disabled by configuration")
 
@@ -92,21 +82,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.acmi_client = acmi_client
+        app.state.multi_source_manager = multi_source_manager
         app.state.notifier = notifier
         app.state.pipeline = pipeline
         app.state.import_manager = import_manager
 
         yield
 
-        if acmi_client is not None and acmi_task is not None:
-            await acmi_client.stop()
-            acmi_task.cancel()
-            try:
-                await acmi_task
-            except asyncio.CancelledError:
-                pass
-        if ingestor is not None:
-            await ingestor.close()
+        if multi_source_manager is not None:
+            await multi_source_manager.stop()
         await engine.dispose()
 
     app = FastAPI(

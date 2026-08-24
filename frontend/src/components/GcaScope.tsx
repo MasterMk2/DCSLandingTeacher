@@ -15,6 +15,7 @@ import {
   scopeScaleX,
   type ScopePoint,
 } from "../lib/gcaGeometry";
+import { mToFt, mToNm } from "../lib/format";
 import type { DeviationSample } from "../types/api";
 
 const WIDTH = 340;
@@ -82,12 +83,12 @@ function ScopeSvg({ title, xLabel, maxDev, maxRange, points }: ScopeSvgProps) {
           );
         })}
 
-        {/* Distance labels */}
+        {/* Distance labels (Issue D-4: nautical miles) */}
         {ringLabels.map((d) => {
           const y = toPixel({ x: 0.5, y: 1 - d / maxRange }).py;
           return (
             <text key={`label-${d}`} x={PAD_X - 6} y={y + 3} textAnchor="end" className="scope-label">
-              {(d / 1000).toFixed(1)}km
+              {mToNm(d).toFixed(1)}nm
             </text>
           );
         })}
@@ -102,12 +103,12 @@ function ScopeSvg({ title, xLabel, maxDev, maxRange, points }: ScopeSvgProps) {
           strokeDasharray="8 5"
         />
 
-        {/* Deviation scale ticks */}
+        {/* Deviation scale ticks (Issue D-4: feet) */}
         {[-1, -0.5, 0, 0.5, 1].map((t) => {
           const x = toPixel({ x: scopeScaleX(t * maxDev, maxDev), y: 0 }).px;
           return (
             <text key={`tick-${t}`} x={x} y={HEIGHT - PAD_BOTTOM + 14} textAnchor="middle" className="scope-label">
-              {t === 0 ? "0" : `${t > 0 ? "+" : ""}${Math.round(t * maxDev)}m`}
+              {t === 0 ? "0" : `${t > 0 ? "+" : ""}${Math.round(mToFt(t * maxDev))}ft`}
             </text>
           );
         })}

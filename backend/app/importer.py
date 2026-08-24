@@ -61,9 +61,17 @@ class ImportJob:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     frames_processed: int = 0
+    total_frames: int = 0
     landings_detected: int = 0
     duplicates_skipped: int = 0
     error: str | None = None
+
+    @property
+    def progress_percent(self) -> int | None:
+        """Progress 0-100, or None if total_frames is unknown."""
+        if self.total_frames <= 0:
+            return None
+        return min(100, max(0, int(self.frames_processed * 100 / self.total_frames)))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +84,8 @@ class ImportJob:
                 self.finished_at.isoformat() if self.finished_at else None
             ),
             "frames_processed": self.frames_processed,
+            "total_frames": self.total_frames,
+            "progress_percent": self.progress_percent,
             "landings_detected": self.landings_detected,
             "duplicates_skipped": self.duplicates_skipped,
             "error": self.error,
@@ -216,6 +226,19 @@ class ImportJobManager:
         holder.append(
             _DuplicateGuard(job, self._session_factory, self._pipeline, ingestor)
         )
+
+        # Pre-count time-frame lines (#...) to estimate total frames for progress.
+        # This is a fast single pass; the second pass does the actual ingest.
+        try:
+            total = 0
+            for line in iter_acmi_lines(path):
+                if line.startswith("#"):
+                    total += 1
+            job.total_frames = total
+        except Exception:
+            # If pre-count fails, progress will stay unknown (None).
+            job.total_frames = 0
+
         try:
             lines_since_yield = 0
             for line in iter_acmi_lines(path):

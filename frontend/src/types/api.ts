@@ -11,6 +11,13 @@ export type LandingOutcome = "full_stop" | "touch_and_go" | "bolter";
  */
 export type OutcomeStatus = "provisional" | "final";
 
+/** Tacview source information (Issue #13 multi-source support). */
+export interface SourceInfo {
+  id: string;
+  name: string;
+  connected: boolean;
+}
+
 /** LandingSummary (GET /api/landings rows, WS notification payload). */
 export interface LandingSummary {
   id: number;
@@ -21,12 +28,21 @@ export interface LandingSummary {
   venue_name: string | null;
   pilot: string | null;
   airframe: string | null;
-  /** Epoch seconds of touchdown. */
+  /** Mission-relative touchdown time (ACMI seconds since mission start). */
   touchdown_time: number | null;
+  /**
+   * Wall-clock epoch seconds of the touchdown (Issue D-1):
+   * ReferenceTime + touchdown_time. Null when ReferenceTime is unknown.
+   */
+  touchdown_epoch?: number | null;
   grade: string | null;
   score: number | null;
   /** ISO-8601 datetime string. */
   created_at: string | null;
+  /** Source identifier (Issue #13 multi-source support) */
+  source_id?: string | null;
+  /** Source display name (Issue #13 multi-source support) */
+  source_name?: string | null;
 }
 
 /** FactorOut. */
@@ -85,6 +101,8 @@ export interface LandingListResponse {
   total: number;
   limit: number;
   offset: number;
+  /** Available Tacview sources for filtering (Issue #13 multi-source support) */
+  sources?: SourceInfo[];
 }
 
 /** Query filters accepted by GET /api/landings. */
@@ -97,6 +115,8 @@ export interface LandingFilters {
   outcome?: string;
   date_from?: string;
   date_to?: string;
+  /** Filter by Tacview source ID (Issue #13 multi-source support) */
+  source?: string;
 }
 
 /**
@@ -120,6 +140,8 @@ export interface ImportJob {
   started_at?: string | null;
   finished_at?: string | null;
   frames_processed: number;
+  total_frames: number;
+  progress_percent: number | null;
   landings_detected: number;
   duplicates_skipped: number;
   error?: string | null;

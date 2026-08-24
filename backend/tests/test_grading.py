@@ -285,3 +285,33 @@ def test_lso_burble_insufficient_samples_is_silent() -> None:
     assert _detect_burble(
         analysis, {"enabled": True, "extra_descent_ms": 1.5}
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Issue D-5: land glideslope reference is fixed at 3 degrees.
+# ---------------------------------------------------------------------------
+
+
+def test_land_glideslope_defaults_to_three_degrees() -> None:
+    """Land approaches are graded against a 3-degree path (Issue D-5).
+
+    The default must be 3.0 both in the shipped YAML and in the in-code
+    fallback, and ``glideslope_for`` must route land events to it.
+    """
+    from app.grading.config import GradingConfig
+
+    # Shipped configuration.
+    assert CONFIG.land_glideslope_deg == pytest.approx(3.0)
+    assert CONFIG.glideslope_for("land") == pytest.approx(3.0)
+    # Carrier path stays on the FLOLS 3.5-degree datum.
+    assert CONFIG.glideslope_for("carrier") == pytest.approx(3.5)
+
+    # In-code fallback when no YAML is present.
+    assert GradingConfig({}).land_glideslope_deg == pytest.approx(3.0)
+
+
+def test_land_analysis_uses_three_degree_reference() -> None:
+    """The deviation series for a land landing is built on the 3.0-degree slope."""
+    event = _land_event(pre_touchdown_descent_ms=1.2)
+    analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
+    assert analysis.glideslope_deg == pytest.approx(3.0)

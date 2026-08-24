@@ -14,6 +14,8 @@ function makeJob(overrides: Partial<ImportJob> = {}): ImportJob {
     status: "processing",
     created_at: "2026-01-01T00:00:00+00:00",
     frames_processed: 1200,
+    total_frames: 2000,
+    progress_percent: 60,
     landings_detected: 3,
     duplicates_skipped: 1,
     ...overrides,

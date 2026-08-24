@@ -27,6 +27,7 @@ export function LandingTable({ items, onSelect }: LandingTableProps) {
           <th>プレイヤー</th>
           <th>機体</th>
           <th>空港 / 空母</th>
+          <th>ソース</th>
           <th>種別</th>
           <th>グレード</th>
           <th>評点</th>
@@ -45,10 +46,11 @@ export function LandingTable({ items, onSelect }: LandingTableProps) {
             }}
           >
             <td>{it.id}</td>
-            <td>{formatEpoch(it.touchdown_time)}</td>
+            <td>{formatEpoch(it.touchdown_epoch ?? it.touchdown_time)}</td>
             <td>{it.pilot ?? "-"}</td>
             <td>{it.airframe ?? "-"}</td>
             <td>{it.venue_name ?? (it.kind === "land" ? "空港" : "-")}</td>
+            <td>{it.source_name ?? it.source_id ?? "-"}</td>
             <td>{kindLabel(it.kind)}</td>
             <td>
               {isProvisional(it) ? (

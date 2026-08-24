@@ -53,6 +53,7 @@ export function Dashboard({ onSelectLanding }: DashboardProps) {
           setFilters(f);
           setOffset(0);
         }}
+        sources={data?.sources}
       />
 
       <ImportPanel onImported={refresh} />

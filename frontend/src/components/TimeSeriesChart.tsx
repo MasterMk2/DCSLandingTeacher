@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { descentRateSeries } from "../lib/gcaGeometry";
-import { msToKnots, msToFpm } from "../lib/format";
+import { mToFt, msToFpm, msToKnots } from "../lib/format";
 import type { ApproachTrack } from "../types/api";
 
 export interface TimeSeriesChartProps {
@@ -32,8 +32,13 @@ function buildRows(track: ApproachTrack): Row[] {
   const rates = new Map(descentRateSeries(track.samples).map((r) => [r.time, r.rateMs]));
   return track.samples.map((s) => ({
     t: Math.round((s.time - tdTime) * 10) / 10,
-    gs: s.glideslope_deviation ?? null,
-    cl: s.centerline_deviation ?? null,
+    // Issue D-4: display deviations in feet (backend keeps meters).
+    gs: s.glideslope_deviation !== null && s.glideslope_deviation !== undefined
+      ? Math.round(mToFt(s.glideslope_deviation))
+      : null,
+    cl: s.centerline_deviation !== null && s.centerline_deviation !== undefined
+      ? Math.round(mToFt(s.centerline_deviation))
+      : null,
     kt: s.speed !== null && s.speed !== undefined ? Math.round(msToKnots(s.speed)) : null,
     fpm:
       rates.has(s.time) && rates.get(s.time) !== undefined
@@ -68,8 +73,8 @@ export function TimeSeriesChart({ track }: TimeSeriesChartProps) {
               tick={AXIS_STYLE}
               label={{ value: "接地前の時間 (秒)", position: "insideBottom", offset: -2, fill: "#9fb8a8", fontSize: 11 }}
             />
-            <YAxis tick={AXIS_STYLE} unit="m" width={56} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => `${v} m`} />
+            <YAxis tick={AXIS_STYLE} unit="ft" width={56} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => `${v} ft`} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Line name="GS 偏差" dataKey="gs" stroke="#39d98a" dot={false} connectNulls />
             <Line name="CL 偏差" dataKey="cl" stroke="#ffd166" dot={false} connectNulls />

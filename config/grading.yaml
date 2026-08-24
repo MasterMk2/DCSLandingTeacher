@@ -14,7 +14,9 @@ version: 1
 geometry:
   # FLOLS-style glideslope for carrier approaches (ramp-referenced).
   carrier_glideslope_deg: 3.5
-  # Typical visual slope indicator angle for land aerodromes.
+  # Land aerodromes use a fixed 3-degree reference path (Issue D-5). This is
+  # the standard visual approach slope; keep it at 3.0 unless a specific
+  # airfield publishes a different PAPI/VASI angle.
   land_glideslope_deg: 3.0
   earth_radius_m: 6371000.0
 

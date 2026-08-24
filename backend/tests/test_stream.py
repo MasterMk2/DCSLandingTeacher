@@ -333,3 +333,96 @@ async def test_stream_client_stop_wakes_pending_backoff() -> None:
     await asyncio.sleep(0.1)  # let it enter the first backoff sleep
     await client.stop()
     await asyncio.wait_for(task, timeout=2.0)
+
+
+async def test_stream_client_reconnects_on_idle_timeout() -> None:
+    """Client must reconnect when no data is received for idle_timeout seconds."""
+    accept_count = 0
+    lines_received: list[str] = []
+
+    async def on_line(line: str) -> None:
+        lines_received.append(line)
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        nonlocal accept_count
+        accept_count += 1
+        # Send handshake response
+        await _host_handshake_writer(reader, writer)
+        # Send initial data
+        writer.write(b"FileType=text/acmi/tacview\n")
+        await writer.drain()
+        # Then stop sending data - client should reconnect after idle_timeout
+        await asyncio.sleep(0.5)
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    # Use a short idle_timeout for testing (2 seconds)
+    client = AcmiStreamClient(
+        "127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1, idle_timeout=2.0
+    )
+    task = asyncio.create_task(client.run())
+    try:
+        # Wait for first connection and initial data
+        await _wait_until(lambda: len(lines_received) >= 1)
+        # Wait for reconnect after idle timeout (should take ~2 seconds)
+        await _wait_until(lambda: accept_count >= 2, timeout=10.0)
+        assert accept_count >= 2
+    finally:
+        await client.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        server.close()
+        await server.wait_closed()
+
+
+async def test_stream_client_idle_timeout_disabled_when_zero() -> None:
+    """idle_timeout=0 should disable idle monitoring (no forced reconnect)."""
+    accept_count = 0
+    lines_received: list[str] = []
+
+    async def on_line(line: str) -> None:
+        lines_received.append(line)
+
+    # Event to signal when test should end
+    test_done = asyncio.Event()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        nonlocal accept_count
+        accept_count += 1
+        await _host_handshake_writer(reader, writer)
+        # Send data once, then keep connection open but silent
+        writer.write(b"FileType=text/acmi/tacview\n")
+        await writer.drain()
+        # Keep connection open until test signals done
+        await test_done.wait()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    # idle_timeout=0 disables the feature
+    client = AcmiStreamClient(
+        "127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1, idle_timeout=0
+    )
+    task = asyncio.create_task(client.run())
+    try:
+        # Wait for initial data
+        await _wait_until(lambda: len(lines_received) >= 1)
+        # Should NOT reconnect within 3 seconds since idle_timeout=0
+        await asyncio.sleep(3.0)
+        assert accept_count == 1
+    finally:
+        test_done.set()  # Allow server to close
+        await client.stop()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        server.close()
+        await server.wait_closed()

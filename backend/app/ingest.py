@@ -45,6 +45,15 @@ logger = getLogger(__name__)
 #: elevation reference for WOW estimation.
 GROUND_REFERENCE_RADIUS_M = 5000.0
 
+#: Issue D-3: full touchdown re-analysis runs at most once per this many
+#: mission seconds per aircraft (live monitoring path only).
+ANALYSIS_INTERVAL_S = 1.0
+#: Issue D-3: skip the full analysis while the aircraft is clearly airborne
+#: above this AGL -- no touchdown can happen up there.
+DETECTION_AGL_GATE_M = 150.0
+#: Issue D-3: per-aircraft ground-altitude cache lifetime (mission seconds).
+GROUND_ALT_CACHE_S = 5.0
+
 
 @dataclass
 class LandingContext:
@@ -53,6 +62,10 @@ class LandingContext:
     ``object_row_id`` / ``carrier_row_id`` carry the ORM row ids already
     resolved by the ingestor; the pipeline must not re-query them because
     the ingest transaction may not be committed yet.
+
+    ``flight_reference_time`` is the ACMI ``ReferenceTime`` header (ISO-8601)
+    used to convert mission-relative touchdown times into wall-clock epochs
+    (Issue D-1).
     """
 
     flight_id: int | None
@@ -62,6 +75,8 @@ class LandingContext:
     event: LandingEvent
     object_row_id: int | None = None
     carrier_row_id: int | None = None
+    flight_reference_time: str | None = None
+    source_id: str = "default"
 
 
 #: Called for every newly detected landing. Returns the persisted row id so
@@ -85,11 +100,13 @@ class TrackIngestor:
         landing_listener: LandingListener | None = None,
         landing_finalize_listener: LandingFinalizeListener | None = None,
         sample_buffer_s: float = 600.0,
+        source_id: str = "default",
     ) -> None:
         self._session_factory = session_factory
         self._max_batch_size = max(1, max_batch_size)
         self._parser = AcmiParser()
         self._flight_id: int | None = None
+        self._source_id = source_id
         #: acmi object id -> ``objects.id`` row
         self._object_row_ids: dict[str, int] = {}
         self._session: AsyncSession | None = None
@@ -103,11 +120,21 @@ class TrackIngestor:
         self._carrier_states: dict[str, CarrierState] = {}
         #: static object id -> (lat, lon, altitude)
         self._static_positions: dict[str, tuple[float, float, float]] = {}
+        #: aircraft id -> (time, lat, lon) of the last received fix; used to
+        #: derive a ground-speed fallback when the source emits no TAS/CAS/IAS
+        #: (Issue D-2).
+        self._last_aircraft_fix: dict[str, tuple[float, float, float]] = {}
         #: (acmi id, touchdown time) pairs already reported as final.
         self._reported_landings: set[tuple[str, float]] = set()
         #: (acmi id, touchdown time) -> landing row id reported provisionally
         #: and still awaiting its final outcome (Issue #5).
         self._provisional_ids: dict[tuple[str, float], int] = {}
+        #: Issue D-3: mission time of the last full analysis per aircraft.
+        self._last_analysis_time: dict[str, float] = {}
+        #: Issue D-3: cached ground-altitude lookups (lat/lon scan is O(objects)).
+        self._ground_alt_cache: dict[
+            str, tuple[float, float | None]
+        ] = {}
 
     @property
     def parser(self) -> AcmiParser:
@@ -175,6 +202,7 @@ class TrackIngestor:
         header = self._parser.header
         session = self._get_session()
         flight = Flight(
+            source_id=self._source_id,
             reference_time=header.get("ReferenceTime"),
             data_source=header.get("DataSource"),
             data_recorder=header.get("DataRecorder"),
@@ -185,7 +213,7 @@ class TrackIngestor:
         await session.flush()
         self._flight_id = flight.id
         self._pending += 1
-        logger.info("created flight record id=%d", self._flight_id)
+        logger.info("created flight record id=%d (source=%s)", self._flight_id, self._source_id)
         return self._flight_id
 
     async def _handle_update(self, event: ObjectUpdateEvent) -> None:
@@ -300,6 +328,23 @@ class TrackIngestor:
                 )
         elif obj_class == ObjectClass.AIRCRAFT:
             if source.latitude is not None and source.longitude is not None:
+                speed = source.speed
+                if speed is None:
+                    # Issue D-2: some DCS exports omit TAS/CAS/IAS entirely.
+                    # Fall back to the ground speed derived from consecutive
+                    # position fixes so touchdown-speed / FAST-SLOW grading
+                    # still has data to work with.
+                    speed = self._derived_ground_speed(
+                        obj_id,
+                        source.last_seen,
+                        source.latitude,
+                        source.longitude,
+                    )
+                self._last_aircraft_fix[obj_id] = (
+                    source.last_seen,
+                    source.latitude,
+                    source.longitude,
+                )
                 self.record_aircraft_sample(
                     obj_id,
                     TrackSample(
@@ -308,12 +353,34 @@ class TrackIngestor:
                         longitude=source.longitude,
                         altitude=source.altitude,
                         agl=source.agl,
-                        speed=source.speed,
+                        speed=speed,
                         heading=source.heading,
                         aoa=source.aoa,
                         on_ground=source.on_ground,
                     ),
                 )
+
+    def _derived_ground_speed(
+        self,
+        obj_id: str,
+        time: float,
+        latitude: float,
+        longitude: float,
+    ) -> float | None:
+        """Ground speed (m/s) from the previous position fix (Issue D-2).
+
+        Returns ``None`` for the first fix or when the elapsed time is too
+        short to yield a stable estimate.
+        """
+        prev = self._last_aircraft_fix.get(obj_id)
+        if prev is None:
+            return None
+        prev_time, prev_lat, prev_lon = prev
+        dt = time - prev_time
+        if dt <= 0.05:
+            return None
+        distance = haversine_m(latitude, longitude, prev_lat, prev_lon)
+        return distance / dt
 
     def _ground_altitude_for(
         self, latitude: float | None, longitude: float | None
@@ -338,13 +405,31 @@ class TrackIngestor:
                 best = alt
         return best
 
+    def _ground_altitude_cached(
+        self,
+        obj_id: str,
+        latitude: float | None,
+        longitude: float | None,
+        time: float,
+    ) -> float | None:
+        """Ground elevation with a short-lived per-aircraft cache (Issue D-3).
+
+        The lookup scans every carrier/static object, which is wasteful to
+        repeat on every telemetry update of every aircraft; the reference
+        surfaces move slowly relative to the 5 km search radius.
+        """
+        if latitude is None or longitude is None:
+            return None
+        cached = self._ground_alt_cache.get(obj_id)
+        if cached is not None and time - cached[0] < GROUND_ALT_CACHE_S:
+            return cached[1]
+        altitude = self._ground_altitude_for(latitude, longitude)
+        self._ground_alt_cache[obj_id] = (time, altitude)
+        return altitude
+
     async def _maybe_detect_landing(
         self, obj_id: str, *, force_final: bool = False
     ) -> None:
-        # Landing events are rare; commit pending ingest writes first so the
-        # grading pipeline can open its own write transaction without
-        # hitting SQLite's single-writer lock.
-        await self._flush(force=True)
         buffer = self._aircraft_buffers.get(obj_id)
         if buffer is None:
             buffer = RollingTrackBuffer(self._sample_buffer_s)
@@ -355,7 +440,30 @@ class TrackIngestor:
         if not samples:
             return
         last = samples[-1]
-        ground_altitude = self._ground_altitude_for(last.latitude, last.longitude)
+        ground_altitude = self._ground_altitude_cached(
+            obj_id, last.latitude, last.longitude, last.time
+        )
+
+        if not force_final:
+            # Issue D-3: the full re-analysis is expensive; run it at most
+            # once per ANALYSIS_INTERVAL_S of mission time per aircraft.
+            last_run = self._last_analysis_time.get(obj_id)
+            if last_run is not None and last.time - last_run < ANALYSIS_INTERVAL_S:
+                return
+            # Issue D-3: while clearly airborne no touchdown can occur, so
+            # skip the scan entirely until the aircraft gets low.
+            agl = last.agl
+            if (
+                agl is None
+                and last.altitude is not None
+                and ground_altitude is not None
+            ):
+                agl = last.altitude - ground_altitude
+            self._last_analysis_time[obj_id] = last.time
+            if agl is not None and agl > DETECTION_AGL_GATE_M:
+                return
+        else:
+            self._last_analysis_time[obj_id] = last.time
 
         events = analyze_track(
             samples,
@@ -363,6 +471,12 @@ class TrackIngestor:
             self._carrier_states,
             current_time=None if force_final else last.time,
         )
+        if not events:
+            return
+        # Landing events are rare; commit pending ingest writes now so the
+        # grading pipeline can open its own write transaction without hitting
+        # SQLite's single-writer lock (Issue D-3: only flush when needed).
+        await self._flush(force=True)
         for landing in events:
             key = (obj_id, round(landing.touchdown.time, 3))
             context = LandingContext(
@@ -377,6 +491,8 @@ class TrackIngestor:
                     if landing.carrier_obj_id
                     else None
                 ),
+                flight_reference_time=self._parser.header.get("ReferenceTime"),
+                source_id=self._source_id,
             )
 
             if not landing.finalized and not force_final:

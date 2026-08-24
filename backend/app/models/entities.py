@@ -24,6 +24,7 @@ class Flight(Base):
     __tablename__ = "flights"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True, default="default")
     reference_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
     data_recorder: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -95,6 +96,7 @@ class Landing(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     flight_id: Mapped[int] = mapped_column(ForeignKey("flights.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True, default="default")
     object_id: Mapped[int] = mapped_column(ForeignKey("objects.id", ondelete="CASCADE"), index=True)
     carrier_object_id: Mapped[int | None] = mapped_column(
         ForeignKey("objects.id", ondelete="SET NULL"), nullable=True

@@ -11,6 +11,7 @@ import {
   formatIso,
   gradeClass,
   kindLabel,
+  mToFt,
   msToKnots,
   msToFpm,
 } from "../lib/format";
@@ -94,7 +95,7 @@ export function Detail({ id, onBack }: DetailProps) {
               <th>記録 ID</th>
               <td>{detail.id}</td>
               <th>日時</th>
-              <td>{formatEpoch(detail.touchdown_time)}</td>
+              <td>{formatEpoch(detail.touchdown_epoch ?? detail.touchdown_time)}</td>
             </tr>
             <tr>
               <th>プレイヤー</th>
@@ -109,6 +110,8 @@ export function Detail({ id, onBack }: DetailProps) {
               <td>{kindLabel(detail.kind)}</td>
             </tr>
             <tr>
+              <th>ソース</th>
+              <td>{detail.source_name ?? detail.source_id ?? "-"}</td>
               <th>グレード / 評点</th>
               <td>
                 <span className={`grade-badge ${gradeClass(detail.grade)}`}>
@@ -116,6 +119,8 @@ export function Detail({ id, onBack }: DetailProps) {
                 </span>
                 {detail.score !== null && ` （評点 ${detail.score.toFixed(1)}）`}
               </td>
+            </tr>
+            <tr>
               <th>アウトカム</th>
               <td>{detail.outcome ?? "-"}</td>
             </tr>
@@ -185,7 +190,11 @@ export function Detail({ id, onBack }: DetailProps) {
             </div>
             <div className="metrics-row">
               <dt>高度</dt>
-              <dd>{td.altitude !== null && td.altitude !== undefined ? `${td.altitude.toFixed(0)} m` : "-"}</dd>
+              <dd>
+                {td.altitude !== null && td.altitude !== undefined
+                  ? `${mToFt(td.altitude).toFixed(0)} ft（${td.altitude.toFixed(0)} m）`
+                  : "-"}
+              </dd>
             </div>
             <div className="metrics-row">
               <dt>座標</dt>

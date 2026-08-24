@@ -210,6 +210,8 @@ class AcmiStreamClient:
     - On connection loss, handshake failure or connect error, reconnects
       automatically using exponential backoff (``initial_delay`` doubling up
       to ``max_delay``), resetting backoff after each successful connection.
+    - If no data is received for ``idle_timeout`` seconds, the connection is
+      considered stale and a reconnect is triggered (Issue #14).
     - :meth:`stop` requests a graceful shutdown; the running task exits after
       the current read loop unwinds.
     """
@@ -224,6 +226,7 @@ class AcmiStreamClient:
         password: str = "",
         initial_delay: float = 1.0,
         max_delay: float = 30.0,
+        idle_timeout: float = 60.0,
     ) -> None:
         self.host = host
         self.port = port
@@ -232,9 +235,12 @@ class AcmiStreamClient:
         self._password = password
         self._initial_delay = max(initial_delay, 0.1)
         self._max_delay = max(max_delay, self._initial_delay)
+        self._idle_timeout = max(idle_timeout, 1.0) if idle_timeout > 0 else 0.0
         self._stopping = False
         self.connected = False
         self._stop_event: asyncio.Event | None = None
+        self._last_data_time: float = 0.0
+        self._idle_monitor_task: asyncio.Task | None = None
 
     async def run(self) -> None:
         """Run the client loop until :meth:`stop` is called."""
@@ -265,7 +271,7 @@ class AcmiStreamClient:
             self.connected = True
             logger.info("ACMI stream connected to %s:%d", self.host, self.port)
             try:
-                await self._read_loop(reader)
+                await self._read_loop(reader, writer)
             except asyncio.CancelledError:
                 raise
             except (ConnectionError, OSError) as exc:
@@ -294,6 +300,43 @@ class AcmiStreamClient:
         self._stopping = True
         if self._stop_event is not None:
             self._stop_event.set()
+        # Cancel idle monitor if running
+        if self._idle_monitor_task is not None:
+            self._idle_monitor_task.cancel()
+            try:
+                await self._idle_monitor_task
+            except asyncio.CancelledError:
+                pass
+
+    def _start_idle_monitor(self, writer: asyncio.StreamWriter) -> None:
+        """Start a background task that monitors for idle connection."""
+        if self._idle_timeout <= 0:
+            return
+        self._last_data_time = asyncio.get_running_loop().time()
+        self._idle_monitor_task = asyncio.create_task(self._idle_monitor(writer))
+
+    async def _idle_monitor(self, writer: asyncio.StreamWriter) -> None:
+        """Monitor for idle connection and force reconnect if no data received."""
+        try:
+            while not self._stopping:
+                await asyncio.sleep(1.0)  # Check every second
+                if self._stopping:
+                    break
+                now = asyncio.get_running_loop().time()
+                if now - self._last_data_time >= self._idle_timeout:
+                    logger.warning(
+                        "ACMI stream idle for %.1fs (timeout=%.1fs); forcing reconnect",
+                        now - self._last_data_time,
+                        self._idle_timeout,
+                    )
+                    writer.close()
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    def _update_last_data_time(self) -> None:
+        """Update the timestamp of last received data."""
+        self._last_data_time = asyncio.get_running_loop().time()
 
     # ------------------------------------------------------------------
     # Internals
@@ -334,14 +377,18 @@ class AcmiStreamClient:
         )
         logger.debug("ACMI handshake completed with host %r", host_name)
 
-    async def _read_loop(self, reader: asyncio.StreamReader) -> None:
+    async def _read_loop(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         decoder = StreamDecoder()
         assembler = LineAssembler()
+        # Start idle monitor after successful handshake
+        self._start_idle_monitor(writer)
         try:
             while not self._stopping:
                 chunk = await reader.read(READ_CHUNK_SIZE)
                 if not chunk:
                     break
+                # Update idle timer on any data received
+                self._update_last_data_time()
                 for line in assembler.feed(decoder.feed(chunk)):
                     await self._on_line(line)
             tail_text = decoder.flush()
@@ -353,6 +400,14 @@ class AcmiStreamClient:
             # like a connection loss so the client reconnects (Issue #2).
             logger.error("ACMI stream decode failed: %s", exc)
             raise
+        finally:
+            # Cancel idle monitor when read loop ends
+            if self._idle_monitor_task is not None:
+                self._idle_monitor_task.cancel()
+                try:
+                    await self._idle_monitor_task
+                except asyncio.CancelledError:
+                    pass
         tail = assembler.flush()
         if tail is not None:
             await self._on_line(tail)

@@ -1,10 +1,12 @@
 /** Filter controls for the landing dashboard (FR-5). */
 
-import type { LandingFilters } from "../types/api";
+import type { LandingFilters, SourceInfo } from "../types/api";
+import { SourceSelector } from "./SourceSelector";
 
 export interface FilterBarProps {
   filters: LandingFilters;
   onChange: (filters: LandingFilters) => void;
+  sources?: SourceInfo[];
 }
 
 const KIND_OPTIONS = [
@@ -29,7 +31,7 @@ const GRADE_OPTIONS = [
   { value: "CUT", label: "CUT" },
 ];
 
-export function FilterBar({ filters, onChange }: FilterBarProps) {
+export function FilterBar({ filters, onChange, sources }: FilterBarProps) {
   const set = (patch: Partial<LandingFilters>) => onChange({ ...filters, ...patch });
 
   return (
@@ -61,6 +63,16 @@ export function FilterBar({ filters, onChange }: FilterBarProps) {
           onChange={(e) => set({ venue: e.target.value || undefined })}
         />
       </label>
+      {sources && sources.length > 0 && (
+        <label>
+          ソース
+          <SourceSelector
+            sources={sources}
+            currentSource={filters.source ?? null}
+            onChange={(sourceId) => set({ source: sourceId || undefined })}
+          />
+        </label>
+      )}
       <label>
         種別
         <select

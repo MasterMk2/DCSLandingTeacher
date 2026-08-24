@@ -613,6 +613,26 @@ main {
   background: #f5d3d3;
 }
 
+.import-progress {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.import-progress-bar {
+  height: 8px;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.import-progress-text {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-align: right;
+}
+
 .import-badge.status-processing,
 .import-badge.status-pending {
   background: #fdf0cf;

@@ -8,6 +8,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 
+class SourceInfo(BaseModel):
+    """Tacview source information for multi-source support (Issue #13)."""
+
+    id: str
+    name: str
+    connected: bool
+
+
 class LandingSummary(BaseModel):
     """One row of the landing history list (FR-5 dashboard)."""
 
@@ -23,10 +31,18 @@ class LandingSummary(BaseModel):
     venue_name: str | None = None
     pilot: str | None = None
     airframe: str | None = None
+    #: Mission-relative touchdown time (ACMI seconds since mission start).
     touchdown_time: float | None = None
+    #: Wall-clock epoch of the touchdown (Issue D-1): ReferenceTime +
+    #: touchdown_time. ``None`` when the ACMI header lacked ReferenceTime.
+    touchdown_epoch: float | None = None
     grade: str | None = None
     score: float | None = None
     created_at: datetime | None = None
+    #: Source identifier (Issue #13 multi-source support)
+    source_id: str | None = None
+    #: Source display name (Issue #13 multi-source support)
+    source_name: str | None = None
 
 
 class FactorOut(BaseModel):
@@ -96,6 +112,8 @@ class LandingListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    #: Available Tacview sources for filtering (Issue #13 multi-source support)
+    sources: list[SourceInfo] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +132,8 @@ class ImportJobOut(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     frames_processed: int = 0
+    total_frames: int = 0
+    progress_percent: int | None = None
     landings_detected: int = 0
     duplicates_skipped: int = 0
     error: str | None = None

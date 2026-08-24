@@ -38,6 +38,7 @@ describe("landingsToCsv", () => {
         pilot: "テスト太郎",
         airframe: "F/A-18C",
         touchdown_time: 1700000000,
+        touchdown_epoch: 1700000000,
         grade: "_NO_GRADE_",
         score: null,
       },
@@ -45,13 +46,13 @@ describe("landingsToCsv", () => {
     const lines = csv.split("\r\n");
     expect(lines[0]).toContain("id,kind,outcome");
     expect(lines[1]).toBe(
-      "7,carrier,bolter,CVN-73,テスト太郎,F/A-18C,1700000000,_NO_GRADE_,",
+      "7,carrier,bolter,CVN-73,テスト太郎,F/A-18C,1700000000,1700000000,_NO_GRADE_,",
     );
   });
 });
 
 describe("samplesToCsv", () => {
-  it("emits deviation columns with blanks for nulls", () => {
+  it("converts meters to nm/ft and m/s to knots (Issue D-4)", () => {
     const csv = samplesToCsv([
       {
         time: 100.5,
@@ -64,6 +65,24 @@ describe("samplesToCsv", () => {
       },
     ]);
     const lines = csv.split("\r\n");
-    expect(lines[1]).toBe("100.5,3700.25,-12.5,3.2,72.4,,195.1");
+    // 3700.25 m -> 2.0 nm, -12.5 m -> -41.01 ft, 3.2 m -> 10.5 ft,
+    // 72.4 m/s -> 140.73 kt, 195.1 m -> 640.09 ft.
+    expect(lines[1]).toBe("100.5,2,-41.01,10.5,140.73,,640.09");
+  });
+
+  it("emits blanks for null deviation/altitude cells", () => {
+    const csv = samplesToCsv([
+      {
+        time: 1.0,
+        distance_to_go: 0,
+        glideslope_deviation: null,
+        centerline_deviation: null,
+        speed: null,
+        aoa: null,
+        agl: null,
+      },
+    ]);
+    const lines = csv.split("\r\n");
+    expect(lines[1]).toBe("1,0,,,,,");
   });
 });

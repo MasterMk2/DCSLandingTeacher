@@ -4,6 +4,8 @@ import type { LandingSummary } from "../types/api";
 
 const MS_TO_KNOTS = 3600 / 1852;
 const MS_TO_FPM = 60 / 0.3048;
+const M_TO_FT = 1 / 0.3048;
+const M_TO_NM = 1 / 1852;
 
 export function msToKnots(ms: number): number {
   return ms * MS_TO_KNOTS;
@@ -11,6 +13,16 @@ export function msToKnots(ms: number): number {
 
 export function msToFpm(ms: number): number {
   return ms * MS_TO_FPM;
+}
+
+/** Convert meters to feet (Issue D-4). */
+export function mToFt(meters: number): number {
+  return meters * M_TO_FT;
+}
+
+/** Convert meters to nautical miles (Issue D-4). */
+export function mToNm(meters: number): number {
+  return meters * M_TO_NM;
 }
 
 /** Format epoch seconds as a localized Japanese datetime string. */

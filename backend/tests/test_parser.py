@@ -254,3 +254,98 @@ def test_object_update_with_inline_event_yields_both() -> None:
     events = parser.feed_line("101,T=1|2|3,Event=Landed|101|touchdown")
     kinds = {type(e).__name__ for e in events}
     assert kinds == {"ObjectUpdateEvent", "MissionEvent"}
+
+
+# ---------------------------------------------------------------------------
+# Continuation lines (multiline string properties)
+# ---------------------------------------------------------------------------
+
+
+def test_continuation_line_simple() -> None:
+    """A property value split across two physical lines with continuation backslash."""
+    parser = AcmiParser()
+    # First line ends with unescaped backslash
+    events1 = parser.feed_line("0,Comments=First line of briefing\\")
+    assert events1 == []  # Buffered, not yet parsed
+    # Second line completes the value
+    events2 = parser.feed_line("Second line of briefing")
+    updates = [e for e in events2 if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    assert updates[0].properties["Comments"] == "First line of briefingSecond line of briefing"
+
+
+def test_continuation_line_multiple() -> None:
+    """Multiple continuation lines chained together."""
+    parser = AcmiParser()
+    events1 = parser.feed_line("0,Comments=Line 1\\")
+    assert events1 == []
+    events2 = parser.feed_line("Line 2\\")
+    assert events2 == []
+    events3 = parser.feed_line("Line 3")
+    updates = [e for e in events3 if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    assert updates[0].properties["Comments"] == "Line 1Line 2Line 3"
+
+
+def test_continuation_line_with_escaped_backslash() -> None:
+    """A literal backslash at end of line (escaped) does NOT trigger continuation."""
+    parser = AcmiParser()
+    # Double backslash at end = literal backslash, not continuation
+    events = parser.feed_line("0,Comments=Path with trailing backslash\\\\")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    # The value should contain a literal backslash, not be waiting for continuation
+    assert updates[0].properties["Comments"] == "Path with trailing backslash\\"
+
+
+def test_continuation_line_then_normal_line() -> None:
+    """After a continuation sequence, normal parsing resumes."""
+    parser = AcmiParser()
+    parser.feed_line("0,Comments=Continued\\")
+    events = parser.feed_line("value")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert updates[0].properties["Comments"] == "Continuedvalue"
+
+    # Next line should be parsed normally
+    events2 = parser.feed_line("101,T=1|2|3,Name=Test")
+    updates2 = [e for e in events2 if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates2) == 1
+    assert updates2[0].obj_id == "101"
+    assert updates2[0].properties["Name"] == "Test"
+
+
+def test_continuation_in_object_update() -> None:
+    """Continuation lines work within object updates (not just global object)."""
+    parser = AcmiParser()
+    parser.feed_line("101,T=1|2|3,Comments=Start\\")
+    events = parser.feed_line("End")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    assert updates[0].obj_id == "101"
+    assert updates[0].properties["Comments"] == "StartEnd"
+
+
+def test_continuation_with_escaped_comma() -> None:
+    """Escaped commas work correctly within continuation lines."""
+    parser = AcmiParser()
+    parser.feed_line("0,Comments=First part\\,\\")
+    events = parser.feed_line("second part")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    # Escaped comma should be preserved as literal comma
+    assert updates[0].properties["Comments"] == "First part,second part"
+
+
+def test_continuation_line_with_frame_time_between() -> None:
+    """Frame time lines are not part of continuation and break the sequence."""
+    parser = AcmiParser()
+    parser.feed_line("0,Comments=Start\\")
+    # Frame time line should be processed normally (not buffered)
+    time_events = parser.feed_line("#10.0")
+    assert len(time_events) == 1
+    assert time_events[0].time == 10.0
+    # Continuation should resume after frame time
+    events = parser.feed_line("End")
+    updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
+    assert len(updates) == 1
+    assert updates[0].properties["Comments"] == "StartEnd"

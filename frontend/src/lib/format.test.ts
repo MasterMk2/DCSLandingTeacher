@@ -3,6 +3,8 @@ import {
   factorDescription,
   gradeClass,
   kindLabel,
+  mToFt,
+  mToNm,
   msToFpm,
   msToKnots,
   outcomeLabel,
@@ -17,6 +19,18 @@ describe("unit conversions", () => {
   it("converts m/s to feet per minute", () => {
     expect(msToFpm(0)).toBe(0);
     expect(msToFpm(1)).toBeCloseTo(196.85, 1);
+  });
+
+  it("converts meters to feet (Issue D-4)", () => {
+    expect(mToFt(0)).toBe(0);
+    expect(mToFt(1)).toBeCloseTo(3.2808, 3);
+    expect(mToFt(304.8)).toBeCloseTo(1000, 1);
+  });
+
+  it("converts meters to nautical miles (Issue D-4)", () => {
+    expect(mToNm(0)).toBe(0);
+    expect(mToNm(1852)).toBeCloseTo(1, 5);
+    expect(mToNm(3704)).toBeCloseTo(2, 1);
   });
 });
 

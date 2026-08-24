@@ -161,6 +161,8 @@ class AcmiParser:
         #: Live objects keyed by normalized hexadecimal id.
         self.objects: dict[str, AcmiObject] = {}
         self._first_line = True
+        #: Buffer for continuation lines (lines ending with unescaped backslash)
+        self._continuation_buffer: list[str] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -175,6 +177,15 @@ class AcmiParser:
 
         Raises :class:`AcmiParseError` for structurally invalid lines
         (malformed frame time, unknown header, unparsable object id).
+
+        Handles continuation lines per ACMI spec: a line ending with an
+        unescaped backslash (``\``) continues on the next physical line.
+        Escaped backslashes (``\\``) are literal backslashes and do not
+        trigger continuation.
+
+        Special lines (frame time, comments, blank) are never part of a
+        continuation sequence - they are processed immediately while the
+        continuation buffer is preserved for the next line.
         """
         line = raw_line.rstrip("\r\n")
         if self._first_line:
@@ -182,6 +193,30 @@ class AcmiParser:
             line = line.lstrip("\ufeff")
             self._first_line = False
 
+        stripped = line.strip()
+
+        # Special lines (frame time, comments, blank) are never part of continuation
+        if not stripped or stripped.startswith("//"):
+            # If we have a continuation buffer, preserve it for next line
+            return []
+
+        if stripped.startswith("#"):
+            # Frame time lines are processed immediately, continuation buffer preserved
+            return [self._handle_time(stripped)]
+
+        # Check if this line ends with an unescaped backslash (continuation marker)
+        if self._ends_with_unescaped_backslash(line):
+            # Remove the trailing backslash and buffer the line
+            self._continuation_buffer.append(line[:-1])
+            return []
+
+        # If we have buffered continuation lines, prepend them
+        if self._continuation_buffer:
+            self._continuation_buffer.append(line)
+            line = "".join(self._continuation_buffer)
+            self._continuation_buffer.clear()
+
+        # After combining with buffer, check again for special lines
         stripped = line.strip()
         if not stripped or stripped.startswith("//"):
             return []
@@ -199,6 +234,24 @@ class AcmiParser:
             return [self._handle_headerless_line(stripped)]
 
         return self._handle_update(first, rest)
+
+    def _ends_with_unescaped_backslash(self, line: str) -> bool:
+        """Check if line ends with an unescaped backslash (continuation marker).
+
+        An unescaped backslash is a single ``\`` not preceded by another ``\``.
+        ``\\`` at the end means a literal backslash, not continuation.
+        """
+        if not line.endswith("\\"):
+            return False
+        # Count trailing backslashes
+        count = 0
+        for ch in reversed(line):
+            if ch == "\\":
+                count += 1
+            else:
+                break
+        # Odd number = unescaped (continuation), even number = escaped (literal)
+        return count % 2 == 1
 
     def feed(self, text: str) -> list[AcmiEvent]:
         """Convenience helper: parse a multi-line chunk of ACMI text."""

@@ -1,5 +1,7 @@
 /** CSV generation (frontend-side; the API has no CSV endpoint yet). */
 
+import { mToFt, mToNm, msToKnots } from "./format";
+
 function escapeCell(value: unknown): string {
   if (value === null || value === undefined) return "";
   const s = String(value);
@@ -30,6 +32,7 @@ type SummaryRow = {
   pilot: string | null;
   airframe: string | null;
   touchdown_time: number | null;
+  touchdown_epoch?: number | null;
   grade: string | null;
   score: number | null;
 };
@@ -41,7 +44,8 @@ const SUMMARY_HEADERS = [
   "venue_name",
   "pilot",
   "airframe",
-  "touchdown_time_epoch_s",
+  "touchdown_mission_time_s",
+  "touchdown_epoch_s",
   "grade",
   "score",
 ];
@@ -57,6 +61,7 @@ export function landingsToCsv(items: SummaryRow[]): string {
       it.pilot ?? "",
       it.airframe ?? "",
       it.touchdown_time ?? "",
+      it.touchdown_epoch ?? "",
       it.grade ?? "",
       it.score ?? "",
     ]),
@@ -75,25 +80,34 @@ type SampleRow = {
 
 const SAMPLE_HEADERS = [
   "time_s",
-  "distance_to_go_m",
-  "glideslope_deviation_m",
-  "centerline_deviation_m",
-  "speed_ms",
+  "distance_to_go_nm",
+  "glideslope_deviation_ft",
+  "centerline_deviation_ft",
+  "speed_kt",
   "aoa_deg",
-  "agl_m",
+  "agl_ft",
 ];
+
+/** Round to 2 decimals for readable CSV cells. */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 
 export function samplesToCsv(samples: SampleRow[]): string {
   return toCsv(
     SAMPLE_HEADERS,
     samples.map((s) => [
       s.time,
-      s.distance_to_go,
-      s.glideslope_deviation ?? "",
-      s.centerline_deviation ?? "",
-      s.speed ?? "",
+      round2(mToNm(s.distance_to_go)),
+      s.glideslope_deviation !== null && s.glideslope_deviation !== undefined
+        ? round2(mToFt(s.glideslope_deviation))
+        : "",
+      s.centerline_deviation !== null && s.centerline_deviation !== undefined
+        ? round2(mToFt(s.centerline_deviation))
+        : "",
+      s.speed !== null && s.speed !== undefined ? round2(msToKnots(s.speed)) : "",
       s.aoa ?? "",
-      s.agl ?? "",
+      s.agl !== null && s.agl !== undefined ? round2(mToFt(s.agl)) : "",
     ]),
   );
 }

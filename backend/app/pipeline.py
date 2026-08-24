@@ -30,6 +30,25 @@ logger = getLogger(__name__)
 GRADING_VERSION = "1"
 
 
+def _touchdown_epoch(
+    reference_time: str | None, mission_time: float | None
+) -> float | None:
+    """Wall-clock epoch of a touchdown (Issue D-1).
+
+    ACMI times are seconds since mission start; the wall-clock instant is
+    ``ReferenceTime`` (ISO-8601 in the global object) plus that offset.
+    Returns ``None`` when the header is missing or unparsable so clients can
+    fall back to displaying the raw mission time.
+    """
+    if reference_time is None or mission_time is None:
+        return None
+    try:
+        base = datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return base.timestamp() + mission_time
+
+
 class LandingPipeline:
     """Grade detected landings, persist them, and fan out notifications."""
 
@@ -148,7 +167,13 @@ class LandingPipeline:
             "pilot": context.pilot,
             "airframe": context.airframe,
             "venue_name": event.carrier_name if event.kind == "carrier" else None,
+            # Mission-relative time (ACMI seconds since mission start).
             "touchdown_time": event.touchdown.time,
+            # Wall-clock epoch (Issue D-1): ReferenceTime + mission time so
+            # clients can display the real-world datetime of the touchdown.
+            "touchdown_epoch": _touchdown_epoch(
+                context.flight_reference_time, event.touchdown.time
+            ),
         }
 
     async def regrade(

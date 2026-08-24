@@ -2,7 +2,24 @@
 
 from __future__ import annotations
 
+import json
+from typing import Optional
+
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class TacviewSource(BaseModel):
+    """Configuration for a single Tacview Real-Time Telemetry source."""
+
+    id: str = Field(..., description="Unique source identifier (e.g., 'server1', 'caucasus-main')")
+    name: str = Field(..., description="Display name (e.g., 'Caucasus Main', 'NTTR Training')")
+    host: str = Field(default="127.0.0.1", description="Tacview server host/IP")
+    port: int = Field(default=31010, description="Tacview server port")
+    password: str = Field(default="", description="Handshake password (empty if unprotected)")
+    client_name: str = Field(default="DCSLandingTeacher", description="Client name for handshake")
+    idle_timeout: float = Field(default=60.0, description="Idle timeout in seconds (0 to disable)")
+    enabled: bool = Field(default=True, description="Whether this source is enabled")
 
 
 class Settings(BaseSettings):
@@ -16,13 +33,21 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/dlt.db"
 
     # Tacview realtime telemetry stream (ACMI 2.2 Text over TCP)
+    # Multi-source configuration (new): JSON array of TacviewSource objects.
+    # Example: DLT_TACVIEW_SOURCES='[{"id":"s1","name":"Main","host":"10.0.0.1","port":31010}]'
+    tacview_sources_json: str = Field(
+        default="",
+        description="JSON string of Tacview source configurations",
+    )
+
+    # Legacy single-source settings (used when tacview_sources_json is empty).
     tacview_host: str = "127.0.0.1"
     tacview_port: int = 31010
-
-    # Real-Time Telemetry handshake identity (client side).
-    # Leave tacview_password empty when the session is unprotected.
     tacview_client_name: str = "DCSLandingTeacher"
     tacview_password: str = ""
+
+    # Default idle timeout for legacy single-source mode
+    acmi_idle_timeout: float = 60.0
 
     # Disable to run API-only without the background ACMI client
     acmi_enabled: bool = True
@@ -67,6 +92,32 @@ class Settings(BaseSettings):
     # ACMI file import (POST /api/import): maximum accepted upload size in
     # megabytes. Larger uploads are rejected with 413.
     import_max_upload_mb: int = 200
+
+    @property
+    def tacview_sources(self) -> list[TacviewSource]:
+        """Return parsed list of Tacview sources.
+        
+        If tacview_sources_json is set, parse it. Otherwise fall back to
+        legacy single-source configuration.
+        """
+        if self.tacview_sources_json:
+            data = json.loads(self.tacview_sources_json)
+            return [TacviewSource(**item) for item in data]
+        # Backward compatibility: construct a single source from legacy settings
+        return [TacviewSource(
+            id="default",
+            name="Default",
+            host=self.tacview_host,
+            port=self.tacview_port,
+            password=self.tacview_password,
+            client_name=self.tacview_client_name,
+            idle_timeout=self.acmi_idle_timeout,
+        )]
+
+    @property
+    def tacview_enabled(self) -> bool:
+        """Return True if at least one source is enabled."""
+        return any(s.enabled for s in self.tacview_sources)
 
 
 def get_settings() -> Settings:
