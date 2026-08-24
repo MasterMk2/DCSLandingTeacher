@@ -26,9 +26,9 @@ flowchart LR
 
 | モジュール | 責務 |
 |---|---|
-| [`acmi/stream.py`](../backend/app/acmi/stream.py) | Tacview Realtime Telemetry への TCP 接続。XtraLib ハンドシェイク（`handshake.py`）、自動再接続（指数バックオフ） |
+| [`acmi/stream.py`](../backend/app/acmi/stream.py) | Tacview Realtime Telemetry への TCP 接続。XtraLib ハンドシェイク（`handshake.py`）、自動再接続（指数バックオフ）。ハンドシェイク直後の圧縮ストリーム（gzip / zlib / raw deflate）を先頭バイトから自動判別して透過展開する（Issue #2）。展開失敗時はエラーログを出し、接続断として再接続する |
 | [`acmi/parser.py`](../backend/app/acmi/parser.py) | ACMI 2.2 Text の行解釈: Time ヘッダ管理、`-`/`+` オブジェクト更新行、イベント行 |
-| [`acmi/file_reader.py`](../backend/app/acmi/file_reader.py) | 保存済み .acmi ファイルの再生（テスト・再評価用） |
+| [`acmi/file_reader.py`](../backend/app/acmi/file_reader.py) | 保存済み .acmi / .acmi.zip ファイルの再生（テスト・再評価用） |
 | [`ingest.py`](../backend/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給 |
 | [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
 | [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与 |
