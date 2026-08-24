@@ -35,7 +35,7 @@ flowchart LR
 | [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
 | [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
 | [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）も担当 |
-| [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸レコードには進入区間の生サンプルも JSON 保存（FR-7 再評価要件） |
+| [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸レコードには進入区間の生サンプルも JSON 保存（FR-7 再評価要件）。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
 | [`api/routes.py`](../backend/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
 | [`api/notifier.py`](../backend/app/api/notifier.py) | WebSocket 接続管理・着陸通知のブロードキャスト |
 | [`api/main.py`](../backend/app/api/main.py) | アプリケーションファクトリ。lifespan で DB 初期化・ACMI クライアント起動。CORS、SPA 静的配信 |

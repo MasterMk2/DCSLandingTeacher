@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Grading thresholds (YAML); relative to the working directory.
     grading_config_path: str = "config/grading.yaml"
 
+    # Apply Alembic migrations automatically at startup (Issue #7). When
+    # disabled, the legacy create_all bootstrap is used instead (dev mode).
+    migrations_on_startup: bool = True
+
+    # Explicit path to the Alembic migrations directory. Empty means
+    # auto-detect next to the app package. Set this in containers where the
+    # package is installed into site-packages (e.g. /app/migrations).
+    migrations_dir: str = ""
+
     # CORS origins allowed to call the API from a browser. Empty list means
     # same-origin only (no CORS headers are emitted), which is the default
     # single-container deployment where the frontend is served by this app.

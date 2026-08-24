@@ -38,13 +38,16 @@ RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
 COPY config/grading.yaml /app/config/grading.yaml
 COPY --from=frontend-build /src/frontend/dist /app/frontend/dist
+# Alembic migration scripts (applied automatically at startup).
+COPY backend/migrations /app/migrations
 
 # Container-specific defaults (override via environment / compose).
 ENV DLT_HOST=0.0.0.0 \
     DLT_PORT=8000 \
     DLT_DATABASE_URL=sqlite+aiosqlite:////data/dlt.db \
     DLT_GRADING_CONFIG_PATH=/app/config/grading.yaml \
-    DLT_FRONTEND_DIST_DIR=/app/frontend/dist
+    DLT_FRONTEND_DIST_DIR=/app/frontend/dist \
+    DLT_MIGRATIONS_DIR=/app/migrations
 
 VOLUME ["/data"]
 EXPOSE 8000

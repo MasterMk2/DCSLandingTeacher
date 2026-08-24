@@ -19,6 +19,7 @@ from app.config import Settings
 from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
 from app.models.database import create_engine, create_session_factory, init_db
+from app.models.migrations import run_migrations
 from app.pipeline import LandingPipeline
 
 logger = getLogger(__name__)
@@ -32,7 +33,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        await init_db(engine)
+        if settings.migrations_on_startup:
+            await run_migrations(
+                settings.database_url, settings.migrations_dir or None
+            )
+        else:
+            await init_db(engine)
 
         notifier = LandingNotifier()
         pipeline = LandingPipeline(session_factory, grading_config, notifier=notifier)
