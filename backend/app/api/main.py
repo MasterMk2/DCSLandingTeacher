@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.acmi.stream import AcmiStreamClient
 from app.api.notifier import LandingNotifier
-from app.api.routes import router as api_router
+from app.api.routes import protected_router, router as api_router
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
@@ -116,6 +116,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(api_router)
+    # Token-protected landing endpoints (Issue #8); see app.api.auth.
+    app.include_router(protected_router)
     _mount_frontend(app, Path(settings.frontend_dist_dir))
     return app
 

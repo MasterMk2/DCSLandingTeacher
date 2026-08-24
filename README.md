@@ -115,6 +115,7 @@ cd frontend && npm ci && npm run dev
 | `DLT_TACVIEW_PASSWORD` | （空） | Telemetry 保護時のパスワード |
 | `DLT_ACMI_ENABLED` | `true` | `false` で ACMI 受信を停止（API 単体運用向け） |
 | `DLT_MIGRATIONS_ON_STARTUP` | `true` | 起動時に Alembic マイグレーションを自動適用。`false` で従来の create_all に戻す（開発用） |
+| `DLT_AUTH_TOKEN` | （空） | 簡易トークン認証の共有トークン。空なら認証なし（既定）。詳細は「簡易トークン認証」の節を参照 |
 
 ### データベースマイグレーション
 
@@ -137,6 +138,21 @@ alembic upgrade head     # 未適用マイグレーションの適用
 
 すべての REST エンドポイントは `/api` プレフィックスを持ちます
 （OpenAPI スキーマ: `http://localhost:8000/docs`）。
+
+### 簡易トークン認証（Issue #8）
+
+`.env` の `DLT_AUTH_TOKEN` にトークンを設定すると、Web UI / API へのアクセスに
+共有トークン認証がかかります（**既定は空＝認証なし**で、従来どおり動作します）。
+
+- `/api` 配下の REST エンドポイントは `Authorization: Bearer <token>` または
+  `X-Auth-Token` ヘッダを要求します（未提示は 401、誤りは 403）
+- WebSocket（`/api/ws/landings`）はブラウザからヘッダを付けられないため
+  `?token=<token>` クエリパラメータで認証します。不正トークンは接続拒否
+- `/api/health`（死活監視用）と SPA 静的配信は認証対象外です
+- トークン比較は定数時間比較（`secrets.compare_digest`）を使用しています
+- Web UI は 401/403 を検出するとトークン入力モーダルを表示し、入力した
+  トークンを localStorage に保存します。ナビバーの「認証設定」ボタンで
+  消去・再入力できます
 
 | メソッド | パス | 説明 |
 |---|---|---|

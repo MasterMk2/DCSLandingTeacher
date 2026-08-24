@@ -1,6 +1,8 @@
 /** Minimal hash-based router: #/ (dashboard), #/landings/:id (detail). */
 
 import { useCallback, useEffect, useState } from "react";
+import { AUTH_INVALID_EVENT, clearToken, getToken, saveToken } from "./auth/token";
+import { TokenPrompt } from "./components/TokenPrompt";
 import { Dashboard } from "./views/Dashboard";
 import { Detail } from "./views/Detail";
 
@@ -13,11 +15,27 @@ function parseHash(): { view: "dashboard" } | { view: "detail"; id: number } {
 
 export default function App() {
   const [route, setRoute] = useState(parseHash);
+  // Bumped whenever the stored token changes so data views remount and
+  // refetch with the new credentials (REST + WebSocket).
+  const [authVersion, setAuthVersion] = useState(0);
+  const [promptOpen, setPromptOpen] = useState(false);
 
   useEffect(() => {
     const onHashChange = () => setRoute(parseHash());
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // The REST client dispatches this event on 401/403 (Issue #8): clear the
+  // rejected token and ask for a new one.
+  useEffect(() => {
+    const onAuthInvalid = () => {
+      clearToken();
+      setPromptOpen(true);
+      setAuthVersion((v) => v + 1);
+    };
+    window.addEventListener(AUTH_INVALID_EVENT, onAuthInvalid);
+    return () => window.removeEventListener(AUTH_INVALID_EVENT, onAuthInvalid);
   }, []);
 
   const goDashboard = useCallback(() => {
@@ -28,6 +46,23 @@ export default function App() {
     location.hash = `#/landings/${id}`;
   }, []);
 
+  const openTokenSettings = useCallback(() => {
+    clearToken();
+    setPromptOpen(true);
+    setAuthVersion((v) => v + 1);
+  }, []);
+
+  const handleTokenSubmit = useCallback((token: string) => {
+    saveToken(token);
+    setPromptOpen(false);
+    setAuthVersion((v) => v + 1);
+  }, []);
+
+  const handleTokenCancel = useCallback(() => {
+    setPromptOpen(false);
+    setAuthVersion((v) => v + 1);
+  }, []);
+
   return (
     <div className="app">
       <nav className="app-nav no-print">
@@ -35,14 +70,29 @@ export default function App() {
           DCS Landing Teacher
         </a>
         <span className="app-subtitle">着陸・着艦レビューシステム</span>
+        <button
+          type="button"
+          className="btn btn-auth"
+          onClick={openTokenSettings}
+          title="保存済みアクセストークンを消去し、再入力する"
+        >
+          認証設定
+        </button>
       </nav>
-      <main>
+      {/* key remounts the views when the token changes (refetch + WS reconnect) */}
+      <main key={authVersion}>
         {route.view === "dashboard" ? (
           <Dashboard onSelectLanding={selectLanding} />
         ) : (
           <Detail id={route.id} onBack={goDashboard} />
         )}
       </main>
+      {promptOpen && (
+        <TokenPrompt
+          onSubmit={handleTokenSubmit}
+          onCancel={getToken() ? handleTokenCancel : undefined}
+        />
+      )}
     </div>
   );
 }

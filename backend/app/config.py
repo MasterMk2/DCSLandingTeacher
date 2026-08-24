@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     # package is installed into site-packages (e.g. /app/migrations).
     migrations_dir: str = ""
 
+    # Simple shared-token authentication (Issue #8). Empty (default) disables
+    # authentication entirely and the API behaves exactly as before. When set,
+    # REST endpoints under /api require "Authorization: Bearer <token>" or
+    # "X-Auth-Token"; the WebSocket accepts "?token=<token>". /api/health and
+    # the SPA static hosting stay public.
+    auth_token: str = ""
+
     # CORS origins allowed to call the API from a browser. Empty list means
     # same-origin only (no CORS headers are emitted), which is the default
     # single-container deployment where the frontend is served by this app.

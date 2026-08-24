@@ -2,6 +2,7 @@
  * Typed fetch-based REST client for the landing API.
  * In dev, requests go through the Vite proxy (/api -> backend).
  */
+import { getToken, notifyAuthInvalid } from "../auth/token";
 import type {
   LandingDetail,
   LandingFilters,
@@ -21,11 +22,18 @@ export class ApiError extends Error {
   }
 }
 
+/** Shared-token auth header (Issue #8); empty when no token is stored. */
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { "X-Auth-Token": token } : {};
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...authHeaders() },
   });
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) notifyAuthInvalid();
     throw new ApiError(res.status, `GET ${path} failed: ${res.status}`);
   }
   return (await res.json()) as T;
