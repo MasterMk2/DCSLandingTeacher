@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcs-landing-teacher-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "DCS landing / carrier-arrestment review and grading tool (backend)"
 requires-python = ">=3.11"
 # License: MIT (see ../LICENSE at the repository root)
