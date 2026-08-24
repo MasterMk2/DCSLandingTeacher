@@ -564,6 +564,60 @@ main {
   color: #fff;
 }
 
+/* ---------- ACMI import panel ---------- */
+
+.import-panel {
+  margin: 0.5rem 0 1rem;
+}
+
+.import-dropzone-wrap {
+  margin-top: 0.5rem;
+}
+
+.import-dropzone {
+  border: 2px dashed #9aa4b2;
+  border-radius: 8px;
+  padding: 1.25rem;
+  text-align: center;
+  color: #556;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.import-dropzone:hover,
+.import-dropzone.drag-over {
+  background-color: rgba(64, 128, 255, 0.08);
+  border-color: #4080ff;
+}
+
+.import-status {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.import-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: #e3e7ee;
+}
+
+.import-badge.status-completed {
+  background: #d6f0d6;
+}
+
+.import-badge.status-failed {
+  background: #f5d3d3;
+}
+
+.import-badge.status-processing,
+.import-badge.status-pending {
+  background: #fdf0cf;
+}
+
 /* ---------- Responsive (desktop-first) ---------- */
 
 @media (max-width: 900px) {

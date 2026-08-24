@@ -4,6 +4,8 @@
  */
 import { getToken, notifyAuthInvalid } from "../auth/token";
 import type {
+  ImportJob,
+  ImportStartResponse,
   LandingDetail,
   LandingFilters,
   LandingListResponse,
@@ -85,4 +87,32 @@ export async function listAllLandings(
     offset += page.items.length;
   }
   return all;
+}
+
+// ---------------------------------------------------------------------------
+// ACMI file import (background jobs)
+// ---------------------------------------------------------------------------
+
+/** Upload an ACMI recording; the backend processes it in the background. */
+export async function importAcmiFile(file: File): Promise<ImportStartResponse> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(`${BASE}/api/import`, {
+    method: "POST",
+    headers: authHeaders(),
+    body,
+  });
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) notifyAuthInvalid();
+    throw new ApiError(res.status, `POST /api/import failed: ${res.status}`);
+  }
+  return (await res.json()) as ImportStartResponse;
+}
+
+export function getImport(jobId: string): Promise<ImportJob> {
+  return getJson<ImportJob>(`/api/imports/${jobId}`);
+}
+
+export function listImports(): Promise<{ items: ImportJob[] }> {
+  return getJson<{ items: ImportJob[] }>("/api/imports");
 }
