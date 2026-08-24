@@ -1,5 +1,8 @@
 # DCS Landing Teacher
 
+[![CI](https://github.com/MasterMk2/DCSLandingTeacher/actions/workflows/ci.yml/badge.svg)](https://github.com/MasterMk2/DCSLandingTeacher/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 DCS World Dedicated Server 上で行われた着陸（陸上空港）／着艦（空母）を、
 Tacview の ACMI データストリームから記録・評価し、ブラウザで振り返りできるようにするツールです。
 
