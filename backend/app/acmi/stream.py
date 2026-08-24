@@ -3,22 +3,26 @@
 Based on the official protocol documentation:
 https://www.tacview.net/documentation/realtime/en/
 
-The real-time protocol transmits *uncompressed* ACMI 2.x text over TCP after
-a short XtraLib handshake (see :mod:`app.acmi.handshake`). The transport
-layer is intentionally dumb: it performs the handshake, assembles received
-bytes into lines, and hands each complete line to a callback. All parsing
-lives in :class:`app.acmi.parser.AcmiParser`, which can be exercised without
-any network.
+The real-time protocol transmits ACMI 2.x text over TCP after a short
+XtraLib handshake (see :mod:`app.acmi.handshake`). Some hosts emit the
+payload compressed (gzip / zlib / raw deflate) right after the handshake;
+:class:`StreamDecoder` auto-detects this from the first bytes of the stream
+and transparently decompresses it, so the transport layer stays dumb: it
+performs the handshake, assembles received bytes into lines, and hands each
+complete line to a callback. All parsing lives in
+:class:`app.acmi.parser.AcmiParser`, which can be exercised without any
+network.
 
-Note on compression: zip-wrapped ACMI is a *file* format concern; the
-real-time protocol itself is uncompressed by specification. For reading
-zip-wrapped ACMI files see :mod:`app.acmi.file_reader`.
+Note on compression: zip-*wrapped* ACMI remains a file format concern (see
+:mod:`app.acmi.file_reader`); on the wire the payload is a single continuous
+deflate/gzip/zlib stream rather than a zip container.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import zlib
 from collections.abc import Awaitable, Callable
 
 from app.acmi.handshake import HandshakeError, perform_client_handshake
@@ -28,7 +32,22 @@ logger = logging.getLogger(__name__)
 READ_CHUNK_SIZE = 65536
 CONNECT_TIMEOUT_SECONDS = 10.0
 
+#: Bytes buffered while deciding between plain text and raw deflate, which
+#: has no magic number. Well below any meaningful ACMI header size.
+DETECTION_BUFFER_LIMIT = 512
+
+GZIP_MAGIC = b"\x1f\x8b"
+
 LineHandler = Callable[[str], Awaitable[None]]
+
+
+class StreamDecodeError(ConnectionError):
+    """Raised when a compressed ACMI stream cannot be decoded.
+
+    Subclasses :class:`ConnectionError` so the client's existing reconnect
+    logic treats a decode failure like any other connection loss: the error
+    is logged and the client reconnects with backoff.
+    """
 
 
 class LineAssembler:
@@ -56,6 +75,129 @@ class LineAssembler:
         remainder = self._buffer
         self._buffer = ""
         return remainder if remainder else None
+
+
+class StreamDecoder:
+    """Auto-detecting decoder for plain / gzip / zlib / raw-deflate streams.
+
+    Detection happens once, from the first bytes received after the
+    handshake:
+
+    - ``1f 8b``                      -> gzip (:rfc:`1952`)
+    - ``78 xx`` with valid FCHECK    -> zlib (:rfc:`1950`)
+    - decodable printable ASCII text -> plain ACMI text (passthrough)
+    - anything else                  -> raw deflate (:rfc:`1951`)
+
+    Text detection tolerates chunk boundaries splitting multi-byte UTF-8
+    sequences by ignoring up to three trailing bytes while sniffing. If a
+    raw-deflate guess turns out to be wrong, :class:`StreamDecodeError` is
+    raised and the caller reconnects.
+    """
+
+    def __init__(self) -> None:
+        self._pending = bytearray()
+        self._mode: str | None = None
+        self._decomp: zlib._Decompress | None = None
+
+    def feed(self, data: bytes) -> str:
+        """Feed raw wire bytes; return decoded text (possibly empty)."""
+        if self._mode is None:
+            self._pending.extend(data)
+            if not self._detect():
+                return ""
+            data = bytes(self._pending)
+            self._pending.clear()
+        return self._decode(data)
+
+    def flush(self) -> str:
+        """Finalize at end of stream; returns any remaining decoded text."""
+        if self._mode is None:
+            if not self._pending:
+                return ""
+            # Stream ended before detection committed: prefer plain text so
+            # short plaintext sessions are never misinterpreted.
+            self._start("plain")
+            data = bytes(self._pending)
+            self._pending.clear()
+            return self._decode(data)
+        if self._decomp is not None:
+            try:
+                tail = self._decomp.flush()
+            except zlib.error:  # pragma: no cover - defensive
+                tail = b""
+            return tail.decode("utf-8", errors="replace")
+        return ""
+
+    # ------------------------------------------------------------------
+
+    def _detect(self) -> bool:
+        buf = self._pending
+        if len(buf) < 2:
+            return False
+        if buf[:2] == GZIP_MAGIC:
+            self._start("gzip")
+            return True
+        if buf[0] == 0x78 and ((buf[0] << 8) | buf[1]) % 31 == 0:
+            self._start("zlib")
+            return True
+        if _looks_like_text(buf):
+            self._start("plain")
+            return True
+        # Unknown binary: probe raw deflate against the buffered prefix.
+        # (Raw deflate has no magic number, so this is a best-effort guess.)
+        trial = zlib.decompressobj(-15)
+        try:
+            out = trial.decompress(bytes(buf))
+        except zlib.error:
+            # Not deflate either: fall back to lossy plain decoding, which
+            # matches the pre-compression behavior for undecodable payloads.
+            logger.debug(
+                "ACMI stream is neither text nor a known compression format; "
+                "decoding as plain text"
+            )
+            self._start("plain")
+            return True
+        if out:
+            self._start("deflate")
+            return True
+        # Deflate header accepted but no output yet (very short/truncated
+        # stream): keep buffering up to the detection limit, then commit.
+        if len(buf) >= DETECTION_BUFFER_LIMIT:
+            self._start("deflate")
+            return True
+        return False
+
+    def _start(self, mode: str) -> None:
+        self._mode = mode
+        wbits = {"gzip": 31, "zlib": 15, "deflate": -15}.get(mode)
+        self._decomp = zlib.decompressobj(wbits) if wbits is not None else None
+
+    def _decode(self, data: bytes) -> str:
+        if self._decomp is None:
+            return data.decode("utf-8", errors="replace")
+        try:
+            out = self._decomp.decompress(data)
+        except zlib.error as exc:
+            raise StreamDecodeError(
+                f"ACMI {self._mode} stream corrupted: {exc}"
+            ) from exc
+        return out.decode("utf-8", errors="replace")
+
+
+def _looks_like_text(buf: bytearray | bytes) -> bool:
+    """True when ``buf`` is consistent with plain UTF-8 ACMI text."""
+    candidate = bytes(buf)
+    # Ignore an incomplete trailing multi-byte UTF-8 sequence caused by a
+    # chunk boundary inside one character.
+    for trim in range(4):
+        try:
+            text = candidate[: len(candidate) - trim or None].decode("utf-8")
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        return False
+    return all(ch.isprintable() or ch in "\t\n\r" for ch in text)
 
 
 class AcmiStreamClient:
@@ -193,14 +335,24 @@ class AcmiStreamClient:
         logger.debug("ACMI handshake completed with host %r", host_name)
 
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
+        decoder = StreamDecoder()
         assembler = LineAssembler()
-        while not self._stopping:
-            chunk = await reader.read(READ_CHUNK_SIZE)
-            if not chunk:
-                break
-            text = chunk.decode("utf-8", errors="replace")
-            for line in assembler.feed(text):
-                await self._on_line(line)
+        try:
+            while not self._stopping:
+                chunk = await reader.read(READ_CHUNK_SIZE)
+                if not chunk:
+                    break
+                for line in assembler.feed(decoder.feed(chunk)):
+                    await self._on_line(line)
+            tail_text = decoder.flush()
+            if tail_text:
+                for line in assembler.feed(tail_text):
+                    await self._on_line(line)
+        except StreamDecodeError as exc:
+            # Corrupted compressed payload: log and let the caller treat it
+            # like a connection loss so the client reconnects (Issue #2).
+            logger.error("ACMI stream decode failed: %s", exc)
+            raise
         tail = assembler.flush()
         if tail is not None:
             await self._on_line(tail)
