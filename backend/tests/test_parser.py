@@ -113,7 +113,8 @@ def test_object_add_update_remove_from_fixture() -> None:
     assert aircraft.pilot == "Viggen"
     assert aircraft.group == "Training"
     assert aircraft.country == "us"
-    # First update at t=0, second at t=47.13, third at t=55.75
+    # First update at t=0, second at t=47.13, third at t=55.75 (each # line is
+    # the absolute offset from ReferenceTime, not a delta onto the previous one).
     assert aircraft.last_seen == pytest.approx(55.75)
 
 

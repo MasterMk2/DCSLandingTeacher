@@ -341,10 +341,6 @@ class TrackIngestor:
     async def _maybe_detect_landing(
         self, obj_id: str, *, force_final: bool = False
     ) -> None:
-        # Landing events are rare; commit pending ingest writes first so the
-        # grading pipeline can open its own write transaction without
-        # hitting SQLite's single-writer lock.
-        await self._flush(force=True)
         buffer = self._aircraft_buffers.get(obj_id)
         if buffer is None:
             buffer = RollingTrackBuffer(self._sample_buffer_s)
@@ -363,6 +359,16 @@ class TrackIngestor:
             self._carrier_states,
             current_time=None if force_final else last.time,
         )
+        if not events:
+            return
+
+        # Landing events are rare; commit pending ingest writes first so the
+        # grading pipeline can open its own write transaction without
+        # hitting SQLite's single-writer lock. Doing this only when there is
+        # actually an event keeps the common case (every aircraft update,
+        # dozens of times a second with several AI aircraft in the mission)
+        # from forcing a synchronous disk commit each time.
+        await self._flush(force=True)
         for landing in events:
             key = (obj_id, round(landing.touchdown.time, 3))
             context = LandingContext(
