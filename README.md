@@ -131,9 +131,8 @@ cd frontend && npm ci && npm run dev
 | POST | `/api/landings/{id}/regrade` | 保存済み進入データに対し現在の閾値で再評価 |
 | **WebSocket** | `/api/ws/landings` | 着陸検出のリアルタイム通知（`ping` 送信で `pong` 応答） |
 
-> **注意（WebSocket パス）**: 要件定義書初期版では `/ws/landings` と記載されていますが、
-> 実装ではルーター共通プレフィックスにより **`/api/ws/landings`** が正しいパスです。
-> フロントエンドもこのパスを使用しています。
+> WebSocket のパスは **`/api/ws/landings`** に統一されています（ルーター共通の `/api`
+> プレフィックス付き）。フロントエンドもこのパスを使用しています。
 
 ## 評価方式
 

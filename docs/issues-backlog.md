@@ -68,7 +68,7 @@ GitHub Issue として起票する際のたねリストとして利用してく�
 - **種別**: ドキュメント / ラベル: `documentation`
 - README のスクリーンショット枠（`docs/images/*.png` プレースホルダ）に実際の画面を配置する
 
-### WebSocket パスの表記ゆれ解消
+### WebSocket パスの表記ゆれ解消（対応済み: Issue #11）
 - **種別**: ドキュメント / ラベル: `documentation`
-- 要件定義書 §FR-5 の `/ws/landings` 表記を実パス `/api/ws/landings` に更新する
-  （README / docs/architecture.md には実パスを記載済み。要件定義書自体の更新は履歴保全のため別途判断）
+- ドキュメント・コメント内の WebSocket パス表記を実際のパス `/api/ws/landings` に統一した
+  （要件定義書 plans/requirements.md 自体には該当表記がなく、履歴資料として変更不要と判断）

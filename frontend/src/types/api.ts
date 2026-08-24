@@ -93,7 +93,7 @@ export interface LandingFilters {
   date_to?: string;
 }
 
-/** WS message pushed by /ws/landings: {"type":"landing","landing":{...}}. */
+/** WS message pushed by /api/ws/landings: {"type":"landing","landing":{...}}. */
 export interface WsLandingMessage {
   type: "landing";
   landing: Partial<LandingSummary>;

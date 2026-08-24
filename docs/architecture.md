@@ -85,8 +85,8 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 | POST | `/api/landings/{id}/regrade` | 現在の閾値で再評価 |
 | WebSocket | `/api/ws/landings` | 着陸通知（`ping` → `pong`） |
 
-> 要件定義書初期版では WebSocket パスを `/ws/landings` と記載しているが、実装では
-> ルーター共通プレフィックスにより **`/api/ws/landings`** が正。フロントエンドもこのパスを使用する。
+> WebSocket のパスはルーター共通プレフィックスにより **`/api/ws/landings`** に統一されている。
+> フロントエンドもこのパスを使用する。
 
 ## 設定
 
