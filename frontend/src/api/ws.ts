@@ -1,5 +1,5 @@
 /**
- * WebSocket client for /ws/landings with automatic reconnection
+ * WebSocket client for /api/ws/landings with automatic reconnection
  * and keep-alive ping (the backend answers {"type":"pong"} to "ping").
  */
 import type { WsLandingMessage } from "../types/api";
@@ -22,7 +22,7 @@ export class LandingSocket {
   connect(): void {
     if (this.ws || this.closedByUser) return;
     // NOTE: the backend router has the global "/api" prefix, so the actual
-    // WebSocket path is /api/ws/landings (not /ws/landings).
+    // WebSocket path is /api/ws/landings.
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/api/ws/landings`;
     try {
