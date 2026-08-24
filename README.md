@@ -7,6 +7,7 @@ DCS World Dedicated Server 上で行われた着陸（陸上空港）／着艦�
 Tacview の ACMI データストリームから記録・評価し、ブラウザで振り返りできるようにするツールです。
 
 - Tacview Realtime Telemetry（ACMI 2.2 Text / TCP 31010）の受信・解析
+- **ACMI ファイルインポート**: 過去の Tacview 記録（.acmi / .acmi.txt / .acmi.zip）から着陸記録を一括生成
 - 着陸／着艦イベントの自動検出（タッチダウン・ボルター・タッチアンドゴーの識別）
 - 米海軍式 LSO グレーディングによる空母着艦の自動評価（OK / OK- / (OK) / _NO_GRADE_ / CUT ＋ファクター）
 - 陸上着陸の簡易評価（グライドスロープ偏差・センターライン偏差・接地降下率・速度 → A〜E 評点）
@@ -116,6 +117,7 @@ cd frontend && npm ci && npm run dev
 | `DLT_ACMI_ENABLED` | `true` | `false` で ACMI 受信を停止（API 単体運用向け） |
 | `DLT_MIGRATIONS_ON_STARTUP` | `true` | 起動時に Alembic マイグレーションを自動適用。`false` で従来の create_all に戻す（開発用） |
 | `DLT_AUTH_TOKEN` | （空） | 簡易トークン認証の共有トークン。空なら認証なし（既定）。詳細は「簡易トークン認証」の節を参照 |
+| `DLT_IMPORT_MAX_UPLOAD_MB` | `200` | ACMI ファイルインポートのアップロードサイズ上限（MB）。詳細は「ACMI ファイルのインポート」の節を参照 |
 
 ### データベースマイグレーション
 
@@ -160,7 +162,54 @@ alembic upgrade head     # 未適用マイグレーションの適用
 | GET | `/api/landings` | 着陸履歴一覧（`player` / `airframe` / `venue` / `kind` / `grade` / `outcome` / `date_from` / `date_to` / `limit` / `offset` でフィルタ・ページング） |
 | GET | `/api/landings/{id}` | 個別着陸の詳細（グレード、ファクター、進入軌跡サンプル、接地状態） |
 | POST | `/api/landings/{id}/regrade` | 保存済み進入データに対し現在の閾値で再評価 |
-| **WebSocket** | `/api/ws/landings` | 着陸検出のリアルタイム通知（`ping` 送信で `pong` 応答） |
+| POST | `/api/import` | ACMI ファイルのインポート（multipart、バックグラウンド処理。ジョブ ID を即時返却） |
+| GET | `/api/imports` | インポートジョブの一覧（新しい順） |
+| GET | `/api/imports/{id}` | インポートジョブの進捗・結果サマリ |
+| **WebSocket** | `/api/ws/landings` | 着陸検出のリアルタイム通知＋インポート完了通知（`ping` 送信で `pong` 応答） |
+
+## ACMI ファイルのインポート（過去の Tacview 記録から着陸記録を生成）
+
+リアルタイム受信を設定していない過去のフライトも、Tacview のローカル記録から
+着陸記録を生成できます。
+
+### ユースケース: Tacview のローカル記録フォルダから投入する
+
+1. Tacview はフライトごとに記録を保存しています（既定では
+   `%USERPROFILE%\Documents\Tacview\` 以下。DCS 専用フォルダを設定している場合はその配下）。
+   拡張子は `.acmi`（zip 圧縮されている場合あり）または `.acmi.zip` です
+2. Web UI のダッシュボードで「**ACMI ファイルをインポート**」ボタンを押し、
+   ファイルをドラッグ＆ドロップ（またはクリックして選択）します
+3. アップロード → 解析はバックグラウンドで実行され、プログレス表示が
+   「待機中 → 解析中 → 完了」と遷移します
+4. 完了すると「検出 N 件・重複スキップ M 件」のサマリが表示され、
+   検出された着陸はリアルタイム受信と同じく一覧・詳細ビューに反映されます
+   （WebSocket 通知も共通です）
+
+大量のファイルをまとめて処理する場合は API を直接呼び出せます:
+
+```bash
+curl -X POST -H "X-Auth-Token: <token>" \
+     -F "file=@20240101_多発.acmi" http://localhost:8000/api/import
+# => {"id":"<job_id>", ...}
+curl -H "X-Auth-Token: <token>" http://localhost:8000/api/imports/<job_id>
+```
+
+### 重複防止
+
+同じファイルを何度インポートしても着陸レコードが二重登録されないよう、
+各タッチダウンについて **ACMI ヘッダの `ReferenceTime` ＋ タッチダウン時刻 ＋
+機体オブジェクト ID** の組み合わせで既存レコードをチェックし、一致したものは
+スキップしてサマリに報告します。
+
+### 制限
+
+- 受付拡張子は `.acmi` / `.acmi.txt` / `.acmi.zip`（中身が zip 圧縮された
+  `.acmi` も自動判別して展開します）
+- アップロードサイズ上限は既定 200MB（環境変数 `DLT_IMPORT_MAX_UPLOAD_MB` で変更可）。
+  超過したアップロードは HTTP 413 で拒否されます
+- インポートジョブの一覧はメモリ上に保持されるため、サーバー再起動で消えます
+  （確定した着陸レコード自体は DB に残ります）
+- 7z コンテナ（`.acmi.7z`）は未対応です。zip に変換してご利用ください
 
 > WebSocket のパスは **`/api/ws/landings`** に統一されています（ルーター共通の `/api`
 > プレフィックス付き）。フロントエンドもこのパスを使用しています。

@@ -13,12 +13,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.acmi.stream import AcmiStreamClient
+from app.api.imports import router as import_router
 from app.api.notifier import LandingNotifier
 from app.api.routes import protected_router, router as api_router
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
+from app.importer import ImportJobManager
 from app.models.database import create_engine, create_session_factory, init_db
 from app.models.migrations import run_migrations
 from app.pipeline import LandingPipeline
@@ -78,11 +80,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             logger.info("ACMI client disabled by configuration")
 
+        import_manager = ImportJobManager(
+            session_factory,
+            pipeline,
+            notifier=notifier,
+            sample_buffer_s=float(
+                grading_config.detection.get("sample_buffer_s", 600.0)
+            ),
+        )
+
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.acmi_client = acmi_client
         app.state.notifier = notifier
         app.state.pipeline = pipeline
+        app.state.import_manager = import_manager
 
         yield
 
@@ -118,6 +130,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_router)
     # Token-protected landing endpoints (Issue #8); see app.api.auth.
     app.include_router(protected_router)
+    # Token-protected ACMI file import endpoints (background jobs).
+    app.include_router(import_router)
     _mount_frontend(app, Path(settings.frontend_dist_dir))
     return app
 

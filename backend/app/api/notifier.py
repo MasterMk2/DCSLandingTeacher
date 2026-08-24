@@ -48,7 +48,14 @@ class LandingNotifier:
         provisional) landings and ``"landing_update"`` when a provisional
         record is confirmed to its final outcome (Issue #5).
         """
-        message = {"type": message_type, "landing": payload}
+        await self.broadcast_message({"type": message_type, "landing": payload})
+
+    async def broadcast_message(self, message: dict[str, Any]) -> None:
+        """Send an arbitrary pre-built message to every connected client.
+
+        Used for non-landing notifications such as ACMI import job updates;
+        the message is also appended to the replay buffer.
+        """
         self._replay.append(message)
         stale: list[WebSocket] = []
         async with self._lock:

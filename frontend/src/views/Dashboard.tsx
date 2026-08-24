@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { listAllLandings } from "../api/client";
 import { FilterBar } from "../components/FilterBar";
+import { ImportPanel } from "../components/ImportPanel";
 import { LandingTable } from "../components/LandingTable";
 import { LANDING_PAGE_SIZE, useLandings } from "../hooks/useLandings";
 import { downloadCsv, landingsToCsv } from "../lib/csv";
@@ -53,6 +54,8 @@ export function Dashboard({ onSelectLanding }: DashboardProps) {
           setOffset(0);
         }}
       />
+
+      <ImportPanel onImported={refresh} />
 
       {error && <p className="error-message">読み込みエラー: {error}</p>}
       {loading && <p className="loading-message">読み込み中...</p>}

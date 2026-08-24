@@ -30,6 +30,8 @@ flowchart LR
 | [`acmi/parser.py`](../backend/app/acmi/parser.py) | ACMI 2.2 Text の行解釈: Time ヘッダ管理、`-`/`+` オブジェクト更新行、イベント行 |
 | [`acmi/file_reader.py`](../backend/app/acmi/file_reader.py) | 保存済み .acmi / .acmi.zip ファイルの再生（テスト・再評価用） |
 | [`ingest.py`](../backend/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給 |
+| [`importer.py`](../backend/app/importer.py) | ACMI ファイルインポート（`POST /api/import`）。アップロードされた記録をリアルタイムと同一の ingest→検出→採点パイプラインでバックグラウンド処理し、ジョブ状態を管理。既存着陸との重複は `ReferenceTime`＋タッチダウン時刻＋機体 ID で判定してスキップ |
+| [`api/imports.py`](../backend/app/api/imports.py) | インポート REST エンドポイント（認証対象）: `POST /api/import`、`GET /api/imports`、`GET /api/imports/{id}` |
 | [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
 | [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与。BURBLE のみヒューリスティック検出（下記「BURBLE 検出について」） |
 | [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
@@ -106,7 +108,9 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 | GET | `/api/landings` | 一覧（フィルタ・ページング） |
 | GET | `/api/landings/{id}` | 詳細（ファクター・進入サンプル含む） |
 | POST | `/api/landings/{id}/regrade` | 現在の閾値で再評価 |
-| WebSocket | `/api/ws/landings` | 着陸通知（`ping` → `pong`） |
+| POST | `/api/import` | ACMI ファイルインポート（multipart、バックグラウンドジョブ。認証対象） |
+| GET | `/api/imports` / `/api/imports/{id}` | インポートジョブの一覧・進捗（認証対象） |
+| WebSocket | `/api/ws/landings` | 着陸通知＋インポート完了通知（`ping` → `pong`） |
 
 ### 簡易トークン認証（Issue #8）
 
