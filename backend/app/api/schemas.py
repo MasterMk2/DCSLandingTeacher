@@ -96,3 +96,36 @@ class LandingListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# ACMI file import (background jobs)
+# ---------------------------------------------------------------------------
+
+
+class ImportJobOut(BaseModel):
+    """State / result summary of one ACMI import job."""
+
+    id: str
+    filename: str
+    #: "pending" | "processing" | "completed" | "failed"
+    status: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    frames_processed: int = 0
+    landings_detected: int = 0
+    duplicates_skipped: int = 0
+    error: str | None = None
+
+
+class ImportStartResponse(BaseModel):
+    """Acknowledgement returned immediately by POST /api/import."""
+
+    id: str
+    filename: str
+    status: str
+
+
+class ImportJobListResponse(BaseModel):
+    items: list[ImportJobOut]

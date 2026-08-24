@@ -103,8 +103,31 @@ export interface LandingFilters {
  * WS messages pushed by /api/ws/landings:
  * - {"type":"landing","landing":{...}}        new landing (may be provisional)
  * - {"type":"landing_update","landing":{...}} provisional landing confirmed
+ * - {"type":"import","import":{...}}          ACMI import job state change
  */
 export interface WsLandingMessage {
   type: "landing" | "landing_update";
   landing: Partial<LandingSummary>;
+}
+
+/** ImportJobOut (GET /api/imports, GET /api/imports/{id}, WS "import"). */
+export interface ImportJob {
+  id: string;
+  filename: string;
+  /** "pending" | "processing" | "completed" | "failed" */
+  status: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  frames_processed: number;
+  landings_detected: number;
+  duplicates_skipped: number;
+  error?: string | null;
+}
+
+/** Acknowledgement returned by POST /api/import. */
+export interface ImportStartResponse {
+  id: string;
+  filename: string;
+  status: string;
 }

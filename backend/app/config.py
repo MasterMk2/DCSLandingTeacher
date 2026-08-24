@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # not exist the API runs without static file hosting (dev mode).
     frontend_dist_dir: str = "frontend/dist"
 
+    # ACMI file import (POST /api/import): maximum accepted upload size in
+    # megabytes. Larger uploads are rejected with 413.
+    import_max_upload_mb: int = 200
+
 
 def get_settings() -> Settings:
     return Settings()
