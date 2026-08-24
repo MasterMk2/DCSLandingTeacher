@@ -6,6 +6,7 @@ import {
   kindLabel,
   outcomeLabel,
 } from "../lib/format";
+import { isProvisional } from "../lib/landings";
 import type { LandingSummary } from "../types/api";
 
 export interface LandingTableProps {
@@ -50,9 +51,15 @@ export function LandingTable({ items, onSelect }: LandingTableProps) {
             <td>{it.venue_name ?? (it.kind === "land" ? "空港" : "-")}</td>
             <td>{kindLabel(it.kind)}</td>
             <td>
-              <span className={`grade-badge ${gradeClass(it.grade)}`}>
-                {it.grade ?? "-"}
-              </span>
+              {isProvisional(it) ? (
+                <span className="grade-badge grade-provisional" title="アウトカム確定中">
+                  評価中
+                </span>
+              ) : (
+                <span className={`grade-badge ${gradeClass(it.grade)}`}>
+                  {it.grade ?? "-"}
+                </span>
+              )}
             </td>
             <td>{it.score !== null ? it.score.toFixed(1) : "-"}</td>
             <td>{outcomeLabel(it.outcome)}</td>

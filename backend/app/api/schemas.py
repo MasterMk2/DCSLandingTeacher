@@ -17,6 +17,9 @@ class LandingSummary(BaseModel):
     flight_id: int
     kind: str | None = None
     outcome: str | None = None
+    #: "provisional" while the outcome (bolter / touch-and-go dwell) is still
+    #: under observation, "final" once confirmed (Issue #5).
+    outcome_status: str = "final"
     venue_name: str | None = None
     pilot: str | None = None
     airframe: str | None = None

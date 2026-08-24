@@ -29,20 +29,27 @@ class LandingNotifier:
         await websocket.accept()
         async with self._lock:
             self._clients.add(websocket)
-        # Replay recent events so a fresh client has immediate context.
-        for payload in list(self._replay):
+        # Replay recent messages so a fresh client has immediate context.
+        for message in list(self._replay):
             try:
-                await websocket.send_json({"type": "landing", "landing": payload})
+                await websocket.send_json(message)
             except Exception:
                 break
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
 
-    async def broadcast_landing(self, payload: dict[str, Any]) -> None:
-        """Push one landing summary to every connected client."""
-        self._replay.append(payload)
-        message = {"type": "landing", "landing": payload}
+    async def broadcast_landing(
+        self, payload: dict[str, Any], *, message_type: str = "landing"
+    ) -> None:
+        """Push one landing summary to every connected client.
+
+        ``message_type`` is ``"landing"`` for newly detected (possibly
+        provisional) landings and ``"landing_update"`` when a provisional
+        record is confirmed to its final outcome (Issue #5).
+        """
+        message = {"type": message_type, "landing": payload}
+        self._replay.append(message)
         stale: list[WebSocket] = []
         async with self._lock:
             targets = list(self._clients)

@@ -124,6 +124,8 @@ async def test_get_landing_detail_includes_approach_track(client) -> None:
 
     assert body["kind"] == "carrier"
     assert body["outcome"] == "full_stop"
+    # Offline-seeded landings are final from the start (Issue #5).
+    assert body["outcome_status"] == "final"
     assert body["grade"] in ("OK", "OK-", "(OK)", "_NO_GRADE_", "CUT")
     assert body["pilot"] == "Viggen"
     assert body["touchdown"]["latitude"] is not None
@@ -182,3 +184,20 @@ def test_websocket_receives_new_landing_events(settings) -> None:
             message = ws.receive_json()
             assert message["type"] == "landing"
             assert message["landing"]["id"] == 7
+
+
+def test_websocket_receives_landing_update_messages(settings) -> None:
+    """Provisional -> final confirmations arrive as ``landing_update``."""
+    app = create_app(settings)
+    with TestClient(app) as tc:
+        asyncio.run(
+            tc.app.state.notifier.broadcast_landing(
+                {"id": 8, "grade": "OK", "outcome_status": "final"},
+                message_type="landing_update",
+            )
+        )
+        with tc.websocket_connect("/api/ws/landings") as ws:
+            message = ws.receive_json()
+            assert message["type"] == "landing_update"
+            assert message["landing"]["id"] == 8
+            assert message["landing"]["outcome_status"] == "final"

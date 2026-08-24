@@ -46,7 +46,10 @@ flowchart LR
 2. パーサが時刻・オブジェクト状態を更新し、ingestor が機体別バッファへ追記する
 3. 検出器が接地（WOW）を検出すると、最終進入区間（既定 60 秒 / 2 nm）を切り出す
 4. パイプラインが空母/陸地を判定して対応グレーダで採点し、SQLite に保存
-5. `LandingNotifier` が接続中の全 WebSocket クライアントへ `{"type": "landing", ...}` を送信
+5. `LandingNotifier` が接続中の全 WebSocket クライアントへ `{"type": "landing", ...}` を送信。
+   タッチダウン直後は outcome 未確定のため `outcome_status: "provisional"` として即時通知し、
+   full-stop 滞地時間の経過などで確定した時点で同一レコードを更新する
+   `{"type": "landing_update", ...}` を送る二段階方式（Issue #5）
 
 ## フロントエンド（frontend/src）
 

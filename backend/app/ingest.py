@@ -64,7 +64,14 @@ class LandingContext:
     carrier_row_id: int | None = None
 
 
-LandingListener = Callable[[LandingContext], Awaitable[None]]
+#: Called for every newly detected landing. Returns the persisted row id so
+#: the ingestor can correlate a later finalized event with the provisional
+#: record (Issue #5 two-phase confirmation).
+LandingListener = Callable[[LandingContext], Awaitable[int | None]]
+
+#: Called when an already-reported provisional landing is settled; receives
+#: the row id returned earlier by ``LandingListener``.
+LandingFinalizeListener = Callable[[int, LandingContext], Awaitable[None]]
 
 
 class TrackIngestor:
@@ -76,6 +83,7 @@ class TrackIngestor:
         *,
         max_batch_size: int = 200,
         landing_listener: LandingListener | None = None,
+        landing_finalize_listener: LandingFinalizeListener | None = None,
         sample_buffer_s: float = 600.0,
     ) -> None:
         self._session_factory = session_factory
@@ -89,13 +97,17 @@ class TrackIngestor:
 
         # --- landing detection state (FR-2) -------------------------------
         self._landing_listener = landing_listener
+        self._landing_finalize_listener = landing_finalize_listener
         self._sample_buffer_s = sample_buffer_s
         self._aircraft_buffers: dict[str, RollingTrackBuffer] = {}
         self._carrier_states: dict[str, CarrierState] = {}
         #: static object id -> (lat, lon, altitude)
         self._static_positions: dict[str, tuple[float, float, float]] = {}
-        #: (acmi id, touchdown time) pairs already reported.
+        #: (acmi id, touchdown time) pairs already reported as final.
         self._reported_landings: set[tuple[str, float]] = set()
+        #: (acmi id, touchdown time) -> landing row id reported provisionally
+        #: and still awaiting its final outcome (Issue #5).
+        self._provisional_ids: dict[tuple[str, float], int] = {}
 
     @property
     def parser(self) -> AcmiParser:
@@ -241,9 +253,11 @@ class TrackIngestor:
             self._pending += 1
             await self._flush()
         # A disappearing aircraft may have been on deck: run a final detection
-        # pass so end-of-track landings are still reported.
-        source = self._parser.objects.get(event.obj_id)
-        if source is not None and classify_object_type(source.type) == ObjectClass.AIRCRAFT:
+        # pass so end-of-track landings are still reported. The parser has
+        # already dropped the object, so classify from the stored DB row.
+        if dcs_object is not None and (
+            classify_object_type(dcs_object.type) == ObjectClass.AIRCRAFT
+        ):
             await self._maybe_detect_landing(event.obj_id, force_final=True)
 
     # ------------------------------------------------------------------
@@ -347,12 +361,7 @@ class TrackIngestor:
             current_time=None if force_final else last.time,
         )
         for landing in events:
-            if not force_final and not landing.finalized:
-                continue
             key = (obj_id, round(landing.touchdown.time, 3))
-            if key in self._reported_landings:
-                continue
-            self._reported_landings.add(key)
             context = LandingContext(
                 flight_id=self._flight_id,
                 acmi_object_id=obj_id,
@@ -366,18 +375,62 @@ class TrackIngestor:
                     else None
                 ),
             )
-            logger.info(
-                "landing detected: obj=%s kind=%s outcome=%s t=%.2f",
-                obj_id,
-                landing.kind,
-                landing.outcome,
-                landing.touchdown.time,
-            )
-            if self._landing_listener is not None:
-                try:
-                    await self._landing_listener(context)
-                except Exception:
-                    logger.exception("landing listener failed")
+
+            if not landing.finalized and not force_final:
+                # Two-phase confirmation (Issue #5): report the touchdown
+                # immediately as provisional; the final verdict arrives in a
+                # later analysis pass once the dwell window has elapsed.
+                if key in self._provisional_ids or key in self._reported_landings:
+                    continue
+                landing_id = await self._dispatch(context, provisional=True)
+                if landing_id is not None:
+                    self._provisional_ids[key] = landing_id
+                continue
+
+            pending_id = self._provisional_ids.pop(key, None)
+            if pending_id is not None:
+                self._reported_landings.add(key)
+                await self._finalize(pending_id, context)
+                continue
+            if key in self._reported_landings:
+                continue
+            self._reported_landings.add(key)
+            await self._dispatch(context, provisional=False)
+
+    async def _dispatch(self, context: LandingContext, *, provisional: bool) -> int | None:
+        event = context.event
+        logger.info(
+            "landing detected (%s): obj=%s kind=%s outcome=%s t=%.2f",
+            "provisional" if provisional else "final",
+            context.acmi_object_id,
+            event.kind,
+            event.outcome,
+            event.touchdown.time,
+        )
+        if self._landing_listener is None:
+            return None
+        try:
+            return await self._landing_listener(context)
+        except Exception:
+            logger.exception("landing listener failed")
+            return None
+
+    async def _finalize(self, landing_id: int, context: LandingContext) -> None:
+        event = context.event
+        logger.info(
+            "landing finalized: id=%d obj=%s kind=%s outcome=%s t=%.2f",
+            landing_id,
+            context.acmi_object_id,
+            event.kind,
+            event.outcome,
+            event.touchdown.time,
+        )
+        if self._landing_finalize_listener is None:
+            return
+        try:
+            await self._landing_finalize_listener(landing_id, context)
+        except Exception:
+            logger.exception("landing finalize listener failed")
 
     def record_aircraft_sample(self, obj_id: str, sample: TrackSample) -> None:
         """Public hook so tests/hosts can feed detection buffers directly."""
