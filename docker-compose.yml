@@ -26,6 +26,10 @@ services:
       DLT_DATABASE_URL: sqlite+aiosqlite:////data/dlt.db
       DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
       DLT_FRONTEND_DIST_DIR: /app/frontend/dist
+      # Alembic migrations are applied automatically at startup; set to
+      # "false" to fall back to the legacy create_all bootstrap.
+      DLT_MIGRATIONS_ON_STARTUP: ${DLT_MIGRATIONS_ON_STARTUP:-true}
+      DLT_MIGRATIONS_DIR: /app/migrations
       # Default: reach a Tacview exporter running on the Docker host
       # (works on Windows/macOS natively and on Linux via extra_hosts).
       DLT_TACVIEW_HOST: ${DLT_TACVIEW_HOST:-host.docker.internal}

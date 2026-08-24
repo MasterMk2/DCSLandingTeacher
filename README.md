@@ -114,6 +114,21 @@ cd frontend && npm ci && npm run dev
 | `DLT_TACVIEW_CLIENT_NAME` | `DCSLandingTeacher` | ハンドシェイクで通告するクライアント名 |
 | `DLT_TACVIEW_PASSWORD` | （空） | Telemetry 保護時のパスワード |
 | `DLT_ACMI_ENABLED` | `true` | `false` で ACMI 受信を停止（API 単体運用向け） |
+| `DLT_MIGRATIONS_ON_STARTUP` | `true` | 起動時に Alembic マイグレーションを自動適用。`false` で従来の create_all に戻す（開発用） |
+
+### データベースマイグレーション
+
+スキーマ管理には Alembic を使用しています（Issue #7）。アプリ起動時に未適用の
+マイグレーションが自動で適用され、空の DB からは全スキーマが作成されます。
+旧バージョン（create_all 時代）で作成した DB も自動検出してベースラインに
+スタンプし、以降のマイグレーションが適用されるため、そのまま起動するだけで移行できます。
+
+手動操作は `backend/` ディレクトリで:
+
+```bash
+alembic current          # 現在のリビジョン表示
+alembic upgrade head     # 未適用マイグレーションの適用
+```
 
 詳細な環境変数一覧は [`.env.example`](.env.example) を参照してください。
 接続は自動再接続（指数バックオフ）に対応しています。

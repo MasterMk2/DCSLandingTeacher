@@ -66,6 +66,28 @@ cd frontend && npm run build    # frontend/dist を生成
 # リポジトリルートからバックエンドを起動すると dist が自動配信される
 ```
 
+## データベースマイグレーション（Alembic）
+
+スキーマ変更は Alembic で管理します（Issue #7）。既定ではアプリ起動時に
+未適用マイグレーションが自動適用されます（`DLT_MIGRATIONS_ON_STARTUP=false`
+で無効化し、従来の `create_all` ブートストラップに戻せます。開発用）。
+
+```bash
+cd backend
+
+alembic current                  # 現在のリビジョン表示
+alembic upgrade head             # 未適用マイグレーションの適用
+alembic downgrade -1             # 1 つ前へ戻す
+alembic revision -m "add foo"    # 新しい空リビジョンの作成
+```
+
+- スクリプト配置: [`backend/migrations/`](../backend/migrations/)
+- ベースライン `0001_baseline` は旧 create_all 時代のスキーマと同一。
+  旧バージョンで作成した DB は起動時に自動検出され、ベースラインにスタンプ
+  されてから以降のマイグレーションが適用されます（データは保持されます）
+- URL の上書き: `alembic -x db_url=sqlite:///path/to.db upgrade head`
+- コンテナ内では `DLT_MIGRATIONS_DIR=/app/migrations` が設定済みです
+
 ## テスト
 
 ### バックエンド（pytest、83 テスト）
