@@ -35,8 +35,10 @@ class StreamPlayer:
     """Feeds a rendered ACMI text into an ingestor frame by frame.
 
     ``feed_through`` keeps sending frames until the aircraft's detection
-    buffer contains a sample at or beyond the requested helper-sample time,
-    so it stays correct regardless of how frame deltas map to parser times.
+    buffer contains a sample at or beyond the requested helper-sample time.
+    ``make_acmi_text`` renders each frame's ``#<seconds>`` as the absolute
+    ``base_time + sample.time`` (matching real ACMI streams), so parser
+    mission time and helper-sample time are related by that same constant.
     """
 
     def __init__(
@@ -44,11 +46,11 @@ class StreamPlayer:
         ingestor: TrackIngestor,
         text: str,
         *,
-        first_sample_time: float,
+        base_time: float,
     ) -> None:
         self._ingestor = ingestor
         #: Offset between helper-sample times and parser mission times.
-        self._offset = -first_sample_time
+        self._offset = base_time
         lines = text.splitlines()
         start = next(i for i, line in enumerate(lines) if line.startswith("#"))
         self._header = lines[:start]
@@ -99,9 +101,10 @@ def _player(
         landing_finalize_listener=pipeline.finalize_landing,
         sample_buffer_s=600.0,
     )
+    base_time = 1000.0
     samples = make_approach_samples(outcome=outcome)
-    text = make_acmi_text(samples)
-    return ingestor, StreamPlayer(ingestor, text, first_sample_time=samples[0].time)
+    text = make_acmi_text(samples, base_time=base_time)
+    return ingestor, StreamPlayer(ingestor, text, base_time=base_time)
 
 
 async def _landings(session_factory) -> list[Landing]:

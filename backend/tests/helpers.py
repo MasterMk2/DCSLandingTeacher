@@ -153,12 +153,11 @@ def make_acmi_text(
             f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,"
             f"T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
         )
-    previous: float | None = None
     for sample in samples:
         absolute = base_time + sample.time
-        delta = 0.0 if previous is None else absolute - previous
-        previous = absolute
-        lines.append(f"#{delta:g}")
+        # ``#<seconds>`` is the absolute offset from ReferenceTime, not a
+        # delta onto the previous frame (see app/acmi/parser.py).
+        lines.append(f"#{absolute:g}")
         transform = (
             f"T={sample.longitude:g}|{sample.latitude:g}|{sample.altitude:g}|||"
             f"{sample.heading or 0:g}"
@@ -211,12 +210,11 @@ def make_acmi_text_multi(
             events.append((absolute, index, spec["obj_id"], sample, spec))
     events.sort(key=lambda e: (e[0], e[1]))
 
-    previous: float | None = None
     seen_ids: set[str] = set()
     for absolute, _index, obj_id, sample, spec in events:
-        delta = 0.0 if previous is None else absolute - previous
-        previous = absolute
-        lines.append(f"#{delta:g}")
+        # ``#<seconds>`` is the absolute offset from ReferenceTime, not a
+        # delta onto the previous frame (see app/acmi/parser.py).
+        lines.append(f"#{absolute:g}")
         transform = (
             f"T={sample.longitude:g}|{sample.latitude:g}|{sample.altitude:g}|||"
             f"{sample.heading or 0:g}"
