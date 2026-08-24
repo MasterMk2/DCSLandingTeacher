@@ -20,6 +20,11 @@ def create_engine(database_url: str) -> AsyncEngine:
         def _set_sqlite_pragma(dbapi_connection, _record):  # noqa: ANN001
             cursor = dbapi_connection.cursor()
             cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+            # WAL lets readers (API requests) proceed without blocking on the
+            # writer (live ingest / import), and vice versa; only concurrent
+            # *writers* still serialize. Persisted in the DB file, so this is
+            # a no-op after the first connection, but harmless to repeat.
+            cursor.execute("PRAGMA journal_mode=WAL")
             cursor.close()
 
     return engine

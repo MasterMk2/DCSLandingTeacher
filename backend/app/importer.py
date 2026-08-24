@@ -160,6 +160,12 @@ class ImportJobManager:
         self._notifier = notifier
         self._sample_buffer_s = sample_buffer_s
         self._jobs: dict[str, ImportJob] = {}
+        # SQLite only supports one writer at a time; running two imports (or
+        # an import alongside the live stream) concurrently makes both sides
+        # fight over the write lock and fail with "database is locked" once
+        # the busy_timeout is exceeded. Serializing imports here removes the
+        # import-vs-import case entirely.
+        self._run_lock = asyncio.Lock()
 
     # -- registry -------------------------------------------------------
 
@@ -177,27 +183,32 @@ class ImportJobManager:
     # -- processing -----------------------------------------------------
 
     async def run(self, job: ImportJob, file_path: str | Path) -> None:
-        """Process one uploaded ACMI file to completion (background task)."""
-        job.status = "processing"
-        job.started_at = _utcnow()
-        try:
-            await self._process(job, Path(file_path))
-            job.status = "completed"
-            logger.info(
-                "import %s completed: frames=%d landings=%d duplicates=%d",
-                job.id,
-                job.frames_processed,
-                job.landings_detected,
-                job.duplicates_skipped,
-            )
-        except Exception as exc:
-            job.status = "failed"
-            job.error = str(exc)
-            logger.exception("import %s failed", job.id)
-        finally:
-            job.finished_at = _utcnow()
-            _remove_quietly(file_path)
-            await self._notify(job)
+        """Process one uploaded ACMI file to completion (background task).
+
+        Queues behind any import already running (see ``_run_lock``); the
+        job stays "pending" until it actually acquires the lock and starts.
+        """
+        async with self._run_lock:
+            job.status = "processing"
+            job.started_at = _utcnow()
+            try:
+                await self._process(job, Path(file_path))
+                job.status = "completed"
+                logger.info(
+                    "import %s completed: frames=%d landings=%d duplicates=%d",
+                    job.id,
+                    job.frames_processed,
+                    job.landings_detected,
+                    job.duplicates_skipped,
+                )
+            except Exception as exc:
+                job.status = "failed"
+                job.error = str(exc)
+                logger.exception("import %s failed", job.id)
+            finally:
+                job.finished_at = _utcnow()
+                _remove_quietly(file_path)
+                await self._notify(job)
 
     async def _process(self, job: ImportJob, path: Path) -> None:
         # The duplicate guard needs the ingestor (for the ACMI header), so the
