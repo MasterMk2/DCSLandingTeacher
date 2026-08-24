@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_auth, ws_token_ok
 from app.api.schemas import (
     ApproachTrackOut,
     DeviationSampleOut,
@@ -22,6 +23,12 @@ from app.api.schemas import (
 from app.models.entities import DcsObject, Landing
 
 router = APIRouter(prefix="/api")
+
+# Landing endpoints live on a separate router that enforces the shared-token
+# authentication (Issue #8). /api/health and the WebSocket endpoint stay on
+# the public router: health is for liveness monitoring and the WebSocket
+# performs its own ?token= check (browsers cannot attach WS headers).
+protected_router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
 
 
 async def get_session(request: Request) -> AsyncSession:
@@ -66,7 +73,7 @@ def _summary(landing: Landing, dcs_object: DcsObject | None) -> LandingSummary:
     )
 
 
-@router.get("/landings", response_model=LandingListResponse)
+@protected_router.get("/landings", response_model=LandingListResponse)
 async def list_landings(
     request: Request,
     player: str | None = Query(default=None, description="Filter by pilot name"),
@@ -117,7 +124,7 @@ async def list_landings(
     return LandingListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.get("/landings/{landing_id}", response_model=LandingDetail)
+@protected_router.get("/landings/{landing_id}", response_model=LandingDetail)
 async def get_landing(
     landing_id: int,
     session: AsyncSession = Depends(get_session),
@@ -170,7 +177,7 @@ async def get_landing(
     )
 
 
-@router.post("/landings/{landing_id}/regrade", response_model=RegradeResponse)
+@protected_router.post("/landings/{landing_id}/regrade", response_model=RegradeResponse)
 async def regrade_landing(
     landing_id: int,
     request: Request,
@@ -203,6 +210,10 @@ async def regrade_landing(
 
 @router.websocket("/ws/landings")
 async def ws_landings(websocket: WebSocket) -> None:
+    if not ws_token_ok(websocket):
+        # Reject during the handshake (ASGI servers answer with HTTP 403).
+        await websocket.close(code=1008)
+        return
     notifier = getattr(websocket.app.state, "notifier", None)
     if notifier is None:
         await websocket.close(code=1013)

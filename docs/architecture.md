@@ -102,11 +102,33 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 
 | メソッド | パス | 説明 |
 |---|---|---|
-| GET | `/api/health` | 死活監視・ACMI 接続状態 |
+| GET | `/api/health` | 死活監視・ACMI 接続状態（**認証対象外**） |
 | GET | `/api/landings` | 一覧（フィルタ・ページング） |
 | GET | `/api/landings/{id}` | 詳細（ファクター・進入サンプル含む） |
 | POST | `/api/landings/{id}/regrade` | 現在の閾値で再評価 |
 | WebSocket | `/api/ws/landings` | 着陸通知（`ping` → `pong`） |
+
+### 簡易トークン認証（Issue #8）
+
+[`app/api/auth.py`](../backend/app/api/auth.py) に共有トークン認証を実装している。
+
+- [`config.py`](../backend/app/config.py) の `auth_token`（環境変数 `DLT_AUTH_TOKEN`）
+  が**空の場合は認証無効**で、従来どおり誰でもアクセスできる（デフォルト）
+- 設定時、`/api` 配下の REST エンドポイント（landings 系。ルーター
+  `protected_router` に `Depends(require_auth)` で適用）は
+  `Authorization: Bearer <token>` または `X-Auth-Token` ヘッダを要求する。
+  未提示は 401、誤りは 403
+- WebSocket はブラウザからヘッダを付けられないため `?token=<token>` クエリ
+  パラメータで判定し（`ws_token_ok`）、不一致ならハンドシェイクを拒否する
+- `/api/health` は死活監視用に認証対象外。SPA 静的配信（`frontend/dist`
+  マウント）も `/api` 外のため対象外
+- トークン比較は定数時間比較（`secrets.compare_digest`）
+- フロントエンド側は [`auth/token.ts`](../frontend/src/auth/token.ts) で
+  localStorage にトークンを保持し、REST クライアントは `X-Auth-Token`、
+  WS クライアントは `?token=` で送付。401/403 検出時は
+  `dlt:auth-invalid` イベント経由でトークン再入力モーダル
+  （[`components/TokenPrompt.tsx`](../frontend/src/components/TokenPrompt.tsx)）
+  を表示する。ナビバーの「認証設定」ボタンで消去・再入力可能
 
 > WebSocket のパスはルーター共通プレフィックスにより **`/api/ws/landings`** に統一されている。
 > フロントエンドもこのパスを使用する。
