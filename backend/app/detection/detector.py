@@ -78,6 +78,9 @@ class CarrierState:
 
     obj_id: str
     name: str | None = None
+    #: ACMI ``Type`` string, kept so graders can resolve per-carrier
+    #: FLOLS geometry (Issue #3).
+    type: str | None = None
     #: (time, lat, lon, altitude, heading_deg, speed) tuples, time-sorted.
     samples: list[tuple[float, float, float, float, float, float]] = field(
         default_factory=list
@@ -99,6 +102,28 @@ class CarrierState:
             else:
                 break
         return best
+
+    def altitude_at(self, time: float) -> float | None:
+        """Interpolated ship altitude (MSL) at ``time``."""
+        if not self.samples:
+            return None
+        if time <= self.samples[0][0]:
+            return self.samples[0][3]
+        if time >= self.samples[-1][0]:
+            return self.samples[-1][3]
+        lo, hi = 0, len(self.samples) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if self.samples[mid][0] <= time:
+                lo = mid
+            else:
+                hi = mid
+        t0, _, _, alt0, _, _ = self.samples[lo]
+        t1, _, _, alt1, _, _ = self.samples[hi]
+        if t1 == t0:
+            return alt0
+        frac = (time - t0) / (t1 - t0)
+        return alt0 + (alt1 - alt0) * frac
 
 
 @dataclass
@@ -127,6 +152,14 @@ class LandingEvent:
     #: Ship-relative representation of the approach (carrier events only):
     #: list of dicts with time, along, lateral, gs-relevant altitude data.
     ship_relative: list[dict] = field(default_factory=list)
+    #: Carrier facts at the touchdown instant (Issue #3): used by the
+    #: grading pipeline to resolve per-carrier FLOLS geometry and to anchor
+    #: the ramp-referenced deviation frame on a moving deck.
+    carrier_type: str | None = None
+    carrier_latitude: float | None = None
+    carrier_longitude: float | None = None
+    carrier_altitude_m: float | None = None
+    carrier_heading_deg: float | None = None
     #: True once the outcome can no longer change (climb-out observed, or
     #: the full-stop dwell has elapsed). Live monitoring should only report
     #: finalized events; offline analysis always yields finalized events.
@@ -323,6 +356,14 @@ def analyze_track(
             approach=approach,
             finalized=finalized,
         )
+        if carrier is not None:
+            # Carrier state at the touchdown instant (Issue #3).
+            event.carrier_type = carrier.type
+            pos = carrier.position_at(touchdown.time)
+            if pos is not None:
+                event.carrier_latitude, event.carrier_longitude = pos
+            event.carrier_altitude_m = carrier.altitude_at(touchdown.time)
+            event.carrier_heading_deg = carrier.heading_at(touchdown.time)
         if carrier is not None:
             event.ship_relative = to_ship_relative(approach, carrier, touchdown, config)
         events.append(event)

@@ -15,6 +15,9 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.detection.detector import LandingEvent
+from app.grading.carriers import (
+    CarrierGeometryBook,
+)
 from app.grading.config import GradingConfig
 from app.grading.deviations import ApproachAnalysis, build_approach_analysis
 from app.grading.land_grader import LandGradeResult, grade_land_landing
@@ -35,10 +38,14 @@ class LandingPipeline:
         session_factory: async_sessionmaker[AsyncSession],
         grading_config: GradingConfig,
         notifier: Any | None = None,
+        carrier_geometry_book: CarrierGeometryBook | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._config = grading_config
         self._notifier = notifier
+        # Per-carrier FLOLS geometry (Issue #3); an empty book means every
+        # carrier uses the legacy touchdown-referenced approximation.
+        self._geometry_book = carrier_geometry_book or CarrierGeometryBook({})
 
     async def handle_landing(self, context: LandingContext) -> int | None:
         """Grade + persist one detected landing; returns the row id.
@@ -103,12 +110,20 @@ class LandingPipeline:
 
     # ------------------------------------------------------------------
 
+    def _resolve_geometry(self, event: LandingEvent):
+        """Per-carrier FLOLS geometry for this event (Issue #3)."""
+        if event.kind != "carrier":
+            return None
+        return self._geometry_book.resolve(event.carrier_name, event.carrier_type)
+
     def _grade(
         self, context: LandingContext
     ) -> tuple[ApproachAnalysis, LandGradeResult | LsoGradeResult, float | None]:
         event = context.event
         analysis = build_approach_analysis(
-            event, self._config.glideslope_for(event.kind)
+            event,
+            self._config.glideslope_for(event.kind),
+            geometry=self._resolve_geometry(event),
         )
         if event.kind == "carrier":
             return analysis, grade_carrier_approach(analysis, self._config), None

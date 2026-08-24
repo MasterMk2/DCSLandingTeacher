@@ -1,0 +1,72 @@
+# DCS Landing Teacher - per-carrier FLOLS geometry (Issue #3 / O-2).
+#
+# !! IMPORTANT: ALL NUMERIC VALUES BELOW ARE UNVERIFIED ESTIMATES !!
+# They are plausible figures assembled from publicly available descriptions
+# (encyclopedia-level data for each ship class). None of them has been
+# validated against real DCS World terrain/object data or authoritative
+# navy publications. Treat every number as a PLACEHOLDER until it has been
+# cross-checked with in-game measurements (Issue #3 follow-up).
+#
+# How the geometry is used by the grader (app.grading.deviations):
+#   - The glideslope reference point is the RAMP (the FLOLS datum at the
+#     aft end of the angled deck), expressed as an offset from the ship's
+#     ACMI position:
+#       ramp_along_m   : meters forward of the ship position (+) toward
+#                         the bow / negative toward the stern.
+#       ramp_lateral_m : meters to the RIGHT (+) of the ship heading.
+#   - deck_altitude_m is the height of the landing-area deck above sea
+#     level (MSL); it replaces the proximity-based ground elevation when
+#     computing AGL for glideslope deviations.
+#   - landing_course_offset_deg is the angle of the landing course
+#     relative to the ship heading (angled-deck carriers ~ 9 degrees,
+#     axial-deck carriers ~ 0).
+#   - beam_width_m is the approximate lateral width of the FLOLS light
+#     beam; informational only (UI display), not used by grading yet.
+#
+# Matching: `name_patterns` are matched case-insensitively against the
+# ACMI object Name; `type_patterns` against the ACMI Type string. First
+# entry that matches wins; ships not listed here fall back to the legacy
+# touchdown-referenced approximation (see app/grading/deviations.py).
+
+version: 1
+
+defaults:
+  # Used as fallback values for entries that omit a field.
+  glideslope_deg: 3.5        # standard USN FLOLS slope (public knowledge)
+  landing_course_offset_deg: 9.0   # typical angled-deck bearing [ESTIMATE]
+  beam_width_m: 12.0         # rough FLOLS beam width [PLACEHOLDER]
+
+carriers:
+  kuznetsov:
+    name_patterns: ["kuznetsov"]
+    type_patterns: ["Carrier+FixedWing", "AircraftCarrier+Kuznetsov"]
+    # Admiral Kuznetsov: axial-ish deck with ski-jump, landing course is
+    # close to the ship axis.
+    deck_altitude_m: 22.0            # [ESTIMATE - unverified]
+    ramp_along_m: -120.0             # ramp near the stern [ESTIMATE]
+    ramp_lateral_m: 8.0              # slight starboard offset [ESTIMATE]
+    glideslope_deg: 4.0              # steeper than USN FLOLS [ESTIMATE]
+    landing_course_offset_deg: 0.0   # axial landing run [ESTIMATE]
+    beam_width_m: 10.0               # [PLACEHOLDER]
+
+  stennis:
+    name_patterns: ["stennis", "cvn-74"]
+    type_patterns: ["Carrier+Hornet", "AircraftCarrier+Stennis"]
+    # Nimitz-class (CVN-74 Stennis is the DCS asset): angled deck.
+    deck_altitude_m: 20.0            # [ESTIMATE - unverified]
+    ramp_along_m: -130.0             # [ESTIMATE]
+    ramp_lateral_m: 12.0             # angled deck, starboard side [ESTIMATE]
+    glideslope_deg: 3.5              # USN standard
+    landing_course_offset_deg: 9.0   # angled deck [ESTIMATE]
+    beam_width_m: 12.0               # [PLACEHOLDER]
+
+  forrestal:
+    name_patterns: ["forrestal", "cv-59"]
+    type_patterns: ["Carrier+Tomcat", "AircraftCarrier+Forrestal"]
+    # Forrestal-class: angled deck.
+    deck_altitude_m: 17.0            # [ESTIMATE - unverified]
+    ramp_along_m: -125.0             # [ESTIMATE]
+    ramp_lateral_m: 12.0             # [ESTIMATE]
+    glideslope_deg: 3.5              # USN standard
+    landing_course_offset_deg: 9.0   # [ESTIMATE]
+    beam_width_m: 12.0               # [PLACEHOLDER]

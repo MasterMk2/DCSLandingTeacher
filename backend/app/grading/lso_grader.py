@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.grading.carriers import fallback_geometry_payload
 from app.grading.deviations import ApproachAnalysis
 
 
@@ -250,5 +251,12 @@ def grade_carrier_approach(
         "course_deg": round(analysis.course_deg, 2),
         "major_factor_count": len(majors),
         "factor_names": names,
+        # Which FLOLS geometry produced this grade (Issue #3): the resolved
+        # per-carrier entry or the legacy touchdown-referenced fallback.
+        "flols_geometry": (
+            analysis.geometry
+            if analysis.geometry is not None
+            else fallback_geometry_payload()
+        ),
     }
     return LsoGradeResult(grade=grade, factors=factors, comment=comment, metrics=metrics)
