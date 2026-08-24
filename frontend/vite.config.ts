@@ -7,6 +7,10 @@ import { defineConfig } from "vite";
 const BACKEND = process.env.DLT_BACKEND_URL ?? "http://localhost:8000";
 
 export default defineConfig({
+  // Relative asset URLs so the same build works both at the domain root and
+  // behind a reverse-proxy subpath (e.g. "/landing-teacher/"); see
+  // src/api/client.ts / src/api/ws.ts for the matching runtime API base.
+  base: "./",
   plugins: [react()],
   server: {
     port: 5173,

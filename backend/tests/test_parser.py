@@ -44,10 +44,16 @@ def test_global_object_metadata() -> None:
     assert parser.header["ReferenceTime"] == "2011-06-02T05:00:00Z"
 
 
-def test_frame_time_accumulation() -> None:
+def test_frame_time_is_absolute_offset() -> None:
+    """``#<seconds>`` is the absolute offset from ReferenceTime, not a delta
+
+    to accumulate onto the previous value (real DCS streams send a slowly
+    increasing absolute offset on every frame, e.g. #2211.13, #2211.35, ...;
+    summing them would blow up to nonsensical values within minutes).
+    """
     parser = AcmiParser()
     first = parser.feed_line("#47.13")
-    second = parser.feed_line("#8.62")
+    second = parser.feed_line("#55.75")
     assert isinstance(first[0], TimeEvent) and first[0].time == pytest.approx(47.13)
     assert isinstance(second[0], TimeEvent) and second[0].time == pytest.approx(55.75)
 
@@ -107,7 +113,8 @@ def test_object_add_update_remove_from_fixture() -> None:
     assert aircraft.pilot == "Viggen"
     assert aircraft.group == "Training"
     assert aircraft.country == "us"
-    # First update at t=0, second at t=47.13, third at t=55.75
+    # First update at t=0, second at t=47.13, third at t=55.75 (each # line is
+    # the absolute offset from ReferenceTime, not a delta onto the previous one).
     assert aircraft.last_seen == pytest.approx(55.75)
 
 
