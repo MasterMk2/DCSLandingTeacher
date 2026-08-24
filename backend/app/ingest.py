@@ -2,8 +2,16 @@
 
 Lines are parsed incrementally and persisted in batches: a single session is
 reused across events and committed once ``max_batch_size`` pending writes
-have accumulated (or on :meth:`close`). This avoids one transaction per
-telemetry line while keeping memory bounded.
+have accumulated, ``max_batch_age_s`` seconds have passed since the batch's
+first write, or on :meth:`close`. This avoids one transaction per telemetry
+line while keeping memory bounded *and* bounding how long the write lock is
+held: SQLite only allows one writer at a time, so a batch left open for
+longer than another writer's ``busy_timeout`` (e.g. the ACMI file import,
+Issue #18) makes that writer fail with "database is locked" even though it
+never touches more than ``max_batch_size`` rows itself. The count-only
+version of this trigger held the lock long enough to reproduce that under
+light traffic (a handful of objects updating a few times a second easily
+takes several seconds to reach 200 pending writes).
 
 Landing detection (FR-2) hooks in here: aircraft samples are mirrored into
 rolling buffers, carrier/static objects into lightweight state holders, and
@@ -14,6 +22,7 @@ landing events are forwarded to the optional ``landing_listener`` callback
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from logging import getLogger
@@ -82,18 +91,22 @@ class TrackIngestor:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         max_batch_size: int = 200,
+        max_batch_age_s: float = 2.0,
         landing_listener: LandingListener | None = None,
         landing_finalize_listener: LandingFinalizeListener | None = None,
         sample_buffer_s: float = 600.0,
     ) -> None:
         self._session_factory = session_factory
         self._max_batch_size = max(1, max_batch_size)
+        self._max_batch_age_s = max_batch_age_s
         self._parser = AcmiParser()
         self._flight_id: int | None = None
         #: acmi object id -> ``objects.id`` row
         self._object_row_ids: dict[str, int] = {}
         self._session: AsyncSession | None = None
         self._pending = 0
+        #: monotonic timestamp of the current batch's first pending write.
+        self._batch_opened_at: float | None = None
 
         # --- landing detection state (FR-2) -------------------------------
         self._landing_listener = landing_listener
@@ -154,10 +167,17 @@ class TrackIngestor:
         if self._session is None:
             self._session = self._session_factory()
             self._pending = 0
+            self._batch_opened_at = time.monotonic()
         return self._session
 
     async def _flush(self, force: bool = False) -> None:
-        if self._session is None or (not force and self._pending < self._max_batch_size):
+        if self._session is None:
+            return
+        batch_expired = (
+            self._batch_opened_at is not None
+            and time.monotonic() - self._batch_opened_at >= self._max_batch_age_s
+        )
+        if not force and self._pending < self._max_batch_size and not batch_expired:
             return
         try:
             await self._session.commit()
@@ -168,6 +188,7 @@ class TrackIngestor:
             raise
         finally:
             self._pending = 0
+            self._batch_opened_at = None
 
     async def _ensure_flight(self) -> int:
         if self._flight_id is not None:
