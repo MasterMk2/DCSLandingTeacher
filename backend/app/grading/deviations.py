@@ -142,8 +142,23 @@ class ApproachAnalysis:
         )
 
 
-def estimate_course_deg(samples: list[TrackSample], fallback_heading: float | None) -> float:
-    """Approach course from the inbound track; falls back to TD heading."""
+def estimate_course_deg(samples: list[TrackSample], touchdown_heading: float | None) -> float:
+    """Approach course, preferring the aircraft's own heading at touchdown.
+
+    Real DCS landings are frequently flown as a continuous turn onto short
+    final (an overhead break, a tactical initial) rather than a long
+    stabilized straight-in. A two-point position bearing taken across the
+    whole ~60s/2nm captured approach picks up that turn and can report a
+    course tens of degrees off the actual runway heading, which then shows
+    up as a large false centerline deviation for samples that were in fact
+    close to the centerline. The aircraft's own heading at the moment of
+    touchdown is the most direct read of the runway course a successful
+    landing implies, so it takes priority whenever ACMI supplied it; the
+    position-based bearing is only a fallback for the rare case heading
+    telemetry itself is missing.
+    """
+    if touchdown_heading is not None:
+        return touchdown_heading
     points = [
         (s.latitude, s.longitude)
         for s in samples
@@ -153,12 +168,11 @@ def estimate_course_deg(samples: list[TrackSample], fallback_heading: float | No
         # Use the first and last points of the inbound segment.
         lat0, lon0 = points[0]
         lat1, lon1 = points[-1]
-        dx = math.radians(lon1 - lon0) * math.cos(math.radians((lat0 + lat1) / 2))
-        dy = math.radians(lat1 - lat0)
-        bearing = math.degrees(math.atan2(dx, dy)) % 360.0
         if (lat0, lon0) != (lat1, lon1):
-            return bearing
-    return fallback_heading if fallback_heading is not None else 0.0
+            dx = math.radians(lon1 - lon0) * math.cos(math.radians((lat0 + lat1) / 2))
+            dy = math.radians(lat1 - lat0)
+            return math.degrees(math.atan2(dx, dy)) % 360.0
+    return 0.0
 
 
 def build_approach_analysis(

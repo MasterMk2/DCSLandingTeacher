@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.detection.detector import analyze_track
+from app.detection.detector import TrackSample, analyze_track
 from app.grading.config import load_grading_config
-from app.grading.deviations import build_approach_analysis
+from app.grading.deviations import build_approach_analysis, estimate_course_deg
 from app.grading.land_grader import grade_land_landing
 from app.grading.lso_grader import grade_carrier_approach
 from tests.conftest import GRADING_YAML
@@ -61,6 +61,30 @@ def test_window_excludes_touchdown_sample() -> None:
     window = analysis.window(3.0)
     assert window
     assert all(s.time < analysis.touchdown_time for s in window)
+
+
+def test_estimate_course_deg_prefers_touchdown_heading_over_curved_track() -> None:
+    """A continuous turn onto final (overhead break / tactical initial, the
+    normal way fighters land in DCS) makes a two-point position bearing
+    over the whole captured approach an unreliable course estimate: it
+    cuts across the turn instead of reading the runway heading. The
+    aircraft's own heading at touchdown must win whenever ACMI supplied
+    it (Issue: production landings showed 160-1200m "centerline
+    deviation" while touchdown itself was only ~20-30m off centerline --
+    a systematic angular bias from this exact 2-point method)."""
+    # Quarter-circle-ish turn: well clear of a straight line from the first
+    # to the last point.
+    samples = [
+        TrackSample(time=0.0, latitude=0.0, longitude=0.0),
+        TrackSample(time=10.0, latitude=0.01, longitude=0.01),
+        TrackSample(time=20.0, latitude=0.02, longitude=0.005),
+    ]
+    position_bearing = estimate_course_deg(samples, None)
+    assert estimate_course_deg(samples, 330.0) == pytest.approx(330.0)
+    # Sanity check the scenario is meaningful: the position-only fallback
+    # really does disagree substantially with the touchdown heading.
+    angular_diff = abs(((330.0 - position_bearing + 180) % 360) - 180)
+    assert angular_diff > 30
 
 
 # ---------------------------------------------------------------------------
