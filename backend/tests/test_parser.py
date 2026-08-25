@@ -155,7 +155,20 @@ def test_transform_syntax4_heading_flat_world() -> None:
     obj = parser.objects["101"]
     assert obj.u == pytest.approx(1000.0)
     assert obj.v == pytest.approx(2000.0)
-    assert obj.heading == pytest.approx(185.3)
+    # Slot 9 is the projected/flat-world heading; it is offset from true
+    # north by the meridian convergence and belongs with u/v, not lat/lon.
+    assert obj.grid_heading == pytest.approx(185.3)
+    # `heading` is the true heading used by the lat/lon-based graders, so it
+    # must resolve to Yaw, not to the flat-world value.
+    assert obj.heading == pytest.approx(180.0)
+
+
+def test_heading_falls_back_to_flat_world_when_yaw_absent() -> None:
+    parser = AcmiParser()
+    parser.feed_line("101,T=-129|43|1500,HDG=77.5")
+    obj = parser.objects["101"]
+    assert obj.yaw is None
+    assert obj.heading == pytest.approx(77.5)
 
 
 def test_speed_prefers_tas_then_cas_then_ias() -> None:

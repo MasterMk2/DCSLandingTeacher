@@ -99,10 +99,38 @@ class AcmiObject:
         return to_float(self.properties.get("Yaw"))
 
     @property
-    def heading(self) -> float | None:
-        """True heading: ``Heading`` from a #4 transform, or the ``HDG`` property."""
+    def grid_heading(self) -> float | None:
+        """Heading in the simulator's flat/native world (transform slot 9).
+
+        This is **not** true heading. The flat world is a map projection, so
+        its north differs from true north by the meridian convergence at the
+        object's position. Measured against a live DCS Caucasus server:
+        ``Yaw - Heading`` fits ``sin(latitude) * (longitude - 33.05)`` to
+        within 0.2 deg over the whole map (2-8 deg of error, zero only on the
+        projection's central meridian).
+
+        Only meaningful together with :attr:`u` / :attr:`v`, which live in the
+        same projected frame. Never mix it with latitude/longitude.
+        """
         value = self.properties.get("Heading") or self.properties.get("HDG")
         return to_float(value)
+
+    @property
+    def heading(self) -> float | None:
+        """True heading in degrees from true north.
+
+        ``Yaw`` is referenced to true north and so is the only heading that
+        matches the latitude/longitude tangent-plane geometry the detector and
+        graders use. Verified against real approaches: the lat/lon ground
+        track agrees with ``Yaw`` to within the crab angle, while the
+        flat-world :attr:`grid_heading` agrees with the ``u``/``v`` ground
+        track by the same margin.
+
+        Falls back to :attr:`grid_heading` only when the source omits Yaw;
+        that reintroduces the convergence error but beats having no heading.
+        """
+        yaw = self.yaw
+        return yaw if yaw is not None else self.grid_heading
 
     # --- motion / flight data -------------------------------------------------------
     @property
