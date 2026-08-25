@@ -1,0 +1,17 @@
+# Build artifacts and dependencies are produced inside the image; copying the
+# host's copies in wastes context, and a stale frontend/dist can be mistaken
+# for a fresh build.
+frontend/node_modules
+frontend/dist
+**/*.tsbuildinfo
+
+# Python build/test leftovers
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/*.egg-info
+backend/.venv
+
+.git
+.github
