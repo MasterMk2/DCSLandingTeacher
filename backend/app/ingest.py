@@ -340,12 +340,40 @@ class TrackIngestor:
                         longitude=source.longitude,
                         altitude=source.altitude,
                         agl=source.agl,
-                        speed=source.speed,
+                        speed=self._ground_speed_ms(obj_id, source),
                         heading=source.heading,
                         aoa=source.aoa,
                         on_ground=source.on_ground,
                     ),
                 )
+
+    def _ground_speed_ms(self, obj_id: str, source: AcmiObject) -> float | None:
+        """Best-available horizontal speed in m/s (Issue D-2).
+
+        DCS's own Tacview export never emits ``TAS``/``CAS``/``IAS`` (verified
+        against a live server: real aircraft object lines carry only
+        position/attitude/identity properties), so ``AcmiObject.speed`` is
+        always ``None`` for real games. Fall back to a two-sample ground
+        speed estimate from this aircraft's own previous position.
+        """
+        if source.speed is not None:
+            return source.speed
+        buffer = self._aircraft_buffers.get(obj_id)
+        previous = buffer.last() if buffer is not None else None
+        if (
+            previous is None
+            or previous.latitude is None
+            or previous.longitude is None
+        ):
+            return None
+        dt = source.last_seen - previous.time
+        if dt <= 0.05:
+            # Too little elapsed time: position jitter would dominate.
+            return None
+        distance = haversine_m(
+            previous.latitude, previous.longitude, source.latitude, source.longitude
+        )
+        return distance / dt
 
     def _ground_altitude_for(
         self, latitude: float | None, longitude: float | None

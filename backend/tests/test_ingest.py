@@ -62,6 +62,35 @@ async def test_ingest_persists_flight_objects_tracks(session_factory) -> None:
     assert last.altitude == pytest.approx(1999.50)
 
 
+async def test_ingest_derives_ground_speed_when_acmi_omits_speed_properties(
+    session_factory,
+) -> None:
+    """DCS never emits TAS/CAS/IAS (Issue D-2); ingest must derive speed
+    from consecutive positions instead of leaving it null."""
+    from app.detection.geometry import haversine_m
+
+    ingestor = TrackIngestor(session_factory)
+    lines = [
+        "FileType=text/acmi/tacview",
+        "FileVersion=2.2",
+        "0,ReferenceTime=2011-06-02T05:00:00Z",
+        "#0.00",
+        "301,T=0|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
+        "#10.00",
+        "301,T=0|0.01|1000|0|0|90",
+    ]
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
+    assert len(samples) == 2
+    # No prior sample to derive a speed from on the very first update.
+    assert samples[0].speed is None
+    expected_speed = haversine_m(0.0, 0.0, 0.01, 0.0) / 10.0
+    assert samples[1].speed == pytest.approx(expected_speed, rel=1e-6)
+
+
 async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
     ingestor = TrackIngestor(session_factory)
     await ingestor.handle_line("#not-a-number")  # must not raise

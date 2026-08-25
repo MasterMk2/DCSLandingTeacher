@@ -480,3 +480,6 @@ class RollingTrackBuffer:
 
     def snapshot(self) -> list[TrackSample]:
         return list(self._samples)
+
+    def last(self) -> TrackSample | None:
+        return self._samples[-1] if self._samples else None
