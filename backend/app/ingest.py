@@ -71,6 +71,8 @@ class LandingContext:
     event: LandingEvent
     object_row_id: int | None = None
     carrier_row_id: int | None = None
+    source_id: str = "default"
+    flight_reference_time: str | None = None
 
 
 #: Called for every newly detected landing. Returns the persisted row id so
@@ -95,10 +97,12 @@ class TrackIngestor:
         landing_listener: LandingListener | None = None,
         landing_finalize_listener: LandingFinalizeListener | None = None,
         sample_buffer_s: float = 600.0,
+        source_id: str = "default",
     ) -> None:
         self._session_factory = session_factory
         self._max_batch_size = max(1, max_batch_size)
         self._max_batch_age_s = max_batch_age_s
+        self._source_id = source_id
         self._parser = AcmiParser()
         self._flight_id: int | None = None
         #: acmi object id -> ``objects.id`` row
@@ -202,6 +206,7 @@ class TrackIngestor:
         header = self._parser.header
         session = self._get_session()
         flight = Flight(
+            source_id=self._source_id,
             reference_time=header.get("ReferenceTime"),
             data_source=header.get("DataSource"),
             data_recorder=header.get("DataRecorder"),
@@ -410,6 +415,8 @@ class TrackIngestor:
                     if landing.carrier_obj_id
                     else None
                 ),
+                source_id=self._source_id,
+                flight_reference_time=self._parser.header.get("ReferenceTime"),
             )
 
             if not landing.finalized and not force_final:

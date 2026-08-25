@@ -257,6 +257,7 @@ class LandingPipeline:
 
             landing = Landing(
                 flight_id=context.flight_id,
+                source_id=context.source_id,
                 object_id=aircraft_row_id,
                 carrier_object_id=carrier_row_id,
                 kind=event.kind,
