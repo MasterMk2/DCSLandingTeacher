@@ -8,6 +8,7 @@ from logging import getLogger
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from sqlalchemy import update
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,10 +24,37 @@ from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
 from app.importer import ImportJobManager
 from app.models.database import create_engine, create_session_factory, init_db
+from app.models.entities import Landing
 from app.models.migrations import run_migrations
 from app.pipeline import LandingPipeline
 
 logger = getLogger(__name__)
+
+
+async def settle_orphaned_provisionals(session_factory) -> int:
+    """Mark leftover ``provisional`` landings as final at startup (Issue #5).
+
+    Two-phase confirmation tracks pending rows in the ingestor's in-memory
+    map, so a row still ``provisional`` when the process starts can never be
+    confirmed: nothing is left to correlate it with. Without this it shows
+    "評価中" in the UI forever.
+
+    The recorded outcome is kept as-is -- it is the best evidence available
+    for a landing whose observation was cut short.
+    """
+    async with session_factory() as session:
+        result = await session.execute(
+            update(Landing)
+            .where(Landing.outcome_status == "provisional")
+            .values(outcome_status="final")
+        )
+        await session.commit()
+    settled = result.rowcount or 0
+    if settled:
+        logger.warning(
+            "settled %d landing(s) left provisional by a previous run", settled
+        )
+    return settled
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -44,6 +72,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         else:
             await init_db(engine)
+
+        await settle_orphaned_provisionals(session_factory)
 
         notifier = LandingNotifier()
         pipeline = LandingPipeline(
