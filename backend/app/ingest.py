@@ -169,7 +169,23 @@ class TrackIngestor:
 
     def _get_session(self) -> AsyncSession:
         if self._session is None:
-            self._session = self._session_factory()
+            # autoflush off: the per-update reads below (session.get /
+            # select on DcsObject) would otherwise flush the queued Track
+            # inserts, which opens SQLite's single write transaction within
+            # milliseconds of the previous commit and holds it for the whole
+            # batching window. Measured on the live server that was a 3.0 s
+            # hold with a 0.17 s gap -- 98.8% occupancy -- which starved the
+            # ACMI importer and /regrade into "database is locked" (SQLite's
+            # busy handler backs off in 100 ms steps and cannot reliably hit
+            # a 0.17 s window).
+            #
+            # Batching is supposed to defer the *writes*, not hold the lock
+            # across them: with autoflush off the inserts land in one burst
+            # at commit. Nothing here reads back an unflushed row -- object
+            # rows are explicitly flushed when created (their ids are needed
+            # for foreign keys) and then served from _object_row_ids and the
+            # identity map.
+            self._session = self._session_factory(autoflush=False)
             self._pending = 0
         # The session object is reused across commits (a commit ends the
         # transaction, not the session), so a new batch starting on an

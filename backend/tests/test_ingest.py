@@ -206,3 +206,57 @@ async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> No
     finally:
         await ingestor.close()
         await engine.dispose()
+
+
+async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> None:
+    """定常状態の更新でバッチ中に書き込みロックを取らないこと。
+
+    毎更新で走る `session.get()` が autoflush を誘発して Track の INSERT を
+    先に飛ばしてしまい、SQLite の唯一の書き込みトランザクションをバッチ期間
+    (実サーバ実測 3.0 秒、空き窓 0.17 秒) ずっと保持していた。その間 import と
+    /regrade は "database is locked" で落ちる。INSERT は commit 時にまとめて
+    出るのが正しい。
+
+    新規オブジェクトの作成だけは id が外部キーに要るので明示 flush する。
+    ここで検証するのは、以後の更新がロックを取らないこと。
+    """
+    from sqlalchemy.orm import Session  # noqa: F401
+
+    db_path = (tmp_path / "lock.db").as_posix()
+    engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
+    await init_db(engine)
+    session_factory = create_session_factory(engine)
+
+    inserts = {"n": 0}
+
+    def _count(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        if statement.lstrip().upper().startswith("INSERT INTO TRACKS"):
+            inserts["n"] += 1
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _count)
+    ingestor = TrackIngestor(session_factory, max_batch_size=1000)
+    try:
+        # オブジェクトを登録しきる (ここでの明示 flush は許容)。
+        await ingestor.handle_line("FileType=text/acmi/tacview")
+        await ingestor.handle_line("#0.00")
+        await ingestor.handle_line("101,T=41.60|41.50|100,Type=Air+FixedWing,Name=F-16")
+        await ingestor.close()
+        inserts["n"] = 0
+
+        # 以降は既知オブジェクトの更新のみ = 定常状態。
+        ingestor = TrackIngestor(session_factory, max_batch_size=1000)
+        for i in range(1, 40):
+            await ingestor.handle_line(f"#{i}.00")
+            await ingestor.handle_line(f"101,T=41.6{i:02d}||{100 + i}")
+
+        assert inserts["n"] == 0, "バッチ中に書き込みトランザクションを開いている"
+
+        await ingestor.close()
+        assert inserts["n"] > 0  # commit でまとめて出る
+
+        async with session_factory() as session:
+            rows = (await session.execute(select(Track))).scalars().all()
+        assert len(rows) == 40
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _count)
+        await engine.dispose()
