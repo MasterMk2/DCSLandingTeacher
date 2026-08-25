@@ -127,7 +127,7 @@ def grade_land_landing(
 
     cl_values = [
         abs(s.centerline_deviation)
-        for s in analysis.samples
+        for s in window
         if s.centerline_deviation is not None
     ]
     max_cl_dev = max(cl_values) if cl_values else None

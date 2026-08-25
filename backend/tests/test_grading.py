@@ -90,6 +90,52 @@ def test_land_grader_hard_landing_scores_low() -> None:
     assert result.grade in ("C", "D", "E")
 
 
+def test_land_grader_centerline_uses_final_segment_not_whole_approach() -> None:
+    """A wide turn onto final (typical fighter overhead-break entry) puts
+    early samples far off the straight-line course estimate; that must not
+    tank the centerline score the way it tanks a real off-axis final. Only
+    glideslope was windowed to the final 15s -- centerline used every
+    sample in the whole ~60s/2nm approach, including the turn."""
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    touchdown_time = 100.0
+    samples = [
+        DeviationSample(
+            time=float(t),
+            distance_to_go=3000.0 - t * 10,
+            glideslope_deviation=0.0,
+            centerline_deviation=800.0,
+            speed=70.0,
+            agl=300.0,
+        )
+        for t in range(0, 40, 5)
+    ] + [
+        DeviationSample(
+            time=float(t),
+            distance_to_go=(100 - t) * 30,
+            glideslope_deviation=0.0,
+            centerline_deviation=2.0,
+            speed=70.0,
+            agl=(100 - t) * 5,
+        )
+        for t in range(86, 100)
+    ]
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=1.0,
+        samples=samples,
+    )
+    result = grade_land_landing(analysis, CONFIG)
+    centerline = next(c for c in result.components if c.name == "centerline")
+    assert centerline.evidence["max_abs_deviation_m"] == pytest.approx(2.0)
+    assert centerline.score >= 90
+
+
 def test_land_grader_off_centerline_penalized() -> None:
     event = _land_event(lateral_offset_m=25.0, pre_touchdown_descent_ms=1.2)
     analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
