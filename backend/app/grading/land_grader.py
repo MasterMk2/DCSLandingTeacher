@@ -113,12 +113,15 @@ def grade_land_landing(
         speed_ratio, settings["touchdown_speed_ratio"]
     )
 
-    gs_values = [
-        abs(s.glideslope_deviation)
-        for s in window
-        if s.glideslope_deviation is not None
+    gs_devs = [
+        s.glideslope_deviation for s in window if s.glideslope_deviation is not None
     ]
-    mean_gs_dev = sum(gs_values) / len(gs_values) if gs_values else None
+    # 採点は絶対値の平均で行う。上下に振れた進入が相殺されて「完璧」に
+    # ならないようにするため。
+    mean_gs_dev = sum(abs(d) for d in gs_devs) / len(gs_devs) if gs_devs else None
+    # 高め / 低めの向きは符号付き平均でしか判定できない。絶対値平均は常に
+    # 非負なので、それで判定すると「低め」に到達できない。
+    mean_signed_gs_dev = sum(gs_devs) / len(gs_devs) if gs_devs else None
     gs_bands = settings["glideslope_deviation_m"]
     gs_score = (
         _band_score(mean_gs_dev, gs_bands["good"], gs_bands["fair"], gs_bands["poor"])
@@ -167,6 +170,12 @@ def grade_land_landing(
                 "mean_abs_deviation_final_15s_m": (
                     round(mean_gs_dev, 2) if mean_gs_dev is not None else None
                 ),
+                # 符号付き: 正 = 理想より上。講評の「高め / 低め」の根拠。
+                "mean_signed_deviation_final_15s_m": (
+                    round(mean_signed_gs_dev, 2)
+                    if mean_signed_gs_dev is not None
+                    else None
+                ),
                 "glideslope_deg": analysis.glideslope_deg,
             },
         ),
@@ -186,12 +195,17 @@ def grade_land_landing(
             grade = letter
             break
 
-    comment = _build_comment(grade, rate_label, speed_label, mean_gs_dev, max_cl_dev)
+    comment = _build_comment(
+        grade, rate_label, speed_label, mean_gs_dev, mean_signed_gs_dev, max_cl_dev
+    )
     metrics = {
         "touchdown_descent_rate_fpm": round(descent_fpm, 1),
         "touchdown_speed_ratio": round(speed_ratio, 3) if speed_ratio is not None else None,
         "mean_glideslope_deviation_final_15s_m": (
             round(mean_gs_dev, 2) if mean_gs_dev is not None else None
+        ),
+        "mean_signed_glideslope_deviation_final_15s_m": (
+            round(mean_signed_gs_dev, 2) if mean_signed_gs_dev is not None else None
         ),
         "max_centerline_deviation_m": round(max_cl_dev, 2) if max_cl_dev is not None else None,
         "outcome": analysis.outcome,
@@ -210,6 +224,7 @@ def _build_comment(
     rate_label: str,
     speed_label: str,
     mean_gs_dev: float | None,
+    mean_signed_gs_dev: float | None,
     max_cl_dev: float | None,
 ) -> str:
     # 偏差は ft で述べる (Issue D-4: 高度・偏差は ft、距離は nm)。しきい値の
@@ -217,12 +232,20 @@ def _build_comment(
     parts: list[str] = []
     parts.append(f"接地は{rate_label}（降下率ベース）")
     parts.append(f"速度は{speed_label}")
-    if mean_gs_dev is not None:
-        direction = "高め" if mean_gs_dev > 0 else "低め"
-        parts.append(
-            f"最終進入のグライドスロープは理想より{direction}"
-            f"（平均 {abs(mean_gs_dev) * M_TO_FT:.0f} ft）"
-        )
+    if mean_gs_dev is not None and mean_signed_gs_dev is not None:
+        if abs(mean_signed_gs_dev) < mean_gs_dev / 2:
+            # 上下に振れていて一方向に寄っていない。この状態で「高め」「低め」と
+            # 言い切ると、実際にやるべき修正 (安定させること) を取り違えさせる。
+            parts.append(
+                f"最終進入のグライドスロープは上下にばらついた"
+                f"（平均偏差 {mean_gs_dev * M_TO_FT:.0f} ft）"
+            )
+        else:
+            direction = "高め" if mean_signed_gs_dev > 0 else "低め"
+            parts.append(
+                f"最終進入のグライドスロープは理想より{direction}"
+                f"（平均 {abs(mean_signed_gs_dev) * M_TO_FT:.0f} ft）"
+            )
     if max_cl_dev is not None and max_cl_dev > 5.0:
         parts.append(f"センターラインから最大 {max_cl_dev * M_TO_FT:.0f} ft ずれた")
     verdicts = {

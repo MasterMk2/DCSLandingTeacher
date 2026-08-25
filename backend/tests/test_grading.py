@@ -190,6 +190,60 @@ def test_land_grader_comment_states_deviations_in_feet() -> None:
     assert f"{dev_m / 0.3048:.0f} ft" in result.comment
 
 
+def _analysis_with_gs_deviations(devs: list[float]):
+    """最終 15 秒に指定のグライドスロープ偏差を持つ analysis を組む。"""
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    touchdown_time = 100.0
+    samples = [
+        DeviationSample(
+            time=touchdown_time - len(devs) + i,
+            distance_to_go=(len(devs) - i) * 70.0,
+            glideslope_deviation=dev,
+            centerline_deviation=1.0,
+            speed=70.0,
+            agl=(len(devs) - i) * 5.0,
+        )
+        for i, dev in enumerate(devs)
+    ]
+    return ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=1.0,
+        samples=samples,
+    )
+
+
+def test_land_grader_says_low_when_the_approach_was_below_glideslope() -> None:
+    """「低め」が到達不能だった: 向きを絶対値平均から決めていたため、
+    実際には下を飛んでいた進入まで一律「高め」と言われていた。"""
+    result = grade_land_landing(_analysis_with_gs_deviations([-30.0] * 12), CONFIG)
+    assert "低め" in result.comment
+    assert "高め" not in result.comment
+
+    high = grade_land_landing(_analysis_with_gs_deviations([30.0] * 12), CONFIG)
+    assert "高め" in high.comment
+    assert "低め" not in high.comment
+
+
+def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() -> None:
+    """上下に振れて一方向に寄っていない進入を「高め」「低め」と言い切らない。"""
+    result = grade_land_landing(
+        _analysis_with_gs_deviations([30.0, -30.0] * 6), CONFIG
+    )
+    assert "ばらついた" in result.comment
+    assert "高め" not in result.comment and "低め" not in result.comment
+    # 振れ幅は採点に効いたままである (相殺されて満点にならない)。
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert glideslope.evidence["mean_abs_deviation_final_15s_m"] == pytest.approx(30.0)
+    assert glideslope.evidence["mean_signed_deviation_final_15s_m"] == pytest.approx(0.0)
+    assert glideslope.score < 20
+
+
 def test_land_grader_letter_bands() -> None:
     letters = CONFIG.land_grading["letters"]
     assert letters["A"] > letters["B"] > letters["C"] > letters["D"]
