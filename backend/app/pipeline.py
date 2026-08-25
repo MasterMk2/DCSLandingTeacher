@@ -108,6 +108,18 @@ class LandingPipeline:
             landing.kind = event.kind
             landing.outcome = event.outcome
             landing.outcome_status = "final"
+            # The touchdown itself moves between the provisional and final
+            # analysis: bounces absorbed after the first report shift it to
+            # the last contact of the sequence. Refresh everything derived
+            # from it, or the row keeps describing the first bounce.
+            touchdown = event.touchdown
+            landing.touchdown_time = touchdown.time
+            landing.latitude = touchdown.latitude
+            landing.longitude = touchdown.longitude
+            landing.altitude = touchdown.altitude
+            landing.heading = touchdown.heading
+            landing.speed = touchdown.speed
+            landing.descent_rate = touchdown.descent_rate_ms
             landing.grade = result.grade
             landing.score = score
             landing.comment = result.comment

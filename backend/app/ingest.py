@@ -430,7 +430,14 @@ class TrackIngestor:
         # from forcing a synchronous disk commit each time.
         await self._flush(force=True)
         for landing in events:
-            key = (obj_id, round(landing.touchdown.time, 3))
+            # Key on the first ground contact, not the touchdown: the
+            # touchdown is the *last* contact of a merged bounce sequence and
+            # therefore walks forward as the live buffer grows and further
+            # bounces are absorbed. Keying on it made every bounce look like
+            # a brand-new landing (one bouncy arrival produced three rows)
+            # and orphaned the earlier provisional rows at "provisional"
+            # forever, because their key never came back to be popped.
+            key = (obj_id, round(landing.first_contact_time, 3))
             context = LandingContext(
                 flight_id=self._flight_id,
                 acmi_object_id=obj_id,

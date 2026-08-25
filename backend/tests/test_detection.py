@@ -115,3 +115,52 @@ def test_approach_window_respects_distance_limit() -> None:
     times = [s.time for s in events[0].approach]
     # 3704 m + margin at 70 m/s ~= 60 s; nothing much older may slip in.
     assert min(times) >= -70.0
+
+
+def test_bounce_sequence_keeps_a_stable_identity_as_it_is_absorbed() -> None:
+    """再解析でイベント同一性が変わらないこと (Issue #5 の孤児化対策)。
+
+    `touchdown` はマージしたバウンド列の *最後* の接地なので、ライブ監視で
+    バッファが伸びてバウンドを吸収するたびに前へ動く。それをキーにしていたため
+    1 回のバウンド着陸が 3 行に割れ、途中の行が provisional のまま孤児化した。
+    `first_contact_time` は最初の接地に固定されるので同一性が保たれる。
+    """
+    from app.detection.detector import TrackSample, analyze_track
+
+    ground = 0.0
+
+    def sample(t: float, agl: float) -> TrackSample:
+        return TrackSample(
+            time=t,
+            latitude=41.6 + t * 1e-5,
+            longitude=41.6,
+            altitude=ground + agl,
+            agl=agl,
+            speed=70.0,
+            heading=0.0,
+            on_ground=agl <= 3.0,
+        )
+
+    # 進入 → 接地 → バウンド (頂点 6.4 m) → 再接地 → 小バウンド → 接地して停止。
+    approach = [sample(float(t), 60.0 - t * 4.0) for t in range(0, 14)]
+    bounce = [
+        sample(14.0, 2.6), sample(14.5, 0.7),          # 1 回目の接地
+        sample(15.0, 3.1), sample(16.0, 6.4), sample(17.0, 3.4),
+        sample(17.5, 2.3), sample(18.0, 1.4),          # 2 回目の接地
+        sample(18.5, 3.2), sample(19.0, 3.9),
+        sample(20.0, 2.9),                             # 3 回目の接地
+    ]
+    settled = [sample(20.0 + i * 0.5, 2.3) for i in range(1, 80)]
+    full = approach + bounce + settled
+
+    # ライブ監視を模して、バッファが伸びる各時点で解析する。
+    identities, touchdowns = set(), set()
+    for cut in (16, 19, 21, len(full)):
+        events = analyze_track(full[:cut], ground, carriers={}, current_time=full[cut - 1].time)
+        assert len(events) == 1, f"cut={cut} で {len(events)} 件に割れた"
+        identities.add(round(events[0].first_contact_time, 3))
+        touchdowns.add(round(events[0].touchdown.time, 3))
+
+    # 接地時刻は動く (それがバグの原因) が、同一性は 1 つに保たれる。
+    assert identities == {14.0}
+    assert len(touchdowns) > 1

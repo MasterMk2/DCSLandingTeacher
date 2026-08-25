@@ -149,6 +149,15 @@ class LandingEvent:
     carrier_obj_id: str | None
     carrier_name: str | None
     approach: list[TrackSample]
+    #: Time of the *first* ground contact of this sequence.
+    #:
+    #: ``touchdown`` is the last contact of a merged bounce sequence, so it
+    #: moves forward every time a further bounce is absorbed. During live
+    #: monitoring the same landing is re-analysed on a growing buffer, which
+    #: means touchdown time is not a stable identity for an in-progress
+    #: event; the first contact is. Callers correlating repeated analyses of
+    #: one landing (two-phase confirmation) must key on this.
+    first_contact_time: float = 0.0
     #: Ship-relative representation of the approach (carrier events only):
     #: list of dicts with time, along, lateral, gs-relevant altitude data.
     ship_relative: list[dict] = field(default_factory=list)
@@ -355,6 +364,7 @@ def analyze_track(
             carrier_name=carrier.name if carrier else None,
             approach=approach,
             finalized=finalized,
+            first_contact_time=samples[index].time,
         )
         if carrier is not None:
             # Carrier state at the touchdown instant (Issue #3).
