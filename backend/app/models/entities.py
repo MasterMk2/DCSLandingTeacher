@@ -133,6 +133,9 @@ class Landing(Base):
     # Raw approach segment + computed deviations, kept for re-evaluation (FR-7)
     approach_track: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # Approach pattern classification: "overhead" | "straight_in" | "unknown"
+    approach_pattern: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     grading_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

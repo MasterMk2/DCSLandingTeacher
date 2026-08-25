@@ -83,6 +83,7 @@ def _summary(
         created_at=landing.created_at,
         source_id=landing.source_id,
         source_name=landing.source_id,  # Could be enhanced to resolve actual name from settings
+        approach_pattern=landing.approach_pattern,
     )
 
 

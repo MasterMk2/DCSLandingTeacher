@@ -246,6 +246,34 @@ main {
   border-color: var(--border);
 }
 
+/* ---------- Approach pattern badges ---------- */
+
+.pattern-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 700;
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+
+.pattern-overhead {
+  color: #fff;
+  background: var(--info);
+}
+
+.pattern-straight_in {
+  color: var(--accent);
+  background: rgba(57, 217, 138, 0.15);
+  border-color: var(--accent);
+}
+
+.pattern-unknown {
+  color: var(--text-dim);
+  background: rgba(159, 184, 168, 0.12);
+  border-color: var(--text-dim);
+}
+
 /* ---------- Detail / scopes ---------- */
 
 .detail section {
@@ -496,6 +524,11 @@ main {
   }
 
   .grade-badge {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .pattern-badge {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }

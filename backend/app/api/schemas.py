@@ -43,6 +43,8 @@ class LandingSummary(BaseModel):
     source_id: str | None = None
     #: Source display name (Issue #13 multi-source support)
     source_name: str | None = None
+    #: Approach pattern classification: "overhead" | "straight_in" | "unknown"
+    approach_pattern: str | None = None
 
 
 class FactorOut(BaseModel):

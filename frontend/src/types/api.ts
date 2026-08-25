@@ -43,6 +43,8 @@ export interface LandingSummary {
   source_id?: string | null;
   /** Source display name (Issue #13 multi-source support) */
   source_name?: string | null;
+  /** Approach pattern classification: "overhead" | "straight_in" | "unknown" */
+  approach_pattern?: string | null;
 }
 
 /** FactorOut. */

@@ -124,6 +124,18 @@ export function Detail({ id, onBack }: DetailProps) {
               <th>アウトカム</th>
               <td>{detail.outcome ?? "-"}</td>
             </tr>
+            <tr>
+              <th>進入パターン</th>
+              <td>
+                {detail.approach_pattern && (
+                  <span className={`pattern-badge ${detail.approach_pattern}`}>
+                    {detail.approach_pattern === "overhead" && "オーバーヘッド"}
+                    {detail.approach_pattern === "straight_in" && "ストレートイン"}
+                    {detail.approach_pattern === "unknown" && "不明"}
+                  </span>
+                )}
+              </td>
+            </tr>
           </tbody>
         </table>
 

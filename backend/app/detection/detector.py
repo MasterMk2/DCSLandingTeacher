@@ -173,6 +173,9 @@ class LandingEvent:
     #: the full-stop dwell has elapsed). Live monitoring should only report
     #: finalized events; offline analysis always yields finalized events.
     finalized: bool = True
+    #: Approach pattern classification: "overhead" | "straight_in" | "unknown".
+    #: Overhead = initial -> break -> base -> final (typical fighter pattern).
+    approach_pattern: str = "unknown"
 
 
 def compute_agl(
@@ -248,6 +251,104 @@ def _nearest_carrier(
             best = carrier
             best_distance = distance
     return best
+
+
+def _classify_approach_pattern(approach: list[TrackSample]) -> str:
+    """Classify the approach pattern: 'overhead', 'straight_in', or 'unknown'.
+
+    Overhead pattern (typical fighter):
+    - Initial: high altitude, high speed, roughly straight
+    - Break: sharp turn (high heading rate) near the airfield
+    - Base: perpendicular to final course, descending
+    - Final: aligned with runway, stabilized
+
+    Heuristics:
+    - Need at least ~30s of approach data
+    - Detect a significant heading change (> 90 deg) in the middle portion
+    - The turn should be a "break" - high rate, not a gentle curve
+    - Final segment (from heading stabilization to touchdown) should be relatively straight
+    """
+    # Filter out ground roll (post-touchdown) samples; only airborne phase matters for pattern.
+    airborne_approach = [s for s in approach if not s.on_ground]
+    if len(airborne_approach) < 10:
+        return "unknown"
+
+    # Extract samples with valid heading
+    headed_samples = [(s.time, s.heading) for s in airborne_approach if s.heading is not None]
+    if len(headed_samples) < 10:
+        return "unknown"
+
+    times = [s.time for s in airborne_approach]
+    total_duration = times[-1] - times[0]
+    if total_duration < 20.0:
+        return "unknown"
+
+    # --- Determine final approach heading (touchdown heading) ---
+    final_heading = airborne_approach[-1].heading
+    if final_heading is None:
+        return "unknown"
+
+    # --- Quick check for straight-in: mostly aligned throughout ---
+    # If >70% of airborne samples are within 20 deg of final heading,
+    # it's a straight-in approach (no break turn).
+    aligned_count = sum(
+        1 for _, h in headed_samples
+        if abs((h - final_heading + 180) % 360 - 180) < 20.0
+    )
+    if aligned_count / len(headed_samples) > 0.7:
+        return "straight_in"
+
+    # --- Find where the aircraft stabilizes on final heading ---
+    # Scan backwards from touchdown to find the last point where heading
+    # deviated significantly from final heading. Everything after that
+    # is the "stabilized final segment".
+    ALIGNMENT_THRESHOLD_DEG = 20.0  # degrees from final heading
+    final_segment_start_idx = None
+    for i in range(len(headed_samples) - 1, -1, -1):
+        _, h = headed_samples[i]
+        dh = (h - final_heading + 180) % 360 - 180
+        if abs(dh) > ALIGNMENT_THRESHOLD_DEG:
+            final_segment_start_idx = i + 1
+            break
+    if final_segment_start_idx is None:
+        # Aligned from the beginning (should have been caught by straight-in check)
+        final_segment_start_idx = 0
+
+    final_segment_time = headed_samples[final_segment_start_idx][0]
+    final_segment = headed_samples[final_segment_start_idx:]
+
+    # --- Middle portion: between initial (first 10s) and final segment ---
+    initial_cutoff = times[0] + 10.0
+    middle_samples = [(t, h) for t, h in headed_samples
+                      if initial_cutoff <= t < final_segment_time]
+    if len(middle_samples) < 5:
+        return "unknown"
+
+    # Calculate max heading rate in middle portion (the "break" turn)
+    max_heading_rate = 0.0
+    for i in range(1, len(middle_samples)):
+        t0, h0 = middle_samples[i - 1]
+        t1, h1 = middle_samples[i]
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        dh = (h1 - h0 + 180) % 360 - 180
+        rate = abs(dh) / dt
+        max_heading_rate = max(max_heading_rate, rate)
+
+    # Break turn: aggressive turn > 3 deg/s
+    # Straight-in: gentle curves < 1.5 deg/s (already handled above)
+    if max_heading_rate > 3.0:
+        # Verify final segment is stable (heading spread < 30 deg)
+        final_headings = [h for _, h in final_segment]
+        if len(final_headings) >= 3:
+            final_spread = max(final_headings) - min(final_headings)
+            if final_spread > 180:
+                final_spread = 360 - final_spread
+            if final_spread < 30.0:
+                return "overhead"
+
+    return "unknown"
 
 
 def _cut_approach(
@@ -352,6 +453,7 @@ def analyze_track(
             outcome = "bolter"
 
         approach = _cut_approach(samples, index, touchdown, config)
+        approach_pattern = _classify_approach_pattern(approach)
         if outcome != "full_stop" or current_time is None:
             finalized = True
         else:
@@ -365,6 +467,7 @@ def analyze_track(
             approach=approach,
             finalized=finalized,
             first_contact_time=samples[index].time,
+            approach_pattern=approach_pattern,
         )
         if carrier is not None:
             # Carrier state at the touchdown instant (Issue #3).

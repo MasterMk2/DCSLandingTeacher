@@ -126,6 +126,7 @@ class LandingPipeline:
             landing.factors = result.factors_payload()
             landing.metrics = dict(result.metrics)
             landing.approach_track = analysis.as_dict()
+            landing.approach_pattern = event.approach_pattern
             landing.grading_version = GRADING_VERSION
             landing.graded_at = _utcnow()
             await session.commit()
@@ -289,6 +290,7 @@ class LandingPipeline:
                 factors=result.factors_payload(),
                 metrics=dict(result.metrics),
                 approach_track=analysis.as_dict(),
+                approach_pattern=event.approach_pattern,
                 grading_version=GRADING_VERSION,
                 graded_at=_utcnow(),
             )

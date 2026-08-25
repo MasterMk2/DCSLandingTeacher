@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from app.detection.classify import ObjectClass, classify_object_type
 from app.detection.detector import DetectionConfig, analyze_track
 from tests.helpers import (
@@ -11,6 +13,111 @@ from tests.helpers import (
     make_approach_samples,
     make_carrier_state,
 )
+
+
+def _make_overhead_approach_samples(
+    *,
+    outcome: str = "full_stop",
+    duration_before_s: float = 60.0,
+    ground_time_s: float = 25.0,
+    deck_altitude_m: float = DECK_ALTITUDE_M,
+) -> list:
+    """Build an overhead-break approach: initial -> break -> base -> final.
+
+    Timeline (t=0 is touchdown):
+    - t=-60..-30: Initial (high altitude, high speed, heading 180 - approaching from south)
+    - t=-30..-20: Break turn (sharp right turn from 180 to 270, then to 360/0)
+    - t=-20..-10: Base leg (heading 270, descending)
+    - t=-10..0: Final (heading 360/0, aligned with runway, stabilized)
+    """
+    from app.detection.detector import TrackSample
+
+    M_PER_DEG_LAT = 111320.0
+
+    def _lat_offset(meters: float) -> float:
+        return meters / M_PER_DEG_LAT
+
+    def _lon_offset(meters: float) -> float:
+        return meters / (M_PER_DEG_LAT * math.cos(math.radians(LAT0)))
+
+    samples: list[TrackSample] = []
+    n_before = int(duration_before_s)
+    n_after = max(int(ground_time_s), 12 if outcome != "full_stop" else int(ground_time_s))
+
+    for t in range(-n_before, n_after + 1):
+        time = float(t)
+
+        if t < -30:  # Initial: approaching from south, heading 180 (northbound)
+            dtg = 3000.0 + (t + 30) * 150.0  # ~3nm out
+            latitude = LAT0 - _lat_offset(dtg)
+            longitude = LON0
+            altitude = deck_altitude_m + 1500.0  # High altitude
+            speed = 200.0
+            heading = 180.0
+            on_ground = False
+        elif t < -20:  # Break: sharp right turn 180 -> 270 -> 360
+            progress = (t + 30) / 10.0  # 0..1
+            if progress < 0.5:
+                heading = 180.0 + progress * 180.0  # 180 -> 270
+            else:
+                heading = 270.0 + (progress - 0.5) * 180.0  # 270 -> 360/0
+            # During break, circle around abeam position
+            radius = 1800.0  # ~1nm
+            angle = math.radians(heading)
+            latitude = LAT0 + _lat_offset(radius * math.cos(angle))
+            longitude = LON0 + _lon_offset(radius * math.sin(angle))
+            altitude = deck_altitude_m + 800.0
+            speed = 180.0
+            on_ground = False
+        elif t < -10:  # Base leg: heading 270 (west), descending
+            dtg = 1800.0 + (t + 20) * 150.0
+            angle = math.radians(270.0)
+            latitude = LAT0 + _lat_offset(dtg * math.cos(angle))
+            longitude = LON0 + _lon_offset(dtg * math.sin(angle))
+            altitude = deck_altitude_m + 600.0 + (t + 20) * 30.0  # Descending
+            speed = 150.0
+            heading = 270.0
+            on_ground = False
+        elif t < 0:  # Final: heading 0/360 (north), aligned, stabilized
+            dtg = abs(t) * 70.0
+            ideal_agl = dtg * math.tan(math.radians(3.0))  # 3 deg land glideslope
+            latitude = LAT0 - _lat_offset(dtg)
+            longitude = LON0
+            altitude = deck_altitude_m + ideal_agl
+            speed = 70.0
+            heading = 0.0
+            on_ground = False
+        else:  # Ground roll
+            latitude = LAT0
+            longitude = LON0
+            if outcome == "full_stop":
+                altitude = deck_altitude_m
+                speed = max(5.0, 70.0 - t * 3.0)
+                on_ground = True
+            else:
+                if t <= 3:
+                    altitude = deck_altitude_m
+                    speed = 70.0
+                    on_ground = True
+                else:
+                    altitude = deck_altitude_m + (t - 3) * 5.0
+                    speed = 70.0 + (t - 3) * 1.0
+                    on_ground = False
+
+        samples.append(
+            TrackSample(
+                time=time,
+                latitude=latitude,
+                longitude=longitude,
+                altitude=altitude,
+                agl=None,
+                speed=speed,
+                heading=heading,
+                aoa=None,
+                on_ground=on_ground,
+            )
+        )
+    return samples
 
 
 def test_classify_object_types() -> None:
@@ -164,3 +271,46 @@ def test_bounce_sequence_keeps_a_stable_identity_as_it_is_absorbed() -> None:
     # 接地時刻は動く (それがバグの原因) が、同一性は 1 つに保たれる。
     assert identities == {14.0}
     assert len(touchdowns) > 1
+
+
+def test_approach_pattern_overhead_break() -> None:
+    """Overhead break pattern should be classified as 'overhead'."""
+    samples = _make_overhead_approach_samples(outcome="full_stop")
+    events = analyze_track(samples, DECK_ALTITUDE_M, carriers={})
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.approach_pattern == "overhead"
+
+
+def test_approach_pattern_straight_in() -> None:
+    """Standard straight-in approach should be classified as 'straight_in'."""
+    samples = make_approach_samples(outcome="full_stop", duration_before_s=55.0)
+    events = analyze_track(samples, DECK_ALTITUDE_M, carriers={})
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.approach_pattern == "straight_in"
+
+
+def test_approach_pattern_overhead_touch_and_go() -> None:
+    """Overhead break with touch-and-go outcome should still classify as overhead."""
+    samples = _make_overhead_approach_samples(outcome="touch_and_go")
+    events = analyze_track(samples, DECK_ALTITUDE_M, carriers={})
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.approach_pattern == "overhead"
+    assert event.outcome == "touch_and_go"
+
+
+def test_approach_pattern_carrier_straight_in() -> None:
+    """Carrier approach (straight in) should be classified as straight_in."""
+    samples = make_approach_samples(outcome="full_stop", duration_before_s=55.0)
+    carriers = {"C1": make_carrier_state()}
+    events = analyze_track(samples, DECK_ALTITUDE_M, carriers)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "carrier"
+    assert event.approach_pattern == "straight_in"
