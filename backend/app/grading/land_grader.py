@@ -21,6 +21,7 @@ from typing import Any
 from app.grading.deviations import ApproachAnalysis
 
 MS_TO_FPM = 60.0 / 0.3048  # ~196.85
+M_TO_FT = 1.0 / 0.3048     # ~3.281
 
 
 @dataclass
@@ -211,14 +212,19 @@ def _build_comment(
     mean_gs_dev: float | None,
     max_cl_dev: float | None,
 ) -> str:
+    # 偏差は ft で述べる (Issue D-4: 高度・偏差は ft、距離は nm)。しきい値の
+    # 比較は SI のまま行い、変換するのは文面に出す値だけ。
     parts: list[str] = []
     parts.append(f"接地は{rate_label}（降下率ベース）")
     parts.append(f"速度は{speed_label}")
     if mean_gs_dev is not None:
         direction = "高め" if mean_gs_dev > 0 else "低め"
-        parts.append(f"最終進入のグライドスロープは理想より{direction}（平均 {abs(mean_gs_dev):.1f} m）")
+        parts.append(
+            f"最終進入のグライドスロープは理想より{direction}"
+            f"（平均 {abs(mean_gs_dev) * M_TO_FT:.0f} ft）"
+        )
     if max_cl_dev is not None and max_cl_dev > 5.0:
-        parts.append(f"センターラインから最大 {max_cl_dev:.1f} m ずれた")
+        parts.append(f"センターラインから最大 {max_cl_dev * M_TO_FT:.0f} ft ずれた")
     verdicts = {
         "A": "見事な着陸です。",
         "B": "良好な着陸です。",

@@ -1,6 +1,6 @@
 /** Evaluation summary: grade/score, factors with evidence, comment. */
 
-import { factorDescription, gradeClass, outcomeLabel } from "../lib/format";
+import { factorDescription, formatMetric, gradeClass, outcomeLabel } from "../lib/format";
 import type { Factor } from "../types/api";
 
 export interface GradeSummaryProps {
@@ -18,8 +18,8 @@ function formatEvidence(evidence: Record<string, unknown> | null | undefined): s
   if (!evidence || Object.keys(evidence).length === 0) return "";
   return Object.entries(evidence)
     .map(([k, v]) => {
-      const value = typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v);
-      return `${k}: ${value}`;
+      const { label, text } = formatMetric(k, v);
+      return `${label}: ${text}`;
     })
     .join(" / ");
 }
@@ -81,18 +81,15 @@ export function GradeSummary({
         <>
           <h4>評価メトリクス</h4>
           <dl className="metrics-list">
-            {Object.entries(metrics).map(([k, v]) => (
-              <div key={k} className="metrics-row">
-                <dt>{k}</dt>
-                <dd>
-                  {typeof v === "number"
-                    ? Number.isInteger(v)
-                      ? v
-                      : v.toFixed(2)
-                    : JSON.stringify(v)}
-                </dd>
-              </div>
-            ))}
+            {Object.entries(metrics).map(([k, v]) => {
+              const { label, text } = formatMetric(k, v);
+              return (
+                <div key={k} className="metrics-row">
+                  <dt>{label}</dt>
+                  <dd>{typeof v === "object" && v !== null ? JSON.stringify(v) : text}</dd>
+                </div>
+              );
+            })}
           </dl>
         </>
       )}

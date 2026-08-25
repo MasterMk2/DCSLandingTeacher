@@ -25,6 +25,48 @@ export function mToNm(meters: number): number {
   return meters * M_TO_NM;
 }
 
+/**
+ * Unit-aware rendering of one grading evidence / metric entry (Issue D-4).
+ *
+ * The backend keeps every value SI and encodes the unit in the key suffix
+ * (`_m`, `_ms`, `_fpm`, `_deg`, `_s`). Display converts to the aviation units
+ * used elsewhere in the UI and drops the now-stale suffix, so a label can
+ * never contradict the value it labels.
+ *
+ * `_ms` is ambiguous in the payload: descent rates and horizontal speeds are
+ * both metres per second, but read as fpm and knots respectively.
+ */
+export function formatMetric(key: string, value: unknown): { label: string; text: string } {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return {
+      label: key,
+      text: value === null || value === undefined ? "-" : String(value),
+    };
+  }
+  if (key.endsWith("_ms")) {
+    const label = key.slice(0, -"_ms".length);
+    return /descent|sink/.test(label)
+      ? { label, text: `${Math.round(msToFpm(value))} fpm` }
+      : { label, text: `${Math.round(msToKnots(value))} kt` };
+  }
+  if (key.endsWith("_fpm")) {
+    return { label: key.slice(0, -"_fpm".length), text: `${Math.round(value)} fpm` };
+  }
+  if (key.endsWith("_m")) {
+    return { label: key.slice(0, -"_m".length), text: `${Math.round(mToFt(value))} ft` };
+  }
+  if (key.endsWith("_deg")) {
+    return { label: key.slice(0, -"_deg".length), text: `${value.toFixed(1)}°` };
+  }
+  if (key.endsWith("_s")) {
+    return { label: key.slice(0, -"_s".length), text: `${value.toFixed(1)} s` };
+  }
+  return {
+    label: key,
+    text: Number.isInteger(value) ? String(value) : value.toFixed(2),
+  };
+}
+
 /** Format epoch seconds as a localized Japanese datetime string. */
 export function formatEpoch(epochSeconds: number | null | undefined): string {
   if (epochSeconds === null || epochSeconds === undefined || !Number.isFinite(epochSeconds)) {

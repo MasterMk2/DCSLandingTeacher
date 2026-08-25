@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   factorDescription,
+  formatMetric,
   gradeClass,
   kindLabel,
   mToFt,
@@ -67,5 +68,43 @@ describe("gradeClass", () => {
     expect(gradeClass(null)).toBe("grade-none");
     expect(gradeClass("")).toBe("grade-none");
     expect(gradeClass("???")).toBe("grade-other");
+  });
+});
+
+describe("formatMetric", () => {
+  it("renders metre-suffixed deviations as feet and drops the stale suffix", () => {
+    // Issue D-4: the UI is ft/kt/nm everywhere else; these read as metres.
+    expect(formatMetric("max_abs_deviation_m", 28.01)).toEqual({
+      label: "max_abs_deviation",
+      text: "92 ft",
+    });
+    expect(formatMetric("mean_abs_deviation_final_15s_m", 16.91).text).toBe("55 ft");
+  });
+
+  it("distinguishes descent rates from airspeeds, both stored as m/s", () => {
+    expect(formatMetric("touchdown_speed_ms", 89.86)).toEqual({
+      label: "touchdown_speed",
+      text: "175 kt",
+    });
+    expect(formatMetric("recent_descent_ms", 4.0)).toEqual({
+      label: "recent_descent",
+      text: "787 fpm",
+    });
+  });
+
+  it("passes through units that are already display-ready", () => {
+    expect(formatMetric("touchdown_descent_rate_fpm", 456.6).text).toBe("457 fpm");
+    expect(formatMetric("glideslope_deg", 3.0).text).toBe("3.0°");
+    expect(formatMetric("window_s", 2.5).text).toBe("2.5 s");
+  });
+
+  it("leaves unitless and non-numeric values alone", () => {
+    expect(formatMetric("speed_ratio", 0.867)).toEqual({
+      label: "speed_ratio",
+      text: "0.87",
+    });
+    expect(formatMetric("major_factor_count", 2).text).toBe("2");
+    expect(formatMetric("verdict", "hard").text).toBe("hard");
+    expect(formatMetric("touchdown_speed_ms", null).text).toBe("-");
   });
 });

@@ -173,6 +173,23 @@ def test_land_grader_off_centerline_penalized() -> None:
     assert result.score < smooth.score
 
 
+def test_land_grader_comment_states_deviations_in_feet() -> None:
+    """Issue D-4: 高度・偏差は ft で見せる。コメント文だけメートルが残っていた。"""
+    event = _land_event(lateral_offset_m=25.0, gs_offset_m=10.0,
+                        pre_touchdown_descent_ms=1.2)
+    analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
+    result = grade_land_landing(analysis, CONFIG)
+
+    assert "ft" in result.comment
+    assert " m）" not in result.comment
+    assert " m ずれた" not in result.comment
+
+    # 文面の数値が実際に ft へ換算されている (m のまま出ていない) こと。
+    centerline = next(c for c in result.components if c.name == "centerline")
+    dev_m = centerline.evidence["max_abs_deviation_m"]
+    assert f"{dev_m / 0.3048:.0f} ft" in result.comment
+
+
 def test_land_grader_letter_bands() -> None:
     letters = CONFIG.land_grading["letters"]
     assert letters["A"] > letters["B"] > letters["C"] > letters["D"]
