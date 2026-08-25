@@ -46,6 +46,10 @@ FILE_VERSION_KEY = "FileVersion"
 
 EVENT_KEY = "Event"
 
+#: Global-object keys holding the origin that object coordinates are relative to.
+REFERENCE_LATITUDE_KEY = "ReferenceLatitude"
+REFERENCE_LONGITUDE_KEY = "ReferenceLongitude"
+
 #: Canonical property names for the 9 transform slots, in documented order.
 _TRANSFORM_FIELDS = (
     "Longitude",
@@ -280,6 +284,41 @@ class AcmiParser:
             return HeaderEvent(key=key, value=value)
         raise AcmiParseError(f"unrecognized line: {stripped!r}")
 
+    def _reference(self, key: str) -> float:
+        try:
+            return float(self.header[key])
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+
+    def _absolutize(self, transform: dict[str, str]) -> dict[str, str]:
+        """Add the global reference origin to a transform's Latitude/Longitude.
+
+        Per the ACMI specification object coordinates are stored relative to
+        ``ReferenceLatitude`` / ``ReferenceLongitude`` to keep the numbers
+        short. Consumers need absolute degrees: the tangent-plane projection
+        scales easting by ``cos(latitude)``, so a Caucasus track left at its
+        raw latitude of ~5 deg instead of ~43 deg gets its east axis stretched
+        by 36%, skewing every bearing and lateral offset derived from it.
+
+        ``U``/``V`` are already absolute in the simulator's native frame and
+        are deliberately left alone.
+        """
+        adjusted = dict(transform)
+        for field, key in (
+            ("Latitude", REFERENCE_LATITUDE_KEY),
+            ("Longitude", REFERENCE_LONGITUDE_KEY),
+        ):
+            if field not in adjusted:
+                continue
+            offset = self._reference(key)
+            if offset == 0.0:
+                continue
+            try:
+                adjusted[field] = repr(float(adjusted[field]) + offset)
+            except ValueError:
+                pass  # leave unparsable values for the typed accessor to reject
+        return adjusted
+
     def _handle_remove(self, first: str, rest: str) -> ObjectRemoveEvent:
         obj_id = normalize_object_id(first[1:])
         if not obj_id:
@@ -295,6 +334,8 @@ class AcmiParser:
         properties, mission_events = parse_properties(rest)
         if "T" in properties:
             transform = expand_transform(properties.pop("T"))
+            if obj_id != "0":
+                transform = self._absolutize(transform)
             properties.update(transform)
 
         if obj_id == "0":

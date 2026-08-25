@@ -163,6 +163,38 @@ def test_transform_syntax4_heading_flat_world() -> None:
     assert obj.heading == pytest.approx(180.0)
 
 
+def test_object_coordinates_are_absolute_after_reference_offset() -> None:
+    """ACMI stores object lat/lon relative to the global reference origin."""
+    parser = AcmiParser()
+    parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
+    parser.feed_line("101,T=4.57|5.10|1500")
+    obj = parser.objects["101"]
+    assert obj.longitude == pytest.approx(40.57)
+    assert obj.latitude == pytest.approx(43.10)
+
+
+def test_reference_offset_applies_to_partial_transform_updates() -> None:
+    """A later line updating only one axis must not lose or double the origin."""
+    parser = AcmiParser()
+    parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
+    parser.feed_line("101,T=4.57|5.10|1500")
+    parser.feed_line("101,T=4.58||1400")
+    obj = parser.objects["101"]
+    assert obj.longitude == pytest.approx(40.58)
+    assert obj.latitude == pytest.approx(43.10)  # unchanged, still absolute
+    assert obj.altitude == pytest.approx(1400.0)
+
+
+def test_reference_offset_leaves_native_uv_untouched() -> None:
+    """U/V are already absolute in the simulator's flat world."""
+    parser = AcmiParser()
+    parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
+    parser.feed_line("101,T=4.57|5.10|1500|0|0|90|517583.7|-198841.6|154.6")
+    obj = parser.objects["101"]
+    assert obj.u == pytest.approx(517583.7)
+    assert obj.v == pytest.approx(-198841.6)
+
+
 def test_heading_falls_back_to_flat_world_when_yaw_absent() -> None:
     parser = AcmiParser()
     parser.feed_line("101,T=-129|43|1500,HDG=77.5")
