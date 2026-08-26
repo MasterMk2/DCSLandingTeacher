@@ -80,6 +80,10 @@ land_grading:
   # threshold crossing height.
   glideslope_window_s: 30.0
   glideslope_min_agl_m: 15.0
+  # Angles computed from a few metres of distance are meaningless; below
+  # this range the glidepath is simply not judged (neutral score) rather
+  # than reporting tens of degrees of nonsense for e.g. a hover-on.
+  glideslope_min_distance_m: 200.0
   # Centerline keeping: max |lateral offset| over the final seconds, meters.
   # Keep this window short. Judging the max over a long window means the
   # earliest sample decides the score, while the aircraft is still 1.5 km

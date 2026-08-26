@@ -110,16 +110,25 @@ def _glideslope_window(
 
     With a resolved runway the cut is the real threshold. Without one, an
     AGL floor (about the usual threshold crossing height) approximates it.
+
+    Returns an empty list when there is no usable approach to judge -- a
+    hover-on, a bounce, a recording that only caught the last few metres.
+    The caller then scores the component neutrally, which is the honest
+    answer: falling back to whatever samples exist would compute an angle
+    from a handful of metres of distance and report tens of degrees of
+    "error" for a landing nobody flew badly.
     """
     candidates = analysis.window(float(settings.get("glideslope_window_s", 30.0)))
+    # Angles derived from a few metres of distance are meaningless whatever
+    # the reference, so this floor applies to both paths below.
+    min_distance = float(settings.get("glideslope_min_distance_m", 200.0))
+    candidates = [s for s in candidates if s.distance_to_go >= min_distance]
+
     with_threshold = [s for s in candidates if s.distance_to_threshold is not None]
     if with_threshold:
-        pre = [s for s in with_threshold if s.distance_to_threshold > 0.0]
-        if pre:
-            return pre
+        return [s for s in with_threshold if s.distance_to_threshold > 0.0]
     floor = float(settings.get("glideslope_min_agl_m", 15.0))
-    pre_flare = [s for s in candidates if s.agl is not None and s.agl >= floor]
-    return pre_flare or candidates
+    return [s for s in candidates if s.agl is not None and s.agl >= floor]
 
 
 def _centerline_overshoot_m(analysis: ApproachAnalysis) -> float | None:

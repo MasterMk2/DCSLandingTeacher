@@ -44,6 +44,7 @@ _DEFAULTS: dict[str, Any] = {
         "glideslope_error_deg": {"good": 0.35, "fair": 0.70, "poor": 1.50},
         "glideslope_window_s": 30.0,
         "glideslope_min_agl_m": 15.0,
+        "glideslope_min_distance_m": 200.0,
         "centerline_window_s": 5.0,
         "centerline_deviation_m": {"good": 3.0, "fair": 8.0, "poor": 20.0},
         "letters": {"A": 90, "B": 78, "C": 62, "D": 45},

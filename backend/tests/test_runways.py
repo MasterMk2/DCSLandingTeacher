@@ -207,3 +207,45 @@ def test_glideslope_error_is_angular_not_a_fixed_distance() -> None:
     assert far_error == pytest.approx(-0.76, abs=0.05)
     assert near_error == pytest.approx(-2.29, abs=0.05)
     assert abs(near_error) > abs(far_error) * 2.5
+
+
+def test_glidepath_is_not_judged_when_there_is_no_approach_to_judge() -> None:
+    """A hover-on has no glidepath, and must not be scored as if it did.
+
+    Observed on real data: a landing whose whole captured window sat at
+    ~17 m from touchdown and ~8 m up (an aircraft creeping onto the spot)
+    produced a reported mean glidepath error of 37.9 degrees, because the
+    angle was being computed from a handful of metres of distance. The
+    component has to report "unknown" and score neutrally instead.
+    """
+    from app.grading.config import GradingConfig
+    from app.grading.deviations import ApproachAnalysis
+    from app.grading.land_grader import grade_land_landing
+
+    touchdown_time = 100.0
+    samples = [
+        DeviationSample(
+            time=touchdown_time - 30.0 + i * 0.25,
+            distance_to_go=17.0 + i * 0.3,
+            glideslope_deviation=8.0,
+            centerline_deviation=0.5,
+            speed=3.0,
+            agl=8.8 - i * 0.05,
+        )
+        for i in range(100)
+    ]
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=3.0,
+        touchdown_descent_rate_ms=0.2,
+        samples=samples,
+    )
+    result = grade_land_landing(analysis, GradingConfig({}))
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert glideslope.evidence["mean_abs_error_deg"] is None
+    assert glideslope.evidence["samples"] == 0
+    assert glideslope.score == pytest.approx(50.0)
