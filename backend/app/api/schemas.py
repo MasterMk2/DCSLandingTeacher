@@ -61,6 +61,9 @@ class DeviationSampleOut(BaseModel):
     speed: float | None = None
     aoa: float | None = None
     agl: float | None = None
+    #: Metres still to fly to the runway threshold (negative once over it);
+    #: None when the landing was not resolved to a real runway.
+    distance_to_threshold: float | None = None
 
 
 class ApproachTrackOut(BaseModel):
@@ -69,6 +72,10 @@ class ApproachTrackOut(BaseModel):
     glideslope_deg: float | None = None
     course_deg: float | None = None
     touchdown_time: float | None = None
+    #: Reference frame the deviations were computed in: carrier FLOLS
+    #: geometry, resolved runway geometry, or None for the touchdown-derived
+    #: estimate. Without this the UI cannot say which runway was graded.
+    geometry: dict[str, Any] | None = None
     samples: list[DeviationSampleOut] = []
 
 

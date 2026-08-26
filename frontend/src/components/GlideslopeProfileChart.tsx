@@ -78,6 +78,14 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
     ...points.filter(p => p.agl_ft !== null).map(p => p.agl_ft as number),
     maxDist * 6076.12 * Math.tan((track.glideslope_deg ?? 3.5) * Math.PI / 180) + 500
   );
+  // Symmetric so the zero line (= on slope / on centreline) stays centred.
+  const maxDev = Math.max(
+    100,
+    ...points
+      .flatMap(p => [p.glideslope_dev_ft, p.centerline_dev_ft])
+      .filter((v): v is number => v !== null && Number.isFinite(v))
+      .map(Math.abs)
+  );
 
   return (
     <div className="glideslope-profile-chart no-print">
@@ -108,6 +116,7 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
             tickFormatter={(v) => v.toFixed(1)}
           />
           <YAxis
+            yAxisId="left"
             tick={{ fill: "#9fb8a8", fontSize: 11 }}
             label={{
               value: "高度 / AGL (ft)",
@@ -118,6 +127,24 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
               fontSize: 11,
             }}
             domain={[0, Math.max(maxAgl, 2000)]}
+            tickFormatter={(v) => `${Math.round(v)}`}
+          />
+          {/* Deviations are signed and an order of magnitude smaller than the
+              altitudes, so they need their own axis; without it Recharts
+              throws on the yAxisId="right" the deviation lines declare. */}
+          <YAxis
+            yAxisId="right"
+            orientation="right"
+            tick={{ fill: "#9fb8a8", fontSize: 11 }}
+            label={{
+              value: "偏差 (ft)",
+              angle: 90,
+              position: "insideRight",
+              offset: 15,
+              fill: "#9fb8a8",
+              fontSize: 11,
+            }}
+            domain={[-maxDev, maxDev]}
             tickFormatter={(v) => `${Math.round(v)}`}
           />
           <Tooltip
@@ -140,6 +167,7 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
           <Line
             name="理想グライドスロープ"
             dataKey="ideal_ft"
+            yAxisId="left"
             stroke="#39d98a"
             strokeDasharray="6 4"
             dot={false}
@@ -152,6 +180,7 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
           <Line
             name="実飛行AGL"
             dataKey="agl_ft"
+            yAxisId="left"
             stroke="#6ab7ff"
             dot={false}
             connectNulls

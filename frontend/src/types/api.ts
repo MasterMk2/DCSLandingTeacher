@@ -63,6 +63,8 @@ export interface DeviationSample {
   speed?: number | null;
   aoa?: number | null;
   agl?: number | null;
+  /** Metres still to fly to the runway threshold; negative once over it. */
+  distance_to_threshold?: number | null;
 }
 
 /** ApproachTrackOut. */
@@ -72,6 +74,9 @@ export interface ApproachTrack {
   glideslope_deg?: number | null;
   course_deg?: number | null;
   touchdown_time?: number | null;
+  /** Reference frame used: carrier FLOLS geometry, resolved runway geometry
+   *  (kind: "runway"), or null for the touchdown-derived estimate. */
+  geometry?: Record<string, unknown> | null;
   samples: DeviationSample[];
 }
 
