@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from logging import getLogger
 from pathlib import Path
@@ -21,7 +20,6 @@ from app.api.routes import protected_router, router as api_router
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
-from app.ingest import TrackIngestor
 from app.importer import ImportJobManager
 from app.models.database import create_engine, create_session_factory, init_db
 from app.models.entities import Landing
