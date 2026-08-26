@@ -29,6 +29,7 @@ from typing import Any
 from app.detection.detector import LandingEvent, TrackSample
 from app.detection.geometry import offset_position, transform_to_frame
 from app.grading.carriers import FlolsGeometry
+from app.runways.models import DEFAULT_AIMING_POINT_M, Runway
 
 
 @dataclass
@@ -40,6 +41,10 @@ class DeviationSample:
     speed: float | None = None
     aoa: float | None = None
     agl: float | None = None
+    #: Metres still to fly to the runway threshold; negative once the
+    #: aircraft is over the runway. ``None`` when no runway is known, which
+    #: is what tells the grader to fall back to an AGL-based cut-off.
+    distance_to_threshold: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -58,7 +63,26 @@ class DeviationSample:
             "speed": self.speed,
             "aoa": self.aoa,
             "agl": round(self.agl, 2) if self.agl is not None else None,
+            "distance_to_threshold": (
+                round(self.distance_to_threshold, 2)
+                if self.distance_to_threshold is not None
+                else None
+            ),
         }
+
+    def glideslope_error_deg(self, reference_slope_deg: float) -> float | None:
+        """Angular glidepath error, degrees (positive = above the slope).
+
+        Deviation in metres is not comparable between samples: the same
+        angular error is a much larger distance far out than close in, so
+        grading absolute metres against fixed thresholds effectively judges
+        a 1.5 km-out sample by ILS Cat III tolerances. Aviation references
+        the slope angularly (PAPI, ILS), so graders do too.
+        """
+        if self.agl is None or self.distance_to_go <= 1.0:
+            return None
+        actual = math.degrees(math.atan2(self.agl, self.distance_to_go))
+        return actual - reference_slope_deg
 
 
 @dataclass
@@ -122,6 +146,11 @@ class ApproachAnalysis:
                 speed=row.get("speed"),
                 aoa=row.get("aoa"),
                 agl=row.get("agl"),
+                distance_to_threshold=(
+                    float(row["distance_to_threshold"])
+                    if row.get("distance_to_threshold") is not None
+                    else None
+                ),
             )
             for row in data.get("samples", [])
         ]
@@ -180,6 +209,8 @@ def build_approach_analysis(
     glideslope_deg: float,
     ground_altitude_m: float | None = None,
     geometry: FlolsGeometry | None = None,
+    runway: Runway | None = None,
+    aiming_point_m: float = DEFAULT_AIMING_POINT_M,
 ) -> ApproachAnalysis:
     """Compute the deviation time series for one detected landing event.
 
@@ -188,10 +219,21 @@ def build_approach_analysis(
     instant (ship position + along/lateral offsets), the course is the ship
     heading plus the angled-deck offset, AGL is measured against the deck
     altitude from the geometry and the slope angle comes from the geometry
-    as well. Without it the legacy approximation applies: everything is
-    referenced to the touchdown point itself.
+    as well.
+
+    With ``runway`` (land landings) the origin is the runway's *aiming
+    point* -- ``aiming_point_m`` past the threshold -- and the course is the
+    published runway heading. This matters: anchoring at the touchdown point
+    instead makes the reference line move with however long the pilot
+    floats in the flare, which reads as a systematic "low" bias on every
+    correctly flown approach (a 600 m float alone shifts the whole approach
+    down by 600 m * tan 3 deg = 31 m).
+
+    Without either, the legacy approximation applies: everything is
+    referenced to the touchdown point and a course estimated from it.
     """
     touchdown = event.touchdown
+    threshold_along: float | None = None
 
     if geometry is not None and event.carrier_latitude is not None:
         course = (
@@ -207,6 +249,19 @@ def build_approach_analysis(
         deck_elevation: float | None = geometry.deck_altitude_m
         slope_deg = geometry.glideslope_deg
         geometry_payload = geometry.as_dict()
+    elif runway is not None:
+        course = runway.heading_deg
+        ref_lat, ref_lon = runway.aiming_point(aiming_point_m)
+        deck_elevation = runway.elevation_m
+        slope_deg = glideslope_deg
+        geometry_payload = {
+            "kind": "runway",
+            "aiming_point_m": aiming_point_m,
+            **runway.as_dict(),
+        }
+        # The threshold sits ``aiming_point_m`` short of the origin, so a
+        # sample's distance-to-threshold is its distance-to-go minus that.
+        threshold_along = aiming_point_m
     else:
         course = estimate_course_deg(event.approach, touchdown.heading)
         ref_lat, ref_lon = touchdown.latitude, touchdown.longitude
@@ -235,9 +290,18 @@ def build_approach_analysis(
             sample.latitude, sample.longitude, ref_lat, ref_lon, course
         )
         distance_to_go = max(0.0, -along)
+        distance_to_threshold = (
+            -along - threshold_along if threshold_along is not None else None
+        )
 
         agl: float | None
-        if sample.agl is not None:
+        if runway is not None and sample.altitude is not None:
+            # Height above the *runway*, not above whatever terrain happens
+            # to be under the aircraft: DCS's own AGL follows the ground, so
+            # over a valley or a ridge on final it does not describe the
+            # aircraft's position relative to the landing surface at all.
+            agl = sample.altitude - deck_elevation
+        elif sample.agl is not None:
             agl = sample.agl
         elif sample.altitude is not None and deck_elevation is not None:
             agl = sample.altitude - deck_elevation
@@ -254,6 +318,7 @@ def build_approach_analysis(
                 speed=sample.speed,
                 aoa=sample.aoa,
                 agl=agl,
+                distance_to_threshold=distance_to_threshold,
             )
         )
     return analysis

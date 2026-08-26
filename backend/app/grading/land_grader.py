@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.grading.deviations import ApproachAnalysis
+from app.grading.deviations import ApproachAnalysis, DeviationSample
 
 MS_TO_FPM = 60.0 / 0.3048  # ~196.85
 M_TO_FT = 1.0 / 0.3048     # ~3.281
@@ -90,6 +90,60 @@ def _band_score(value: float, good: float, fair: float, poor: float) -> float:
     return 55.0 - frac * 50.0
 
 
+def _reference_label(analysis: ApproachAnalysis) -> str:
+    """Whether the slope was judged against a real runway or an estimate."""
+    geometry = analysis.geometry or {}
+    if geometry.get("kind") == "runway":
+        return f"runway {geometry.get('airbase', '?')} {geometry.get('name', '?')}"
+    return "touchdown-estimated"
+
+
+def _glideslope_window(
+    analysis: ApproachAnalysis, settings: dict[str, Any]
+) -> list[DeviationSample]:
+    """Samples to judge the glidepath on: the approach up to the threshold.
+
+    Past the threshold the aircraft is flaring, and being *above* a slope
+    anchored at the aiming point is then the correct thing to do -- grading
+    it against the slope would penalise a good landing. Touchdown quality is
+    already covered by the descent-rate component.
+
+    With a resolved runway the cut is the real threshold. Without one, an
+    AGL floor (about the usual threshold crossing height) approximates it.
+    """
+    candidates = analysis.window(float(settings.get("glideslope_window_s", 30.0)))
+    with_threshold = [s for s in candidates if s.distance_to_threshold is not None]
+    if with_threshold:
+        pre = [s for s in with_threshold if s.distance_to_threshold > 0.0]
+        if pre:
+            return pre
+    floor = float(settings.get("glideslope_min_agl_m", 15.0))
+    pre_flare = [s for s in candidates if s.agl is not None and s.agl >= floor]
+    return pre_flare or candidates
+
+
+def _centerline_overshoot_m(analysis: ApproachAnalysis) -> float | None:
+    """How far the aircraft went *through* the centreline before touchdown.
+
+    Recorded, not scored: an overshoot on the roll-out from a turn to final
+    is a real pattern error (and the classic overhead-break mistake), but
+    there is not yet enough overhead-pattern data here to calibrate a
+    threshold, so it would be guesswork to attach points to it.
+    """
+    values = [
+        s.centerline_deviation
+        for s in analysis.samples
+        if s.centerline_deviation is not None and s.time < analysis.touchdown_time
+    ]
+    if len(values) < 2:
+        return None
+    # The side the approach came in on: the aircraft overshoots when it
+    # crosses to the opposite side of that.
+    approach_side = 1.0 if values[0] >= 0 else -1.0
+    excursion = max((-approach_side * v for v in values), default=0.0)
+    return round(max(0.0, excursion), 2)
+
+
 def grade_land_landing(
     analysis: ApproachAnalysis,
     config: Any,
@@ -101,7 +155,6 @@ def grade_land_landing(
     descent_fpm = analysis.touchdown_descent_rate_ms * MS_TO_FPM
     rate_score, rate_label = _descent_rate_score(descent_fpm, settings["descent_rate_fpm"])
 
-    window = analysis.window(15.0)
     approach_speeds = [s.speed for s in analysis.samples if s.speed is not None]
     mean_speed = sum(approach_speeds) / len(approach_speeds) if approach_speeds else None
     speed_ratio = (
@@ -113,25 +166,40 @@ def grade_land_landing(
         speed_ratio, settings["touchdown_speed_ratio"]
     )
 
-    gs_devs = [
-        s.glideslope_deviation for s in window if s.glideslope_deviation is not None
+    gs_window = _glideslope_window(analysis, settings)
+    gs_errors = [
+        e
+        for e in (
+            s.glideslope_error_deg(analysis.glideslope_deg) for s in gs_window
+        )
+        if e is not None
     ]
     # 採点は絶対値の平均で行う。上下に振れた進入が相殺されて「完璧」に
     # ならないようにするため。
-    mean_gs_dev = sum(abs(d) for d in gs_devs) / len(gs_devs) if gs_devs else None
+    mean_gs_err = sum(abs(e) for e in gs_errors) / len(gs_errors) if gs_errors else None
     # 高め / 低めの向きは符号付き平均でしか判定できない。絶対値平均は常に
     # 非負なので、それで判定すると「低め」に到達できない。
+    mean_signed_gs_err = sum(gs_errors) / len(gs_errors) if gs_errors else None
+    # メートル値も参考として残す (UI の既存表示・過去データとの比較用)。
+    gs_devs = [
+        s.glideslope_deviation for s in gs_window if s.glideslope_deviation is not None
+    ]
+    mean_gs_dev = sum(abs(d) for d in gs_devs) / len(gs_devs) if gs_devs else None
     mean_signed_gs_dev = sum(gs_devs) / len(gs_devs) if gs_devs else None
-    gs_bands = settings["glideslope_deviation_m"]
+    gs_bands = settings["glideslope_error_deg"]
     gs_score = (
-        _band_score(mean_gs_dev, gs_bands["good"], gs_bands["fair"], gs_bands["poor"])
-        if mean_gs_dev is not None
+        _band_score(mean_gs_err, gs_bands["good"], gs_bands["fair"], gs_bands["poor"])
+        if mean_gs_err is not None
         else 50.0
     )
 
+    # センターラインは接地直前の短い窓で採る。長い窓の max だと、窓の先頭
+    # (まだ 1.5km 手前で正当に修正中) の 1 サンプルで点数が決まってしまい、
+    # 旋回明けが遅いオーバーヘッド進入を進入方式そのもので減点することになる。
+    cl_window_s = float(settings.get("centerline_window_s", 5.0))
     cl_values = [
         abs(s.centerline_deviation)
-        for s in window
+        for s in analysis.window(cl_window_s)
         if s.centerline_deviation is not None
     ]
     max_cl_dev = max(cl_values) if cl_values else None
@@ -141,6 +209,7 @@ def grade_land_landing(
         if max_cl_dev is not None
         else 50.0
     )
+    overshoot_m = _centerline_overshoot_m(analysis)
 
     components = [
         ComponentScore(
@@ -167,23 +236,41 @@ def grade_land_landing(
             gs_score,
             weights["glideslope"],
             {
-                "mean_abs_deviation_final_15s_m": (
-                    round(mean_gs_dev, 2) if mean_gs_dev is not None else None
+                # 採点はこの角度誤差で行う (メートルは距離依存で比較不能)。
+                "mean_abs_error_deg": (
+                    round(mean_gs_err, 3) if mean_gs_err is not None else None
                 ),
                 # 符号付き: 正 = 理想より上。講評の「高め / 低め」の根拠。
-                "mean_signed_deviation_final_15s_m": (
+                "mean_signed_error_deg": (
+                    round(mean_signed_gs_err, 3)
+                    if mean_signed_gs_err is not None
+                    else None
+                ),
+                "mean_abs_deviation_m": (
+                    round(mean_gs_dev, 2) if mean_gs_dev is not None else None
+                ),
+                "mean_signed_deviation_m": (
                     round(mean_signed_gs_dev, 2)
                     if mean_signed_gs_dev is not None
                     else None
                 ),
                 "glideslope_deg": analysis.glideslope_deg,
+                "samples": len(gs_window),
+                "reference": _reference_label(analysis),
             },
         ),
         ComponentScore(
             "centerline",
             cl_score,
             weights["centerline"],
-            {"max_abs_deviation_m": round(max_cl_dev, 2) if max_cl_dev is not None else None},
+            {
+                "max_abs_deviation_m": (
+                    round(max_cl_dev, 2) if max_cl_dev is not None else None
+                ),
+                "window_s": cl_window_s,
+                # 記録のみ (採点には未使用)。
+                "overshoot_m": overshoot_m,
+            },
         ),
     ]
 
@@ -196,18 +283,26 @@ def grade_land_landing(
             break
 
     comment = _build_comment(
-        grade, rate_label, speed_label, mean_gs_dev, mean_signed_gs_dev, max_cl_dev
+        grade, rate_label, speed_label, mean_gs_err, mean_signed_gs_err, max_cl_dev
     )
     metrics = {
         "touchdown_descent_rate_fpm": round(descent_fpm, 1),
         "touchdown_speed_ratio": round(speed_ratio, 3) if speed_ratio is not None else None,
-        "mean_glideslope_deviation_final_15s_m": (
+        "mean_glideslope_error_deg": (
+            round(mean_gs_err, 3) if mean_gs_err is not None else None
+        ),
+        "mean_signed_glideslope_error_deg": (
+            round(mean_signed_gs_err, 3) if mean_signed_gs_err is not None else None
+        ),
+        "mean_glideslope_deviation_m": (
             round(mean_gs_dev, 2) if mean_gs_dev is not None else None
         ),
-        "mean_signed_glideslope_deviation_final_15s_m": (
+        "mean_signed_glideslope_deviation_m": (
             round(mean_signed_gs_dev, 2) if mean_signed_gs_dev is not None else None
         ),
         "max_centerline_deviation_m": round(max_cl_dev, 2) if max_cl_dev is not None else None,
+        "centerline_overshoot_m": overshoot_m,
+        "glideslope_reference": _reference_label(analysis),
         "outcome": analysis.outcome,
     }
     return LandGradeResult(
@@ -223,28 +318,28 @@ def _build_comment(
     grade: str,
     rate_label: str,
     speed_label: str,
-    mean_gs_dev: float | None,
-    mean_signed_gs_dev: float | None,
+    mean_gs_err: float | None,
+    mean_signed_gs_err: float | None,
     max_cl_dev: float | None,
 ) -> str:
-    # 偏差は ft で述べる (Issue D-4: 高度・偏差は ft、距離は nm)。しきい値の
-    # 比較は SI のまま行い、変換するのは文面に出す値だけ。
+    # 横ずれは ft で述べる (Issue D-4)。グライドスロープは角度で述べる:
+    # ft だと同じ操縦精度でも遠いほど大きな数字になり、比較にならない。
     parts: list[str] = []
     parts.append(f"接地は{rate_label}（降下率ベース）")
     parts.append(f"速度は{speed_label}")
-    if mean_gs_dev is not None and mean_signed_gs_dev is not None:
-        if abs(mean_signed_gs_dev) < mean_gs_dev / 2:
+    if mean_gs_err is not None and mean_signed_gs_err is not None:
+        if abs(mean_signed_gs_err) < mean_gs_err / 2:
             # 上下に振れていて一方向に寄っていない。この状態で「高め」「低め」と
             # 言い切ると、実際にやるべき修正 (安定させること) を取り違えさせる。
             parts.append(
-                f"最終進入のグライドスロープは上下にばらついた"
-                f"（平均偏差 {mean_gs_dev * M_TO_FT:.0f} ft）"
+                f"閾値までのグライドスロープは上下にばらついた"
+                f"（平均誤差 {mean_gs_err:.2f}°）"
             )
         else:
-            direction = "高め" if mean_signed_gs_dev > 0 else "低め"
+            direction = "高め" if mean_signed_gs_err > 0 else "低め"
             parts.append(
-                f"最終進入のグライドスロープは理想より{direction}"
-                f"（平均 {abs(mean_signed_gs_dev) * M_TO_FT:.0f} ft）"
+                f"閾値までのグライドスロープは理想より{direction}"
+                f"（平均 {abs(mean_signed_gs_err):.2f}°）"
             )
     if max_cl_dev is not None and max_cl_dev > 5.0:
         parts.append(f"センターラインから最大 {max_cl_dev * M_TO_FT:.0f} ft ずれた")

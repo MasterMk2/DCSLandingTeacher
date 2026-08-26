@@ -92,6 +92,24 @@ class Settings(BaseSettings):
     # megabytes. Larger uploads are rejected with 413.
     import_max_upload_mb: int = 200
 
+    # --- Runway geometry from DCSServerBot's RestAPI ---------------------
+    # Land landings are graded against the real runway (threshold position,
+    # course, length) instead of guessing from the touchdown point. Leave
+    # dcssb_base_url empty to disable and fall back to the touchdown-derived
+    # approximation.
+    dcssb_base_url: str = ""
+    dcssb_api_prefix: str = "/stats"
+    dcssb_api_key: str = ""
+    #: Server name to query airbases for. Empty = use the first server the
+    #: bot reports whose theatre matches the recording.
+    dcssb_server_name: str = ""
+    #: `/airbase` runs Lua on the DCS *simulation thread*, so a full sweep is
+    #: paced. Do not lower this: it directly costs server frame time.
+    dcssb_request_spacing_ms: int = 1500
+    dcssb_timeout_s: float = 10.0
+    #: Directory for the per-theatre runway cache (a sweep runs once per map).
+    runway_cache_dir: str = "cache"
+
     @property
     def tacview_sources(self) -> list[TacviewSource]:
         """Return parsed list of Tacview sources.

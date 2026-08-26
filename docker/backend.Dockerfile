@@ -29,7 +29,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels .
 FROM python:3.11-slim
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /data /app/config /app/frontend \
+    && mkdir -p /data /data/cache /app/config /app/frontend \
     && chown -R appuser:appuser /data /app
 
 WORKDIR /app
@@ -47,7 +47,8 @@ ENV DLT_HOST=0.0.0.0 \
     DLT_DATABASE_URL=sqlite+aiosqlite:////data/dlt.db \
     DLT_GRADING_CONFIG_PATH=/app/config/grading.yaml \
     DLT_FRONTEND_DIST_DIR=/app/frontend/dist \
-    DLT_MIGRATIONS_DIR=/app/migrations
+    DLT_MIGRATIONS_DIR=/app/migrations \
+    DLT_RUNWAY_CACHE_DIR=/data/cache
 
 VOLUME ["/data"]
 EXPOSE 8000

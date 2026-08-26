@@ -25,6 +25,8 @@ from app.models.database import create_engine, create_session_factory, init_db
 from app.models.entities import Landing
 from app.models.migrations import run_migrations
 from app.pipeline import LandingPipeline
+from app.runways.dcssb import DcssbClient
+from app.runways.provider import RunwayProvider
 
 logger = getLogger(__name__)
 
@@ -74,11 +76,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await settle_orphaned_provisionals(session_factory)
 
         notifier = LandingNotifier()
+        runway_provider = _build_runway_provider(settings)
         pipeline = LandingPipeline(
             session_factory,
             grading_config,
             notifier=notifier,
             carrier_geometry_book=carrier_geometry_book,
+            runway_provider=runway_provider,
         )
 
         multi_source_manager: MultiSourceAcmiManager | None = None
@@ -146,6 +150,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(import_router)
     _mount_frontend(app, Path(settings.frontend_dist_dir))
     return app
+
+
+def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
+    """Runway provider, or ``None`` when DCSServerBot is not configured.
+
+    Without it land landings fall back to the touchdown-referenced
+    approximation, which is less accurate but needs no external service.
+    """
+    if not settings.dcssb_base_url:
+        logger.info("DCSSB not configured; land grading uses estimated geometry")
+        return None
+    client = DcssbClient(
+        settings.dcssb_base_url,
+        api_prefix=settings.dcssb_api_prefix,
+        api_key=settings.dcssb_api_key,
+        request_spacing_ms=settings.dcssb_request_spacing_ms,
+        timeout_s=settings.dcssb_timeout_s,
+    )
+    logger.info("DCSSB runway source: %s", settings.dcssb_base_url)
+    return RunwayProvider(
+        client,
+        settings.runway_cache_dir,
+        server_name=settings.dcssb_server_name,
+    )
 
 
 def _mount_frontend(app: FastAPI, dist_dir: Path) -> None:

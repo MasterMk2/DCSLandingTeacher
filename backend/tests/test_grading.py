@@ -191,21 +191,32 @@ def test_land_grader_comment_states_deviations_in_feet() -> None:
 
 
 def _analysis_with_gs_deviations(devs: list[float]):
-    """最終 15 秒に指定のグライドスロープ偏差を持つ analysis を組む。"""
+    """指定のグライドスロープ偏差を持つ analysis を組む。
+
+    偏差は AGL に埋め込む: 採点は角度 (AGL と距離の比) で行うので、
+    ``glideslope_deviation`` だけを差し替えて AGL を放置すると幾何的に
+    矛盾したサンプルになり、何をテストしているのか分からなくなる。
+    距離は ±30 m の偏差が現実的な範囲に収まるよう最終進入相当に取る。
+    """
+    import math
+
     from app.grading.deviations import ApproachAnalysis, DeviationSample
 
     touchdown_time = 100.0
-    samples = [
-        DeviationSample(
-            time=touchdown_time - len(devs) + i,
-            distance_to_go=(len(devs) - i) * 70.0,
-            glideslope_deviation=dev,
-            centerline_deviation=1.0,
-            speed=70.0,
-            agl=(len(devs) - i) * 5.0,
+    tan_slope = math.tan(math.radians(3.0))
+    samples = []
+    for i, dev in enumerate(devs):
+        distance_to_go = 1250.0 + (len(devs) - 1 - i) * 250.0
+        samples.append(
+            DeviationSample(
+                time=touchdown_time - len(devs) + i,
+                distance_to_go=distance_to_go,
+                glideslope_deviation=dev,
+                centerline_deviation=1.0,
+                speed=70.0,
+                agl=distance_to_go * tan_slope + dev,
+            )
         )
-        for i, dev in enumerate(devs)
-    ]
     return ApproachAnalysis(
         kind="land",
         outcome="full_stop",
@@ -239,9 +250,12 @@ def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() ->
     assert "高め" not in result.comment and "低め" not in result.comment
     # 振れ幅は採点に効いたままである (相殺されて満点にならない)。
     glideslope = next(c for c in result.components if c.name == "glideslope")
-    assert glideslope.evidence["mean_abs_deviation_final_15s_m"] == pytest.approx(30.0)
-    assert glideslope.evidence["mean_signed_deviation_final_15s_m"] == pytest.approx(0.0)
-    assert glideslope.score < 20
+    assert glideslope.evidence["mean_abs_deviation_m"] == pytest.approx(30.0)
+    assert glideslope.evidence["mean_signed_deviation_m"] == pytest.approx(0.0)
+    # 採点に使うのは角度。符号付きはほぼ相殺されるが、絶対値は残る。
+    assert glideslope.evidence["mean_signed_error_deg"] == pytest.approx(0.0, abs=0.05)
+    assert glideslope.evidence["mean_abs_error_deg"] > 0.5
+    assert glideslope.score < 60
 
 
 def test_land_grader_letter_bands() -> None:

@@ -58,6 +58,7 @@ class LandingPipeline:
         grading_config: GradingConfig,
         notifier: Any | None = None,
         carrier_geometry_book: CarrierGeometryBook | None = None,
+        runway_provider: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._config = grading_config
@@ -65,6 +66,9 @@ class LandingPipeline:
         # Per-carrier FLOLS geometry (Issue #3); an empty book means every
         # carrier uses the legacy touchdown-referenced approximation.
         self._geometry_book = carrier_geometry_book or CarrierGeometryBook({})
+        # Real runway geometry for land landings; ``None`` falls back to the
+        # touchdown-referenced approximation.
+        self._runway_provider = runway_provider
 
     async def handle_landing(self, context: LandingContext) -> int | None:
         """Grade + persist one detected landing; returns the row id.
@@ -75,7 +79,7 @@ class LandingPipeline:
         verdict arrives later via :meth:`finalize_landing`.
         """
         event = context.event
-        analysis, result, score = self._grade(context)
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
         status = "final" if event.finalized else "provisional"
         landing_id = await self._persist(context, analysis, result, score, status)
 
@@ -97,7 +101,7 @@ class LandingPipeline:
         clients can replace the provisional entry.
         """
         event = context.event
-        analysis, result, score = self._grade(context)
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
         async with self._session_factory() as session:
             landing = await session.get(Landing, landing_id)
             if landing is None:
@@ -148,14 +152,31 @@ class LandingPipeline:
             return None
         return self._geometry_book.resolve(event.carrier_name, event.carrier_type)
 
+    async def _resolve_runway(self, event: LandingEvent):
+        """Real runway geometry for a land landing (``None`` when unknown)."""
+        if event.kind != "land" or self._runway_provider is None:
+            return None
+        try:
+            return await self._runway_provider.resolve(
+                event.touchdown.latitude,
+                event.touchdown.longitude,
+                event.touchdown.heading,
+            )
+        except Exception:
+            logger.warning("runway lookup failed", exc_info=True)
+            return None
+
     def _grade(
-        self, context: LandingContext
+        self,
+        context: LandingContext,
+        runway: Any | None = None,
     ) -> tuple[ApproachAnalysis, LandGradeResult | LsoGradeResult, float | None]:
         event = context.event
         analysis = build_approach_analysis(
             event,
             self._config.glideslope_for(event.kind),
             geometry=self._resolve_geometry(event),
+            runway=runway,
         )
         if event.kind == "carrier":
             return analysis, grade_carrier_approach(analysis, self._config), None

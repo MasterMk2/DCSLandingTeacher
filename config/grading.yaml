@@ -63,12 +63,29 @@ land_grading:
     good_band: 0.05      # within +/-5% -> 100 pts
     fair_band: 0.12      # within +/-12% -> 65 pts
     # beyond -> 30 pts
-  # Glideslope tracking: mean |gs deviation| over the final 15 s, meters.
-  glideslope_deviation_m:
-    good: 1.0
-    fair: 2.5
-    poor: 5.0
-  # Centerline keeping: max |lateral offset| over the final segment, meters.
+  # Glideslope tracking, judged as an ANGULAR error against the reference
+  # slope. Metres are not usable here: the same piloting accuracy produces a
+  # far bigger metre error 1.5 km out than over the threshold, so fixed
+  # metre thresholds silently demand ILS Cat III precision at range and
+  # floor the component for every landing. good is roughly the PAPI
+  # "on slope" band.
+  glideslope_error_deg:
+    good: 0.35
+    fair: 0.70
+    poor: 1.50
+  # Only the approach UP TO THE THRESHOLD is judged against the slope: past
+  # it the aircraft is flaring and is supposed to be above a slope anchored
+  # at the aiming point. Touchdown quality is the descent_rate component's
+  # job. Without resolved runway geometry the AGL floor approximates the
+  # threshold crossing height.
+  glideslope_window_s: 30.0
+  glideslope_min_agl_m: 15.0
+  # Centerline keeping: max |lateral offset| over the final seconds, meters.
+  # Keep this window short. Judging the max over a long window means the
+  # earliest sample decides the score, while the aircraft is still 1.5 km
+  # out and legitimately converging -- which penalises overhead patterns for
+  # rolling out of the turn later, i.e. for the pattern itself.
+  centerline_window_s: 5.0
   centerline_deviation_m:
     good: 3.0
     fair: 8.0
