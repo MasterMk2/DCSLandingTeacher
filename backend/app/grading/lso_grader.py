@@ -93,6 +93,8 @@ def _detect_factors(
                         "threshold_m": threshold,
                         "window_s": settings["at_ramp_window_s"],
                         "times_s": [round(s.time, 2) for s in at_ramp],
+                        "description": high_cfg.get("description", ""),
+                        "details": high_cfg.get("details", ""),
                     },
                 )
             )
@@ -108,6 +110,8 @@ def _detect_factors(
                         "threshold_m": threshold,
                         "window_s": settings["at_ramp_window_s"],
                         "times_s": [round(s.time, 2) for s in at_ramp],
+                        "description": low_cfg.get("description", ""),
+                        "details": low_cfg.get("details", ""),
                     },
                 )
             )
@@ -134,6 +138,8 @@ def _detect_factors(
                         "mean_approach_speed_ms": round(mean_speed, 2),
                         "speed_ratio": round(ratio, 3),
                         "threshold_ratio": threshold,
+                        "description": fast_cfg.get("description", ""),
+                        "details": fast_cfg.get("details", ""),
                     },
                 )
             )
@@ -149,6 +155,8 @@ def _detect_factors(
                         "mean_approach_speed_ms": round(mean_speed, 2),
                         "speed_ratio": round(ratio, 3),
                         "threshold_ratio": threshold,
+                        "description": slow_cfg.get("description", ""),
+                        "details": slow_cfg.get("details", ""),
                     },
                 )
             )
@@ -172,6 +180,8 @@ def _detect_factors(
                         "max_lateral_deviation_m": round(max_cl, 2),
                         "threshold_m": threshold,
                         "window_s": settings["at_ramp_window_s"],
+                        "description": offline_cfg.get("description", ""),
+                        "details": offline_cfg.get("details", ""),
                     },
                 )
             )
@@ -195,6 +205,8 @@ def _detect_factors(
                         "speed_range_ms": round(speed_range, 2),
                         "threshold_ms": threshold,
                         "window_s": 20.0,
+                        "description": power_cfg.get("description", ""),
+                        "details": power_cfg.get("details", ""),
                     },
                 )
             )
@@ -206,7 +218,11 @@ def _detect_factors(
             LsoFactor(
                 "BOLTER",
                 str(bolter_cfg.get("severity", "major")),
-                {"outcome": analysis.outcome},
+                {
+                    "outcome": analysis.outcome,
+                    "description": bolter_cfg.get("description", ""),
+                    "details": bolter_cfg.get("details", ""),
+                },
             )
         )
 
@@ -222,6 +238,9 @@ def _detect_factors(
     ):
         burble = _detect_burble(analysis, burble_cfg)
         if burble is not None:
+            # Add description and details from config
+            burble.evidence["description"] = burble_cfg.get("description", "")
+            burble.evidence["details"] = burble_cfg.get("details", "")
             factors.append(burble)
 
     return factors

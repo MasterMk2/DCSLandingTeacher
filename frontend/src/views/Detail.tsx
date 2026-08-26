@@ -1,11 +1,11 @@
-/** Landing detail view: GCA scopes, top-down track, charts, data sheet (FR-5/FR-6). */
+/** Landing detail view: GCA scopes, glideslope chart, data sheet (FR-5/FR-6).
+ * A4 printable layout. Top-down track removed (overlaps with GCA azimuth scope). */
 
 import { useEffect, useState } from "react";
 import { getLanding } from "../api/client";
 import { GcaScope } from "../components/GcaScope";
-import { GradeSummary } from "../components/GradeSummary";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
-import { TopDownTrack } from "../components/TopDownTrack";
+import { GlideslopeProfileChart } from "../components/GlideslopeProfileChart";
 import {
   formatEpoch,
   formatIso,
@@ -85,95 +85,153 @@ export function Detail({ id, onBack }: DetailProps) {
         </div>
       </header>
 
-      {/* ===== Data sheet (print target, FR-6) ===== */}
+      {/* ===== Data sheet (print target, FR-6) - A4 layout ===== */}
       <section className="print-sheet" aria-label="評価データシート">
-        <h1 className="sheet-title">DCS Landing Teacher — 着陸評価データシート</h1>
+        <header className="sheet-header">
+          <h1 className="sheet-title">DCS Landing Teacher — 着陸評価データシート</h1>
+          <div className="sheet-meta no-print">
+            <span>記録 ID: {detail.id}</span>
+            <span>日時: {formatEpoch(detail.touchdown_epoch ?? detail.touchdown_time)}</span>
+            <span>評価時刻: {formatIso(detail.graded_at)}</span>
+          </div>
+        </header>
 
-        <table className="info-table">
-          <tbody>
-            <tr>
-              <th>記録 ID</th>
-              <td>{detail.id}</td>
-              <th>日時</th>
-              <td>{formatEpoch(detail.touchdown_epoch ?? detail.touchdown_time)}</td>
-            </tr>
-            <tr>
-              <th>プレイヤー</th>
-              <td>{detail.pilot ?? "-"}</td>
-              <th>機体</th>
-              <td>{detail.airframe ?? "-"}</td>
-            </tr>
-            <tr>
-              <th>空港 / 空母</th>
-              <td>{detail.venue_name ?? (detail.kind === "land" ? "空港" : "-")}</td>
-              <th>種別</th>
-              <td>{kindLabel(detail.kind)}</td>
-            </tr>
-            <tr>
-              <th>ソース</th>
-              <td>{detail.source_name ?? detail.source_id ?? "-"}</td>
-              <th>グレード / 評点</th>
-              <td>
-                <span className={`grade-badge ${gradeClass(detail.grade)}`}>
-                  {detail.grade ?? "-"}
+        <div className="sheet-grid">
+          {/* Left column: Basic info + GCA Scopes */}
+          <div className="sheet-left">
+            <table className="info-table">
+              <tbody>
+                <tr>
+                  <th>プレイヤー</th>
+                  <td>{detail.pilot ?? "-"}</td>
+                </tr>
+                <tr>
+                  <th>機体</th>
+                  <td>{detail.airframe ?? "-"}</td>
+                </tr>
+                <tr>
+                  <th>空港 / 空母</th>
+                  <td>{detail.venue_name ?? (detail.kind === "land" ? "空港" : "-")}</td>
+                </tr>
+                <tr>
+                  <th>種別</th>
+                  <td>{kindLabel(detail.kind)}</td>
+                </tr>
+                <tr>
+                  <th>ソース</th>
+                  <td>{detail.source_name ?? detail.source_id ?? "-"}</td>
+                </tr>
+                <tr>
+                  <th>アウトカム</th>
+                  <td>{detail.outcome ?? "-"}</td>
+                </tr>
+                <tr>
+                  <th>進入パターン</th>
+                  <td>
+                    {detail.approach_pattern && (
+                      <span className={`pattern-badge ${detail.approach_pattern}`}>
+                        {detail.approach_pattern === "overhead" && "オーバーヘッド"}
+                        {detail.approach_pattern === "straight_in" && "ストレートイン"}
+                        {detail.approach_pattern === "unknown" && "不明"}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            {track && track.samples.length > 0 ? (
+              <GcaScope samples={track.samples} />
+            ) : (
+              <p className="empty-message">進入軌跡データが保存されていません。</p>
+            )}
+          </div>
+
+          {/* Right column: Grade + Glideslope Profile + Factors + Metrics */}
+          <div className="sheet-right">
+            <div className="grade-panel">
+              <div className="grade-headline">
+                <span className={`grade-badge grade-large ${gradeClass(detail.grade)}`}>
+                  {detail.kind === "carrier" ? (detail.grade ?? "-") : detail.score !== null ? `評点 ${detail.score.toFixed(1)}` : "-"}
                 </span>
-                {detail.score !== null && ` （評点 ${detail.score.toFixed(1)}）`}
-              </td>
-            </tr>
-            <tr>
-              <th>アウトカム</th>
-              <td>{detail.outcome ?? "-"}</td>
-            </tr>
-            <tr>
-              <th>進入パターン</th>
-              <td>
-                {detail.approach_pattern && (
-                  <span className={`pattern-badge ${detail.approach_pattern}`}>
-                    {detail.approach_pattern === "overhead" && "オーバーヘッド"}
-                    {detail.approach_pattern === "straight_in" && "ストレートイン"}
-                    {detail.approach_pattern === "unknown" && "不明"}
-                  </span>
+                <span className="grade-sub">
+                  {detail.kind === "carrier" ? "LSO グレード" : "陸上簡易評価"}
+                  {" ／ "}
+                  {kindLabel(detail.outcome)}
+                  {detail.grading_version ? ` ／ 評価 v${detail.grading_version}` : ""}
+                </span>
+              </div>
+
+              {detail.comment && <p className="grade-comment">{detail.comment}</p>}
+
+              {/* Glideslope Profile Chart (horizontal, A4-friendly) */}
+              {track && track.samples.length > 0 && (
+                <GlideslopeProfileChart track={track} />
+              )}
+
+              {/* Factors Table */}
+              <div className="factors-section">
+                <h4>検出ファクター（{detail.factors.length} 件）</h4>
+                {detail.factors.length === 0 ? (
+                  <p className="empty-message">顕著なファクターは検出されませんでした。</p>
+                ) : (
+                  <table className="factor-table">
+                    <thead>
+                      <tr>
+                        <th>ファクター</th>
+                        <th>重要度</th>
+                        <th>説明</th>
+                        <th>詳細</th>
+                        <th>根拠データ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.factors.map((f, i) => {
+                        const ev = f.evidence ?? {};
+                        return (
+                          <tr key={`${f.name}-${i}`}>
+                            <td className="factor-name">{f.name}</td>
+                            <td className={`factor-severity ${f.severity}`}>{f.severity ?? "-"}</td>
+                            <td className="factor-description">{String(ev.description ?? "-")}</td>
+                            <td className="factor-details">{String(ev.details ?? "-")}</td>
+                            <td className="factor-evidence">{formatFactorEvidence(ev)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 )}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+              </div>
 
-        {track && track.samples.length > 0 ? (
-          <GcaScope samples={track.samples} />
-        ) : (
-          <p className="empty-message">進入軌跡データが保存されていません。</p>
-        )}
+              {/* Metrics */}
+              {detail.metrics && Object.keys(detail.metrics).length > 0 && (
+                <div className="metrics-section">
+                  <h4>評価メトリクス</h4>
+                  <dl className="metrics-list">
+                    {Object.entries(detail.metrics).map(([k, v]) => (
+                      <div key={k} className="metrics-row">
+                        <dt>{k}</dt>
+                        <dd>{typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )}
 
-        <GradeSummary
-          kind={detail.kind}
-          outcome={detail.outcome}
-          grade={detail.grade}
-          score={detail.score}
-          comment={detail.comment}
-          factors={detail.factors}
-          metrics={detail.metrics}
-          gradingVersion={detail.grading_version}
-        />
-
-        <p className="sheet-footer">
-          評価時刻: {formatIso(detail.graded_at)} ／ DCS Landing Teacher による自動評価
-        </p>
+              <p className="sheet-footer">
+                DCS Landing Teacher による自動評価
+              </p>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* ===== Screen-only sections ===== */}
       {track && track.samples.length > 0 && (
-        <>
-          <section className="no-print">
-            <h2>トップダウン軌跡</h2>
-            <TopDownTrack samples={track.samples} />
-          </section>
-
-          <section className="no-print">
-            <h2>時系列チャート</h2>
-            <TimeSeriesChart track={track} />
-          </section>
-        </>
+        <section className="no-print">
+          <h2>時系列チャート</h2>
+          <TimeSeriesChart track={track} />
+        </section>
       )}
 
       {td && (
@@ -221,4 +279,13 @@ export function Detail({ id, onBack }: DetailProps) {
       )}
     </div>
   );
+}
+
+// Helper to format factor evidence excluding description/details
+function formatFactorEvidence(evidence: Record<string, unknown> | null | undefined): string {
+  if (!evidence || Object.keys(evidence).length === 0) return "";
+  return Object.entries(evidence)
+    .filter(([k]) => k !== "description" && k !== "details")
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(" / ");
 }

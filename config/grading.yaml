@@ -93,41 +93,87 @@ lso_grading:
   factors:
     HIGH:
       severity: major
+      description: "グライドスロープ高 - 理想進入経路より著しく高い位置を飛行している"
+      details: "ランプ直前3秒間の平均グライドスロープ偏差が+3.0mを超えた場合に検出されます。高すぎると着艦点が奥にずれ、ワイヤーを外すリスクが高まります。"
       # Mean glideslope deviation over the at-ramp window above this -> HIGH.
       gs_deviation_m: 3.0
     LOW:
       severity: major
+      description: "グライドスロープ低 - 理想進入経路より著しく低い位置を飛行している"
+      details: "ランプ直前3秒間の平均グライドスロープ偏差が-2.0mを下回った場合に検出されます。低すぎるとランプストライクや前部ワイヤーへの衝突リスクが高まり、ウェーブオフ対象となります。"
       gs_deviation_m: -2.0
     FAST:
       severity: major
+      description: "速度超過 - 進入速度が適正範囲を超えている"
+      details: "着艦速度/平均進入速度の比が1.07を超えた場合に検出されます。速すぎるとアレスティングギアの許容エネルギーを超え、ボルターやギア損傷の原因となります。"
       # touchdown speed / mean final-approach speed above this -> FAST.
       speed_ratio: 1.07
     SLOW:
       severity: major
+      description: "速度不足 - 進入速度が適正範囲を下回っている"
+      details: "着艦速度/平均進入速度の比が0.93を下回った場合に検出されます。遅すぎると揚力不足で沈み込み、ハードランディングやスタールのリスクがあります。"
       speed_ratio: 0.93
     OFFLINE:
       severity: major
+      description: "センターライン逸脱 - 着艦コースから左右に大きく外れている"
+      details: "ランプ直前3秒間の最大横方向オフセットが3.0mを超えた場合に検出されます。センターラインから外れるとワイヤー捕捉位置がずれ、アレスティングギアへの偏荷重やデッキエッジ衝突の危険があります。"
       # |lateral offset| at the ramp above this -> OFFLINE.
       lateral_deviation_m: 3.0
     POWER:
       severity: minor
+      description: "パワー変動 - スロットル操作が激しく速度が安定していない"
+      details: "着艦直前20秒間の最大・最小速度差が8.0m/sを超えた場合に検出されます。頻繁なスロットル操作は進入が安定していないことを示し、グライドスロープ/センターライン維持が困難になります。"
       # Airspeed excursions (max-min) over the last 20 s above this -> POWER.
       speed_range_ms: 8.0
     BOLTER:
       severity: major
+      description: "ボルター - 全ワイヤーを外して着艦失敗、着艦復行となった"
+      details: "着艦アウトカムが 'bolter' と判定された場合に自動的に付与されます。全ワイヤーを外したことを意味し、即座に着艦復行 (go-around) を実施する必要があります。"
       # Set automatically when the outcome is a bolter.
       auto: true
     # The following factors require data Tacview does not reliably provide
     # (hook/rudder/engine states). They are declared here so the UI can list
     # them, but the detector currently never emits them.
-    ARCON: { severity: minor, enabled: false }
-    AOC:   { severity: minor, enabled: false }
-    AOS:   { severity: minor, enabled: false }
-    INTAKE: { severity: minor, enabled: false }
-    IMMAT: { severity: minor, enabled: false }
-    T&R:   { severity: minor, enabled: false }
-    NWS:   { severity: minor, enabled: false }
-    OPEN:  { severity: minor, enabled: false }
+    ARCON:
+      severity: minor
+      enabled: false
+      description: "アレストメント・コントロール (Arrestment Control) - 着艦制御不良"
+      details: "フック操作やブレーキ操作の不備。ACMIデータからは検出不可のため無効化されています。"
+    AOC:
+      severity: minor
+      enabled: false
+      description: "アプローチ・アウト・オブ・コントロール (Approach Out of Control) - 進入制御不能"
+      details: "進入中の異常な機動や姿勢乱れ。ACMIデータからは検出不可のため無効化されています。"
+    AOS:
+      severity: minor
+      enabled: false
+      description: "エア・オペレーション・セーフティ (Air Operation Safety) - 航空運用安全"
+      details: "安全規程違反や危険な機動。ACMIデータからは検出不可のため無効化されています。"
+    INTAKE:
+      severity: minor
+      enabled: false
+      description: "インテーク (Intake) - エンジンインテーク関連"
+      details: "エンジンインテークの異常やFOD懸念。ACMIデータからは検出不可のため無効化されています。"
+    IMMAT:
+      severity: minor
+      enabled: false
+      description: "イマチュア (Immature) - 未熟な操作/判断"
+      details: "経験不足による不適切な判断や操作。主観的評価のため自動検出不可。"
+    T&R:
+      severity: minor
+      enabled: false
+      description: "スロットル・アンド・ラダー (Throttle & Rudder) - スロットル/ラダー操作"
+      details: "過度なスロットル・ラダー操作によるヨー/推力制御不良。ACMIデータからは検出不可のため無効化されています。"
+    NWS:
+      severity: minor
+      enabled: false
+      description: "ノーズホイール・ステアリング (Nose Wheel Steering) - 前輪操舵"
+      details: "着艦後の前輪操舵操作不良。着艦ロールアウト時の評価項目。ACMIデータからは検出不可。"
+    OPEN:
+      severity: minor
+      enabled: false
+      description: "オープン (Open) - フック開放/未着艦状態"
+      details: "テールフックが開放されていない、または着艦態勢に入っていない。ACMIデータからは検出不可。"
     # Issue #4 (O-3): ACMI 2.2 has NO wind properties (global properties are
     # recording metadata only; object properties cover kinematics/aircraft
     # state), so wind-over-deck based detection is impossible. BURBLE is
@@ -139,6 +185,8 @@ lso_grading:
     BURBLE:
       severity: minor
       enabled: true
+      description: "バーブル (Burble) - 甲板後方の乱気流(バースト)による沈み込み"
+      details: "着艦直前3秒間の平均沈下率が、直前12秒間のベースライン比で+1.5m/sを超えた場合に検出されます。空母後方の甲板乱気流(バーブル)に入った際の特徴的な急激な沈み込みをヒューリスティックに推定します。実データでの調整が必要です。"
       window_s: 3.0            # sink evaluation window before touchdown
       baseline_window_s: 12.0  # stable-approach reference window before that
       extra_descent_ms: 1.5    # mean extra sink (m/s) over baseline to trigger

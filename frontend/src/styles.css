@@ -294,10 +294,32 @@ main {
   padding: 16px 20px;
 }
 
+.sheet-header {
+  margin-bottom: 16px;
+}
+
 .sheet-title {
   font-size: 18px;
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   color: var(--accent);
+}
+
+.sheet-meta {
+  display: flex;
+  gap: 24px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sheet-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.sheet-left,
+.sheet-right {
+  min-width: 0;
 }
 
 .info-table {
@@ -340,6 +362,181 @@ main {
 
 .topdown-view .scope-svg {
   width: 480px;
+}
+
+/* ---------- A4 Print Layout for Detail View ---------- */
+
+.grade-panel {
+  background: rgba(57, 217, 138, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.grade-headline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.grade-sub {
+  color: var(--text-dim);
+}
+
+.grade-comment {
+  background: rgba(57, 217, 138, 0.08);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+/* Glideslope Profile Chart */
+.glideslope-profile-chart {
+  background: var(--bg-scope);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.glideslope-profile-chart h3 {
+  font-size: 14px;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.legend-color {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 1px;
+}
+
+.legend-color.ideal {
+  background: #39d98a;
+  border: 1px dashed #39d98a;
+}
+
+.legend-color.actual {
+  background: #6ab7ff;
+}
+
+.legend-color.deviation {
+  background: #ffd166;
+}
+
+.chart-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 8px;
+}
+
+/* Factors Section */
+.factors-section {
+  margin-top: 16px;
+}
+
+.factors-section h4 {
+  font-size: 13px;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+
+.factor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.factor-table th,
+.factor-table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.factor-table th {
+  color: var(--text-dim);
+  background: rgba(57, 217, 138, 0.05);
+}
+
+.factor-name {
+  font-weight: 700;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.factor-severity {
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.factor-severity.major {
+  color: var(--danger);
+}
+
+.factor-severity.minor {
+  color: var(--warn);
+}
+
+.factor-severity.severe {
+  color: #ff0000;
+}
+
+.factor-description,
+.factor-details {
+  color: var(--text);
+  max-width: 200px;
+  word-wrap: break-word;
+}
+
+.factor-evidence {
+  color: var(--text-dim);
+  font-size: 11px;
+  max-width: 250px;
+  word-wrap: break-word;
+}
+
+/* Metrics Section */
+.metrics-section {
+  margin-top: 16px;
+}
+
+.metrics-section h4 {
+  font-size: 13px;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+
+/* Print styles for new layout */
+@media print {
+  .sheet-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .glideslope-profile-chart {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
 }
 
 .scope-bg {
