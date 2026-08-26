@@ -29,23 +29,24 @@ interface ProfilePoint {
   glideslope_dev_ft: number | null;  // Glideslope deviation in feet
 }
 
-/** Round an axis maximum up to a readable step, so ticks land on round
- *  numbers instead of values like 1634 / 897 / -3. */
-function niceCeil(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 1;
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  for (const step of [1, 2, 2.5, 5, 10]) {
-    const candidate = step * magnitude;
-    if (value <= candidate) return candidate;
-  }
-  return 10 * magnitude;
-}
-
-/** Evenly spaced ticks. Recharts otherwise derives them from the data range
- *  and only appends the domain maximum, which produced axes like
- *  -3 / 547 / 1097 / 2000. */
-function evenTicks(min: number, max: number, count = 5): number[] {
-  return Array.from({ length: count }, (_, i) => min + ((max - min) * i) / (count - 1));
+/** An axis whose *step* is a round number, not just its maximum.
+ *  Rounding only the maximum and then splitting it evenly gives ticks like
+ *  0.6 / 1.3 / 1.9 (2.5 divided into four); choosing the step first keeps
+ *  them readable whatever the range. */
+function niceAxis(maxValue: number, intervals = 4): { max: number; ticks: number[] } {
+  const safe = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 1;
+  const rough = safe / intervals;
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const step =
+    [1, 2, 2.5, 5, 10].find((m) => rough <= m * magnitude) ?? 10;
+  const stepSize = (typeof step === "number" ? step : 10) * magnitude;
+  const count = Math.ceil(safe / stepSize);
+  const decimals = Math.max(0, -Math.floor(Math.log10(stepSize)));
+  const round = (v: number) => Number(v.toFixed(decimals + 2));
+  return {
+    max: round(count * stepSize),
+    ticks: Array.from({ length: count + 1 }, (_, i) => round(i * stepSize)),
+  };
 }
 
 function buildProfilePoints(track: ApproachTrack): ProfilePoint[] {
@@ -75,12 +76,34 @@ function buildProfilePoints(track: ApproachTrack): ProfilePoint[] {
       ideal_ft: idealFt,
       glideslope_dev_ft: gsDevFt,
     };
-  }).filter(p => p.distance_nm !== null && p.distance_nm >= 0)
-    .sort((a, b) => b.distance_nm - a.distance_nm); // Far to near
+  }).filter(p => p.distance_nm !== null && p.distance_nm >= 0);
+}
+
+/** Keep only the final inbound leg (last distance maximum -> touchdown).
+ *
+ *  Distance-to-go is not monotonic over a captured approach: in an overhead
+ *  break the aircraft is still flying *away* from the touchdown point while
+ *  it turns, so the stored track rises to a peak before coming back in.
+ *  Plotting all of it against distance folds the outbound half back over the
+ *  inbound half and the line crosses itself -- the same x holds two different
+ *  altitudes. Sorting by distance (as this used to) only scrambles it
+ *  further, since that discards time order entirely.
+ */
+function inboundLeg(points: ProfilePoint[]): ProfilePoint[] {
+  if (points.length < 2) return points;
+  // Walk back from touchdown while distance keeps growing; where it starts
+  // shrinking again we have reached the turn, and everything before that
+  // belongs to the outbound part of the pattern.
+  let start = points.length - 1;
+  for (let i = points.length - 1; i > 0; i--) {
+    if (points[i - 1].distance_nm < points[i].distance_nm) break;
+    start = i - 1;
+  }
+  return points.slice(start);
 }
 
 export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
-  const points = useMemo(() => buildProfilePoints(track), [track]);
+  const points = useMemo(() => inboundLeg(buildProfilePoints(track)), [track]);
 
   if (points.length === 0) {
     return <p className="empty-message">グライドスローププロファイルデータがありません。</p>;
@@ -99,8 +122,8 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
       idealAtStart,
       50
     ) * 1.15;
-  const aglAxisMax = niceCeil(maxAgl);
-  const distAxisMax = niceCeil(maxDist);
+  const aglAxis = niceAxis(maxAgl);
+  const distAxis = niceAxis(maxDist);
   // Symmetric so the zero line (= on slope) stays centred. Only the
   // glideslope deviation belongs here: this is a vertical cross-section, and
   // mixing in the lateral offset both misreads as a height and stretches the
@@ -114,7 +137,12 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
       .filter((v): v is number => v !== null && Number.isFinite(v))
       .map(Math.abs)
   );
-  const devAxisMax = niceCeil(maxDev);
+  const devHalf = niceAxis(maxDev, 2);
+  // Mirror the positive half so zero (= on slope) stays centred.
+  const devTicks = [
+    ...devHalf.ticks.filter((t) => t > 0).map((t) => -t).reverse(),
+    ...devHalf.ticks,
+  ];
 
   return (
     <div className="glideslope-profile-chart no-print">
@@ -133,8 +161,8 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
           <XAxis
             dataKey="distance_nm"
             type="number"
-            domain={[0, distAxisMax]}
-            ticks={evenTicks(0, distAxisMax)}
+            domain={[0, distAxis.max]}
+            ticks={distAxis.ticks}
             // `reversed`, not a descending domain: Recharts ignores the
             // latter, which had the approach running touchdown-first and
             // contradicting this chart's own caption.
@@ -147,7 +175,7 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
               fill: "#9fb8a8",
               fontSize: 11,
             }}
-            tickFormatter={(v) => v.toFixed(distAxisMax < 0.5 ? 2 : 1)}
+            tickFormatter={(v) => v.toFixed(distAxis.max < 0.5 ? 2 : 1)}
           />
           <YAxis
             yAxisId="left"
@@ -160,8 +188,8 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
               fill: "#9fb8a8",
               fontSize: 11,
             }}
-            domain={[0, aglAxisMax]}
-            ticks={evenTicks(0, aglAxisMax)}
+            domain={[0, aglAxis.max]}
+            ticks={aglAxis.ticks}
             tickFormatter={(v) => `${Math.round(v)}`}
           />
           {/* Deviations are signed and an order of magnitude smaller than the
@@ -179,8 +207,8 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
               fill: "#9fb8a8",
               fontSize: 11,
             }}
-            domain={[-devAxisMax, devAxisMax]}
-            ticks={evenTicks(-devAxisMax, devAxisMax)}
+            domain={[-devHalf.max, devHalf.max]}
+            ticks={devTicks}
             tickFormatter={(v) => `${Math.round(v)}`}
           />
           <Tooltip

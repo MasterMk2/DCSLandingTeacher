@@ -249,3 +249,67 @@ def test_glidepath_is_not_judged_when_there_is_no_approach_to_judge() -> None:
     assert glideslope.evidence["mean_abs_error_deg"] is None
     assert glideslope.evidence["samples"] == 0
     assert glideslope.score == pytest.approx(50.0)
+
+
+def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> None:
+    """A normal flare must not read as a low approach.
+
+    Without runway geometry the only anchor is the touchdown point, which
+    sits wherever the aircraft floated to. This track flies a clean 3.0 deg
+    path and then floats 800 m, exactly like the real overhead approach that
+    triggered this: measuring angles to the touchdown point calls it ~1.5 deg
+    low, when nothing about the approach was low.
+    """
+    from app.grading.land_grader import _glideslope_errors
+
+    slope = math.tan(math.radians(3.0))
+    float_m = 800.0
+    # Distance is measured to the touchdown point, but the aircraft flew its
+    # 3 deg path aimed at a point `float_m` short of it.
+    window = [
+        DeviationSample(
+            time=float(i),
+            distance_to_go=d,
+            glideslope_deviation=None,
+            centerline_deviation=0.0,
+            agl=(d - float_m) * slope,
+        )
+        for i, d in enumerate(range(2600, 1000, -100))
+    ]
+
+    mean_abs, mean_signed, method = _glideslope_errors(window, 3.0)
+    assert method == "path-angle"
+    assert mean_abs is not None and mean_signed is not None
+    # The path flown really is 3.0 deg, so the error is ~0 either way it is
+    # rounded -- not the ~-1.5 deg the anchored measurement reports.
+    assert mean_signed == pytest.approx(0.0, abs=0.05)
+
+    anchored = [s.glideslope_error_deg(3.0) for s in window]
+    anchored_mean = sum(a for a in anchored if a is not None) / len(anchored)
+    assert anchored_mean < -1.0  # the bias this avoids
+
+
+def test_glidepath_with_a_runway_keeps_the_absolute_aiming_point_error() -> None:
+    """With a real threshold, a displaced approach must still score as one.
+
+    The path-angle fit cannot see a parallel displacement, so it is only the
+    fallback; when the aiming point is known the per-sample error is the
+    stronger metric and has to stay in use.
+    """
+    from app.grading.land_grader import _glideslope_errors
+
+    slope = math.tan(math.radians(3.0))
+    window = [
+        DeviationSample(
+            time=float(i),
+            distance_to_go=d,
+            glideslope_deviation=None,
+            centerline_deviation=0.0,
+            agl=d * slope - 40.0,  # correct angle, but 40 m low throughout
+            distance_to_threshold=d - 300.0,
+        )
+        for i, d in enumerate(range(2600, 1000, -100))
+    ]
+    mean_abs, mean_signed, method = _glideslope_errors(window, 3.0)
+    assert method == "aiming-point"
+    assert mean_signed is not None and mean_signed < -0.8

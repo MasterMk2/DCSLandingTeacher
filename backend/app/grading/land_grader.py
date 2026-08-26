@@ -15,6 +15,8 @@ the grade was given.
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -131,6 +133,76 @@ def _glideslope_window(
     return [s for s in candidates if s.agl is not None and s.agl >= floor]
 
 
+def _glideslope_errors(
+    window: list[DeviationSample], reference_slope_deg: float
+) -> tuple[float | None, float | None, str]:
+    """Angular glidepath error over ``window``: (mean abs, mean signed, method).
+
+    Two cases, because the honest metric differs:
+
+    - With a resolved runway the reference is anchored at the real aiming
+      point, so each sample's angle to it is meaningful and the mean of the
+      per-sample errors measures how far off the published glidepath the
+      aircraft actually was.
+
+    - Without one, the only anchor available is the touchdown point, which
+      sits wherever the aircraft happened to float to. Measuring angles to it
+      reports a low approach for every landing with a normal flare -- an
+      observed 856 m float alone accounts for a 45 m / 1.5 deg "error" on a
+      textbook 2.9 deg approach. So instead fit the glidepath the aircraft
+      actually flew (least squares of height against distance) and compare
+      *that* angle to the reference. It cannot see a parallel displacement,
+      but it is not fabricating one either.
+    """
+    if not window:
+        return None, None, "none"
+
+    if any(s.distance_to_threshold is not None for s in window):
+        errors = [
+            e
+            for e in (s.glideslope_error_deg(reference_slope_deg) for s in window)
+            if e is not None
+        ]
+        if not errors:
+            return None, None, "none"
+        return (
+            sum(abs(e) for e in errors) / len(errors),
+            sum(errors) / len(errors),
+            "aiming-point",
+        )
+
+    points = [
+        (s.distance_to_go, s.agl)
+        for s in window
+        if s.agl is not None and s.distance_to_go > 0
+    ]
+    if len(points) < 3:
+        return None, None, "none"
+    count = len(points)
+    sum_x = sum(x for x, _ in points)
+    sum_y = sum(y for _, y in points)
+    sum_xx = sum(x * x for x, _ in points)
+    sum_xy = sum(x * y for x, y in points)
+    denominator = count * sum_xx - sum_x * sum_x
+    if abs(denominator) < 1e-9:
+        return None, None, "none"
+    slope = (count * sum_xy - sum_x * sum_y) / denominator
+    intercept = (sum_y - slope * sum_x) / count
+    trend_error = math.degrees(math.atan(slope)) - reference_slope_deg
+
+    # A fit only describes the trend, so on its own it would call an approach
+    # that porpoised +/-30 m around a perfect 3 deg line "perfect" -- and the
+    # advice a wandering approach needs is "stabilise", not "you were high".
+    # Measure the scatter about the fit as an angle too, per sample, since the
+    # same metre of wobble matters far more close in than at 2 nm.
+    residual_angles = [
+        math.degrees(math.atan((y - (slope * x + intercept)) / x)) for x, y in points
+    ]
+    scatter = math.sqrt(sum(a * a for a in residual_angles) / count)
+    # Trend and scatter are independent contributions to being off the slope.
+    return math.hypot(trend_error, scatter), trend_error, "path-angle"
+
+
 def _centerline_overshoot_m(analysis: ApproachAnalysis) -> float | None:
     """How far the aircraft went *through* the centreline before touchdown.
 
@@ -176,19 +248,12 @@ def grade_land_landing(
     )
 
     gs_window = _glideslope_window(analysis, settings)
-    gs_errors = [
-        e
-        for e in (
-            s.glideslope_error_deg(analysis.glideslope_deg) for s in gs_window
-        )
-        if e is not None
-    ]
-    # 採点は絶対値の平均で行う。上下に振れた進入が相殺されて「完璧」に
-    # ならないようにするため。
-    mean_gs_err = sum(abs(e) for e in gs_errors) / len(gs_errors) if gs_errors else None
-    # 高め / 低めの向きは符号付き平均でしか判定できない。絶対値平均は常に
-    # 非負なので、それで判定すると「低め」に到達できない。
-    mean_signed_gs_err = sum(gs_errors) / len(gs_errors) if gs_errors else None
+    # 絶対値と符号付きを分けて持つ: 絶対値は上下に振れた進入が相殺されて
+    # 「完璧」にならないようにするため、符号付きは「高め / 低め」の向きを
+    # 述べるため (絶対値平均は常に非負なので向きを判定できない)。
+    mean_gs_err, mean_signed_gs_err, gs_method = _glideslope_errors(
+        gs_window, analysis.glideslope_deg
+    )
     # メートル値も参考として残す (UI の既存表示・過去データとの比較用)。
     gs_devs = [
         s.glideslope_deviation for s in gs_window if s.glideslope_deviation is not None
@@ -265,6 +330,7 @@ def grade_land_landing(
                 ),
                 "glideslope_deg": analysis.glideslope_deg,
                 "samples": len(gs_window),
+                "method": gs_method,
                 "reference": _reference_label(analysis),
             },
         ),
@@ -312,6 +378,7 @@ def grade_land_landing(
         "max_centerline_deviation_m": round(max_cl_dev, 2) if max_cl_dev is not None else None,
         "centerline_overshoot_m": overshoot_m,
         "glideslope_reference": _reference_label(analysis),
+        "glideslope_method": gs_method,
         "outcome": analysis.outcome,
     }
     return LandGradeResult(

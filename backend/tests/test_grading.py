@@ -252,9 +252,13 @@ def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() ->
     glideslope = next(c for c in result.components if c.name == "glideslope")
     assert glideslope.evidence["mean_abs_deviation_m"] == pytest.approx(30.0)
     assert glideslope.evidence["mean_signed_deviation_m"] == pytest.approx(0.0)
-    # 採点に使うのは角度。符号付きはほぼ相殺されるが、絶対値は残る。
-    assert glideslope.evidence["mean_signed_error_deg"] == pytest.approx(0.0, abs=0.05)
-    assert glideslope.evidence["mean_abs_error_deg"] > 0.5
+    # 採点に使うのは角度。振れの散らばりが絶対値側に残り、符号付き
+    # (トレンド) はそれより十分小さい — これが「一方向に寄っていない」の
+    # 判定条件そのもので、講評が向きを言い切らない根拠になっている。
+    signed = glideslope.evidence["mean_signed_error_deg"]
+    absolute = glideslope.evidence["mean_abs_error_deg"]
+    assert absolute > 0.5
+    assert abs(signed) < absolute / 2
     assert glideslope.score < 60
 
 

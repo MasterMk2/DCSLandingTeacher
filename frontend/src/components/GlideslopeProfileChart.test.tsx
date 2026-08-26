@@ -82,3 +82,43 @@ describe("GlideslopeProfileChart", () => {
     expect(container.textContent).toContain("データがありません");
   });
 });
+
+describe("overhead patterns", () => {
+  /** Distance-to-go rises while the aircraft turns onto final, then falls.
+   *  Taken from the shape of a real overhead break: out to ~2.1 nm, then in. */
+  const overhead = () => ({
+    kind: "land", outcome: "full_stop", glideslope_deg: 3.0,
+    course_deg: 221.8, touchdown_time: 100,
+    samples: [
+      ...[3061, 3368, 3625, 3816, 3927, 3962].map((d, i) => ({
+        time: 40 + i * 3, distance_to_go: d, glideslope_deviation: 0,
+        centerline_deviation: 2200 - i * 300, speed: 90, aoa: null,
+        agl: 456 - i * 20,
+      })),
+      ...[3909, 3300, 2724, 1872, 1036, 472, 0].map((d, i) => ({
+        time: 58 + i * 6, distance_to_go: d, glideslope_deviation: 0,
+        centerline_deviation: 700 - i * 100, speed: 85, aoa: null,
+        agl: 299 - i * 42,
+      })),
+    ],
+  });
+
+  it("plots only the inbound leg, so the line cannot double back", () => {
+    const { container } = render(
+      <GlideslopeProfileChart track={overhead() as never} />,
+    );
+    const points =
+      container
+        .querySelector(".recharts-line-curve")
+        ?.getAttribute("d")
+        ?.match(/[ML]\s*([\d.]+)/g) ?? [];
+    const xs = points.map((m) => parseFloat(m.replace(/[ML]\s*/, "")));
+    expect(xs.length).toBeGreaterThan(2);
+    // The x axis is reversed (touchdown on the right), so a well-formed
+    // approach walks strictly one way across the plot. The outbound half of
+    // the pattern would reverse direction partway through.
+    const increasing = xs.every((x, i) => i === 0 || x >= xs[i - 1]);
+    const decreasing = xs.every((x, i) => i === 0 || x <= xs[i - 1]);
+    expect(increasing || decreasing).toBe(true);
+  });
+});
