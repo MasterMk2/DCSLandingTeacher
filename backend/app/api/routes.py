@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_auth, ws_token_ok
+from app.importer import IMPORT_SOURCE_PREFIX
 from app.pipeline import _touchdown_epoch
 from app.api.schemas import (
     ApproachTrackOut,
@@ -130,6 +131,16 @@ async def list_landings(
         query = query.where(Landing.created_at <= date_to)
     if source:
         query = query.where(Landing.source_id == source)
+    else:
+        # Uploaded recordings are scratch data scoped to their own source and
+        # are frequently from an unrelated server or theatre; they must not
+        # join the shared history unless explicitly asked for by source.
+        query = query.where(
+            or_(
+                Landing.source_id.is_(None),
+                ~Landing.source_id.like(f"{IMPORT_SOURCE_PREFIX}%"),
+            )
+        )
 
     total_result = await session.execute(
         select(func.count()).select_from(query.subquery())
@@ -145,7 +156,9 @@ async def list_landings(
 
     # Fetch available sources for the filter dropdown (Issue #13)
     sources_result = await session.execute(
-        select(Flight.source_id.distinct()).where(Flight.source_id.is_not(None))
+        select(Flight.source_id.distinct())
+        .where(Flight.source_id.is_not(None))
+        .where(~Flight.source_id.like(f"{IMPORT_SOURCE_PREFIX}%"))
     )
     sources = [
         SourceInfo(id=row[0], name=row[0], connected=True)

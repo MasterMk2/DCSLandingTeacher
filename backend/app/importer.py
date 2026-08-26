@@ -23,17 +23,17 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.file_reader import iter_acmi_lines
 from app.ingest import LandingContext, TrackIngestor
-from app.models.entities import DcsObject, Flight, Landing
+from app.models.entities import DcsObject, Flight, Landing, Track
 from app.pipeline import LandingPipeline
 
 logger = getLogger(__name__)
@@ -44,6 +44,22 @@ TOUCHDOWN_EPSILON_S = 0.001
 #: Yield to the event loop every N parsed lines so a huge import does not
 #: starve the HTTP server / WebSocket broadcasts running on the same loop.
 YIELD_EVERY_LINES = 500
+
+#: Imported recordings are scoped to their own source rather than joining the
+#: live servers' records: an upload is very often from an unrelated server (or
+#: an unrelated theatre entirely), and mixing it into the shared history would
+#: misrepresent what happened on the servers this instance actually watches.
+#: Everything under this prefix is treated as scratch data -- excluded from the
+#: default listing and discarded, either explicitly or by retention sweep.
+IMPORT_SOURCE_PREFIX = "import:"
+
+
+def import_source_id(job_id: str) -> str:
+    return f"{IMPORT_SOURCE_PREFIX}{job_id}"
+
+
+def is_import_source(source_id: str | None) -> bool:
+    return bool(source_id) and source_id.startswith(IMPORT_SOURCE_PREFIX)
 
 
 def _utcnow() -> datetime:
@@ -233,6 +249,7 @@ class ImportJobManager:
             sample_buffer_s=self._sample_buffer_s,
             landing_listener=guarded_listener,
             landing_finalize_listener=self._pipeline.finalize_landing,
+            source_id=import_source_id(job.id),
         )
         holder.append(
             _DuplicateGuard(job, self._session_factory, self._pipeline, ingestor)
@@ -262,6 +279,77 @@ class ImportJobManager:
                     await asyncio.sleep(0)
         finally:
             await ingestor.close()
+
+    async def discard(self, job_id: str) -> bool:
+        """Drop an import's job entry and every record it created.
+
+        Flights cascade to their objects, tracks and landings, so removing the
+        flights of this import's source removes the whole scratch dataset.
+        """
+        source_id = import_source_id(job_id)
+        async with self._session_factory() as session:
+            flight_ids = select(Flight.id).where(Flight.source_id == source_id)
+            # Delete the children explicitly. The ON DELETE CASCADE on these
+            # foreign keys does nothing here: SQLite only enforces them with
+            # PRAGMA foreign_keys=ON, and no ORM relationship cascade is
+            # declared either, so relying on it would silently orphan every
+            # track and landing of the discarded import.
+            deleted = (
+                await session.execute(
+                    delete(Landing).where(Landing.flight_id.in_(flight_ids))
+                )
+            ).rowcount or 0
+            await session.execute(delete(Track).where(Track.flight_id.in_(flight_ids)))
+            await session.execute(
+                delete(DcsObject).where(DcsObject.flight_id.in_(flight_ids))
+            )
+            flights = (
+                await session.execute(
+                    delete(Flight).where(Flight.source_id == source_id)
+                )
+            ).rowcount or 0
+            await session.commit()
+        existed = self._jobs.pop(job_id, None) is not None
+        if flights or existed:
+            logger.info(
+                "discarded import %s (%d flight(s), %d landing(s))",
+                job_id, flights, deleted,
+            )
+        return existed or bool(flights)
+
+    async def purge_expired(self, retention_hours: float) -> int:
+        """Drop imports older than ``retention_hours``.
+
+        A browser cannot be relied on to announce that it closed, so the
+        explicit discard is backed by this sweep; without it an abandoned
+        upload would sit in the database forever.
+        """
+        if retention_hours <= 0:
+            return 0
+        cutoff = _utcnow() - timedelta(hours=retention_hours)
+        stale = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.created_at < cutoff
+        ]
+        # Also catch data whose in-memory job is gone (e.g. after a restart).
+        async with self._session_factory() as session:
+            orphaned = (
+                await session.execute(
+                    select(Flight.source_id)
+                    .where(Flight.source_id.like(f"{IMPORT_SOURCE_PREFIX}%"))
+                    .where(Flight.created_at < cutoff)
+                    .distinct()
+                )
+            ).scalars().all()
+        for source_id in orphaned:
+            job_id = source_id[len(IMPORT_SOURCE_PREFIX) :]
+            if job_id not in stale:
+                stale.append(job_id)
+
+        for job_id in stale:
+            await self.discard(job_id)
+        return len(stale)
 
     async def _notify(self, job: ImportJob) -> None:
         """Broadcast the job outcome over the existing WebSocket channel."""

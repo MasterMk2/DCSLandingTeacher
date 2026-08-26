@@ -122,6 +122,28 @@ async def list_imports(request: Request) -> ImportJobListResponse:
     return ImportJobListResponse(items=[_job_out(j) for j in manager.list_jobs()])
 
 
+@router.delete("/imports/{job_id}", status_code=204)
+async def discard_import(job_id: str, request: Request) -> None:
+    """Drop an import and everything it created.
+
+    Uploads are scratch data: this is what the UI calls when the user is done
+    with a result, and what the unload beacon calls when they simply leave.
+    """
+    manager = request.app.state.import_manager
+    await manager.discard(job_id)
+
+
+@router.post("/imports/{job_id}/discard", status_code=204)
+async def discard_import_beacon(job_id: str, request: Request) -> None:
+    """Same as the DELETE, reachable by ``navigator.sendBeacon``.
+
+    A page being unloaded cannot reliably finish a `fetch`, and sendBeacon
+    only issues POST, so leaving a tab needs a POST route to land on.
+    """
+    manager = request.app.state.import_manager
+    await manager.discard(job_id)
+
+
 @router.get("/imports/{job_id}", response_model=ImportJobOut)
 async def get_import(request: Request, job_id: str) -> ImportJobOut:
     manager = getattr(request.app.state, "import_manager", None)

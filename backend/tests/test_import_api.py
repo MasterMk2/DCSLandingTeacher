@@ -49,7 +49,7 @@ async def _open_client(app) -> httpx.AsyncClient:
 
 
 async def test_import_acmi_end_to_end(tmp_path) -> None:
-    """Upload -> ingest -> detect -> grade -> DB, then visible in /api/landings."""
+    """Upload -> ingest -> detect -> grade -> DB, scoped to the import."""
     app = create_app(_settings(tmp_path))
     async with app.router.lifespan_context(app):
         async with await _open_client(app) as http:
@@ -68,12 +68,70 @@ async def test_import_acmi_end_to_end(tmp_path) -> None:
             assert job["landings_detected"] == 1
             assert job["duplicates_skipped"] == 0
 
-            landings = await http.get("/api/landings")
-            body = landings.json()
-            assert body["total"] == 1
-            landing = body["items"][0]
+            # An upload is usually from an unrelated server, so it must not
+            # join the shared history that the default listing shows.
+            shared = (await http.get("/api/landings")).json()
+            assert shared["total"] == 0
+            assert all(
+                not s["id"].startswith("import:") for s in (shared["sources"] or [])
+            )
+
+            # It is reachable through its own source, which is what the import
+            # result view uses.
+            source_id = f"import:{start['id']}"
+            scoped = (await http.get(f"/api/landings?source={source_id}")).json()
+            assert scoped["total"] == 1
+            landing = scoped["items"][0]
             assert landing["kind"] == "carrier"
+            assert landing["source_id"] == source_id
             assert landing["grade"] in ("OK", "OK-", "(OK)", "_NO_GRADE_", "CUT")
+
+
+async def test_discarding_an_import_removes_everything_it_created(tmp_path) -> None:
+    """Nothing of a discarded upload may survive.
+
+    The foreign keys declare ON DELETE CASCADE, but SQLite ignores those
+    unless PRAGMA foreign_keys is on (it is not) and no ORM cascade is
+    configured either, so deleting only the flights would leave every track
+    and landing of the import orphaned in the database.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.entities import DcsObject, Flight, Landing, Track
+
+    app = create_app(_settings(tmp_path))
+    async with app.router.lifespan_context(app):
+        async with await _open_client(app) as http:
+            start = (
+                await http.post(
+                    "/api/import",
+                    files={"file": ("s.acmi", _sample_acmi().encode(), "text/plain")},
+                )
+            ).json()
+            await _wait_for_job(http, start["id"])
+
+            session_factory = app.state.session_factory
+            async def counts() -> dict[str, int]:
+                async with session_factory() as session:
+                    out = {}
+                    for name, model in (
+                        ("flights", Flight), ("objects", DcsObject),
+                        ("tracks", Track), ("landings", Landing),
+                    ):
+                        out[name] = (
+                            await session.execute(select(func.count()).select_from(model))
+                        ).scalar_one()
+                    return out
+
+            before = await counts()
+            assert all(v > 0 for v in before.values()), before
+
+            deleted = await http.delete(f"/api/imports/{start['id']}")
+            assert deleted.status_code == 204
+
+            after = await counts()
+            assert after == {"flights": 0, "objects": 0, "tracks": 0, "landings": 0}
+            assert (await http.get("/api/imports")).json()["items"] == []
 
 
 async def test_import_zip_archive(tmp_path) -> None:
@@ -140,8 +198,16 @@ async def test_duplicate_import_is_skipped(tmp_path) -> None:
             assert job2["landings_detected"] == 0
             assert job2["duplicates_skipped"] == 1
 
-            landings = (await http.get("/api/landings")).json()
-            assert landings["total"] == 1
+            # Both uploads share a ReferenceTime, so the second is skipped;
+            # each import is scoped to its own source, so count there.
+            first_scope = (
+                await http.get(f"/api/landings?source=import:{first.json()['id']}")
+            ).json()
+            second_scope = (
+                await http.get(f"/api/landings?source=import:{second.json()['id']}")
+            ).json()
+            assert first_scope["total"] == 1
+            assert second_scope["total"] == 0
 
 
 async def test_import_rejects_unsupported_extension(tmp_path) -> None:

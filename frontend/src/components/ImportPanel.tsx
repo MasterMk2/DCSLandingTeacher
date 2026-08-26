@@ -1,7 +1,12 @@
 /** ACMI file import panel: drag & drop / file picker + progress + summary. */
 
-import { useCallback, useRef, useState } from "react";
-import { getImport, importAcmiFile } from "../api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  discardImport,
+  discardImportOnUnload,
+  getImport,
+  importAcmiFile,
+} from "../api/client";
 import {
   IMPORT_ACCEPT,
   formatImportSummary,
@@ -24,6 +29,36 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<ImportJob | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Kept in a ref as well so the unload handler below always sees the current
+  // job without being torn down and re-registered on every poll tick.
+  const jobRef = useRef<ImportJob | null>(null);
+  jobRef.current = job;
+
+  // An upload is scratch data scoped to its own source. Throw it away when
+  // the page goes away, so an abandoned tab does not leave another server's
+  // recording sitting in the database until the retention sweep runs.
+  useEffect(() => {
+    const drop = () => {
+      const current = jobRef.current;
+      if (current) discardImportOnUnload(current.id);
+    };
+    window.addEventListener("pagehide", drop);
+    return () => window.removeEventListener("pagehide", drop);
+  }, []);
+
+  const handleDiscard = useCallback(async () => {
+    const current = jobRef.current;
+    if (!current) return;
+    try {
+      await discardImport(current.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setJob(null);
+    setError(null);
+    onImported?.();
+  }, [onImported]);
 
   const pollJob = useCallback(
     (jobId: string) => {
@@ -146,7 +181,22 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
                 {job.status === "failed" && job.error && (
                   <span className="error-message"> {job.error}</span>
                 )}
+                {!isActiveImportStatus(job.status) && (
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={handleDiscard}
+                  >
+                    破棄
+                  </button>
+                )}
               </p>
+              {!isActiveImportStatus(job.status) && (
+                <p className="import-note">
+                  ※ 取り込んだ内容は一時データです。サーバの記録一覧には出ず、
+                  破棄するかタブを閉じた時点で削除されます。
+                </p>
+              )}
               {isActiveImportStatus(job.status) && job.total_frames > 0 && (
                 <div className="import-progress">
                   <div

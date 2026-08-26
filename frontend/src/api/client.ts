@@ -116,3 +116,36 @@ export function getImport(jobId: string): Promise<ImportJob> {
 export function listImports(): Promise<{ items: ImportJob[] }> {
   return getJson<{ items: ImportJob[] }>("/api/imports");
 }
+
+/** Discard an import and everything it created.
+ *
+ *  Uploads are scratch data: they are usually a recording from some other
+ *  server, so they are kept out of the shared history and thrown away once
+ *  the user is done looking at them.
+ */
+export async function discardImport(jobId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/imports/${jobId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    if (res.status === 401 || res.status === 403) notifyAuthInvalid();
+    throw new ApiError(res.status, `DELETE /api/imports failed: ${res.status}`);
+  }
+}
+
+/** Best-effort discard for a page that is going away.
+ *
+ *  `fetch` is cancelled while unloading, so this uses sendBeacon, which the
+ *  browser is allowed to finish afterwards. It cannot issue a DELETE, hence
+ *  the dedicated POST route. The server-side retention sweep covers whatever
+ *  still slips through (a crash, a killed tab).
+ */
+export function discardImportOnUnload(jobId: string): void {
+  const url = `${BASE}/api/imports/${jobId}/discard`;
+  if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+    navigator.sendBeacon(url, new Blob([], { type: "text/plain" }));
+    return;
+  }
+  void discardImport(jobId).catch(() => undefined);
+}

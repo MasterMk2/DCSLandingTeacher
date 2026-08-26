@@ -119,6 +119,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.pipeline = pipeline
         app.state.import_manager = import_manager
 
+        # Sweep scratch imports left behind by abandoned tabs or a restart.
+        purged = await import_manager.purge_expired(settings.import_retention_hours)
+        if purged:
+            logger.info("purged %d expired import(s)", purged)
+
         yield
 
         if multi_source_manager is not None:

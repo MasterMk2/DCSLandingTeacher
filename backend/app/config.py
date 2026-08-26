@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     # megabytes. Larger uploads are rejected with 413.
     import_max_upload_mb: int = 200
 
+    #: Uploaded recordings are scratch data kept out of the shared history.
+    #: They are discarded explicitly by the UI, and any left behind (an
+    #: abandoned tab, a restart) are swept once they are this old. 0 disables
+    #: the sweep and keeps imports until they are discarded by hand.
+    import_retention_hours: float = 24.0
+
     # --- Runway geometry from DCSServerBot's RestAPI ---------------------
     # Land landings are graded against the real runway (threshold position,
     # course, length) instead of guessing from the touchdown point. Leave
