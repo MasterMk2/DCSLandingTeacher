@@ -363,33 +363,47 @@ class TrackIngestor:
                     ),
                 )
 
+    #: Minimum baseline (s) for the two-point ground-speed estimate below.
+    #: ACMI partial updates that omit T=lon|lat frequently repeat the last
+    #: known position verbatim (spec-correct "unchanged" semantics), so the
+    #: *immediately* preceding buffered sample is often a near-duplicate of
+    #: the current one. Differentiating against it divides a near-zero
+    #: distance by a near-zero dt, which reads as exactly 0 m/s on one pair
+    #: and spikes into the thousands on the next (observed live: 1364 m/s).
+    #: Matches the existing pattern used for vertical speed
+    #: (_vertical_speed / _descent_rate_before below) instead of a fixed
+    #: 0.05s jitter guard.
+    GROUND_SPEED_MIN_BASELINE_S = 1.0
+
     def _ground_speed_ms(self, obj_id: str, source: AcmiObject) -> float | None:
         """Best-available horizontal speed in m/s (Issue D-2).
 
         DCS's own Tacview export never emits ``TAS``/``CAS``/``IAS`` (verified
         against a live server: real aircraft object lines carry only
         position/attitude/identity properties), so ``AcmiObject.speed`` is
-        always ``None`` for real games. Fall back to a two-sample ground
-        speed estimate from this aircraft's own previous position.
+        always ``None`` for real games. Fall back to a ground speed estimate
+        against this aircraft's own position from at least
+        ``GROUND_SPEED_MIN_BASELINE_S`` seconds ago, walking further back in
+        the buffer as needed.
         """
         if source.speed is not None:
             return source.speed
+        if source.latitude is None or source.longitude is None:
+            return None
         buffer = self._aircraft_buffers.get(obj_id)
-        previous = buffer.last() if buffer is not None else None
-        if (
-            previous is None
-            or previous.latitude is None
-            or previous.longitude is None
-        ):
+        if buffer is None:
             return None
-        dt = source.last_seen - previous.time
-        if dt <= 0.05:
-            # Too little elapsed time: position jitter would dominate.
-            return None
-        distance = haversine_m(
-            previous.latitude, previous.longitude, source.latitude, source.longitude
-        )
-        return distance / dt
+        for previous in reversed(buffer.snapshot()):
+            if previous.latitude is None or previous.longitude is None:
+                continue
+            dt = source.last_seen - previous.time
+            if dt < self.GROUND_SPEED_MIN_BASELINE_S:
+                continue
+            distance = haversine_m(
+                previous.latitude, previous.longitude, source.latitude, source.longitude
+            )
+            return distance / dt
+        return None
 
     def _ground_altitude_for(
         self, latitude: float | None, longitude: float | None
