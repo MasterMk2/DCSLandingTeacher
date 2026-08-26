@@ -91,6 +91,59 @@ async def test_ingest_derives_ground_speed_when_acmi_omits_speed_properties(
     assert samples[1].speed == pytest.approx(expected_speed, rel=1e-6)
 
 
+async def test_ground_speed_ignores_duplicate_position_from_partial_updates(
+    session_factory,
+) -> None:
+    """A partial update (no T=lon|lat) repeats the last known position
+
+    verbatim per the ACMI spec ("omitted transform components keep their
+    previous values"). Differentiating against the *immediately* preceding
+    buffered sample would divide a near-zero distance by a near-zero dt,
+    which live data showed reads as exactly 0 m/s on one pair and spikes
+    into the thousands m/s on the next. The estimate must instead walk back
+    to a sample at least GROUND_SPEED_MIN_BASELINE_S old.
+    """
+    from app.detection.geometry import haversine_m
+
+    ingestor = TrackIngestor(session_factory)
+    lines = [
+        "FileType=text/acmi/tacview",
+        "FileVersion=2.2",
+        "0,ReferenceTime=2011-06-02T05:00:00Z",
+        "#0.00",
+        "301,T=0|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
+        "#0.10",
+        "301,T=0.001|0|1000",  # real movement
+        "#0.15",
+        "301,AGL=950",  # partial update, no T= -> position repeats verbatim
+        "#0.20",
+        "301,AGL=940",  # another partial update, same repeated position
+        "#1.20",
+        "301,T=0.004|0|1000",  # real movement resumes
+    ]
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
+    assert len(samples) == 5
+    # The two partial updates repeat the t=0.10 position verbatim.
+    assert samples[2].longitude == pytest.approx(0.001)
+    assert samples[3].longitude == pytest.approx(0.001)
+    # Not enough baseline yet (< 1.0s since the first sample) -> unknown,
+    # not a noisy guess.
+    assert samples[1].speed is None
+    assert samples[2].speed is None
+    assert samples[3].speed is None
+    # The final sample has exactly 1.0s of baseline against the last
+    # distinct position (t=0.20, which repeats t=0.10's 0.001) -- not the
+    # inflated/zeroed reading a naive immediately-previous-sample diff
+    # would produce.
+    last = samples[-1]
+    expected = haversine_m(0.001, 0.0, 0.004, 0.0) / 1.0
+    assert last.speed == pytest.approx(expected, rel=1e-6)
+
+
 async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
     ingestor = TrackIngestor(session_factory)
     await ingestor.handle_line("#not-a-number")  # must not raise

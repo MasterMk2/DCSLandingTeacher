@@ -34,3 +34,11 @@ frontend/dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Tacview ACMI recordings: kept local only. Real captures run to tens or
+# hundreds of MB and bloat the repo permanently once committed. The small
+# parser/import fixture below is the exception the test suite needs.
+*.acmi
+*.acmi.zip
+!backend/tests/fixtures/*.acmi
+Testdata/
