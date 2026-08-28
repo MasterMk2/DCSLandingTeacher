@@ -25,6 +25,16 @@ from app.grading.deviations import ApproachAnalysis, DeviationSample
 MS_TO_FPM = 60.0 / 0.3048  # ~196.85
 M_TO_FT = 1.0 / 0.3048     # ~3.281
 
+# ---------------------------------------------------------------------------
+# Tunable thresholds (Issue #43). The remaining inline literals that represent
+# adjustable behavior are pulled out here so they are easy to find and tune
+# instead of being scattered magic numbers.
+# ---------------------------------------------------------------------------
+CENTERLINE_DEVIATION_FLAG_M = 5.0  # centerline deviation that raises a flag (m)
+SPEED_RATIO_IDEAL = 1.0            # on-speed touchdown-speed ratio baseline
+DESCENT_RATE_EXTREME_SCORE = 5.0   # floor score for an extremely hard landing
+SPEED_UNKNOWN_SCORE = 50.0         # score when touchdown-speed ratio is unknown
+
 
 @dataclass
 class ComponentScore:
@@ -63,13 +73,13 @@ def _descent_rate_score(fpm: float, bands: dict[str, Any]) -> tuple[float, str]:
         return 55.0, "somewhat hard"
     if fpm <= bands["hard"]:
         return 30.0, "hard"
-    return 5.0, "extremely hard"
+    return DESCENT_RATE_EXTREME_SCORE, "extremely hard"
 
 
 def _speed_ratio_score(ratio: float | None, bands: dict[str, Any]) -> tuple[float, str]:
     if ratio is None:
-        return 50.0, "unknown"
-    deviation = abs(ratio - 1.0)
+        return SPEED_UNKNOWN_SCORE, "unknown"
+    deviation = abs(ratio - SPEED_RATIO_IDEAL)
     if deviation <= bands["good_band"]:
         return 100.0, "on speed"
     if deviation <= bands["fair_band"]:
@@ -417,7 +427,7 @@ def _build_comment(
                 f"閾値までのグライドスロープは理想より{direction}"
                 f"（平均 {abs(mean_signed_gs_err):.2f}°）"
             )
-    if max_cl_dev is not None and max_cl_dev > 5.0:
+    if max_cl_dev is not None and max_cl_dev > CENTERLINE_DEVIATION_FLAG_M:
         parts.append(f"センターラインから最大 {max_cl_dev * M_TO_FT:.0f} ft ずれた")
     verdicts = {
         "A": "見事な着陸です。",

@@ -55,6 +55,9 @@ logger = getLogger(__name__)
 #: elevation reference for WOW estimation.
 GROUND_REFERENCE_RADIUS_M = 5000.0
 
+#: Default maximum age of a buffered ACMI batch before it is flushed (Issue #43).
+DEFAULT_BATCH_AGE_S = 2.0
+
 
 @dataclass
 class LandingContext:
@@ -94,7 +97,7 @@ class TrackIngestor:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         max_batch_size: int = 200,
-        max_batch_age_s: float = 2.0,
+        max_batch_age_s: float = DEFAULT_BATCH_AGE_S,
         landing_listener: LandingListener | None = None,
         landing_finalize_listener: LandingFinalizeListener | None = None,
         sample_buffer_s: float = 600.0,

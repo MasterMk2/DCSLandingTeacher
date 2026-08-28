@@ -61,9 +61,12 @@ export function useLandings(
     const socket = new LandingSocket((msg) => {
       // "landing" inserts a new (possibly provisional) row; "landing_update"
       // replaces the provisional row with its confirmed outcome (Issue #5).
+      // Capturing filters via filtersRef (not the effect closure) keeps the
+      // live insert consistent with the currently displayed filter set
+      // (Issue #33), so a filtered-out landing is counted but not shown.
       const isNew = msg.type === "landing";
       setData((prev) =>
-        prev ? applyLandingMessage(prev, msg, offset) : prev,
+        prev ? applyLandingMessage(prev, msg, offset, filtersRef.current) : prev,
       );
       if (isNew) setLiveCount((c) => c + 1);
     });
