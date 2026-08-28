@@ -45,7 +45,8 @@ _ZIP_MAGIC = b"PK"
 #: Upload streaming chunk size.
 _CHUNK_SIZE = 1024 * 1024
 
-router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
+# No prefix here (Issue #38): applied at include time in app.api.main.
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 def _validate_filename(filename: str) -> None:

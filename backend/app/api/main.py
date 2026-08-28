@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import update
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +34,21 @@ from app.runways.dcssb import DcssbClient
 from app.runways.provider import RunwayProvider
 
 logger = getLogger(__name__)
+
+# Issue #38: explicit API versioning. Every REST/WS route is served under
+# /api/v1 so a future breaking change can ship as /api/v2 without breaking
+# deployed frontends pinned to v1. The unversioned /api prefix is kept as a
+# deprecated alias during the transition; new clients must use /api/v1.
+API_VERSION = "0.3.0"
+API_V1 = "v1"
+API_V1_PREFIX = "/api/v1"
+
+_version_router = APIRouter()
+
+
+@_version_router.get("/version")
+async def api_version() -> dict[str, str]:
+    return {"api": API_V1, "version": API_VERSION}
 
 # How often the grading config file is polled for changes (Issue #40). A
 # watchdog dependency would be heavier; mtime polling is dependency-free and
@@ -263,11 +278,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_headers=["*"],
         )
 
-    app.include_router(api_router)
-    # Token-protected landing endpoints (Issue #8); see app.api.auth.
-    app.include_router(protected_router)
-    # Token-protected ACMI file import endpoints (background jobs).
-    app.include_router(import_router)
+    app.include_router(_version_router, prefix=API_V1_PREFIX)
+    app.include_router(_version_router, prefix="/api")  # deprecated alias
+    # The same routers are mounted under both the versioned (/api/v1) prefix
+    # and the legacy (/api) alias so existing clients keep working (Issue #38).
+    for _prefix in (API_V1_PREFIX, "/api"):
+        app.include_router(api_router, prefix=_prefix)
+        # Token-protected landing endpoints (Issue #8); see app.api.auth.
+        app.include_router(protected_router, prefix=_prefix)
+        # Token-protected ACMI file import endpoints (background jobs).
+        app.include_router(import_router, prefix=_prefix)
     _mount_frontend(app, Path(settings.frontend_dist_dir))
 
     # Standard error envelope (Issue #42) so clients can branch on a stable

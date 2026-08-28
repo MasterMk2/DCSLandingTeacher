@@ -1,6 +1,7 @@
 /**
- * WebSocket client for /api/ws/landings with automatic reconnection
+ * WebSocket client for /api/v1/ws/landings with automatic reconnection
  * and keep-alive ping (the backend answers {"type":"pong"} to "ping").
+ * Pinned to API v1 (Issue #38).
  */
 import { getToken } from "../auth/token";
 import type { WsLandingMessage } from "../types/api";
@@ -25,16 +26,16 @@ export class LandingSocket {
 
   connect(): void {
     if (this.ws || this.closedByUser) return;
-    // NOTE: the backend router has the global "/api" prefix, so the actual
-    // WebSocket path is /api/ws/landings. Browsers cannot attach headers to
-    // WebSocket connections, so the shared token (Issue #8) is passed as a
-    // query parameter instead.
+    // NOTE: the backend router is mounted under the /api/v1 prefix, so the
+    // actual WebSocket path is /api/v1/ws/landings. Browsers cannot attach
+    // headers to WebSocket connections, so the shared token (Issue #8) is
+    // passed as a query parameter instead.
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams();
     const token = getToken();
     if (token) params.set("token", token);
     const qs = params.toString();
-    const url = `${proto}//${location.host}${BASE}/api/ws/landings${qs ? `?${qs}` : ""}`;
+    const url = `${proto}//${location.host}${BASE}/api/v1/ws/landings${qs ? `?${qs}` : ""}`;
     try {
       this.ws = new WebSocket(url);
     } catch {

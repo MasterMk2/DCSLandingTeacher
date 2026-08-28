@@ -34,13 +34,16 @@ from app.api.schemas import (
 )
 from app.models.entities import DcsObject, Flight, Landing
 
-router = APIRouter(prefix="/api")
+# No prefix here: the version prefix (/api/v1) and the legacy /api alias are
+# applied at include time in app.api.main (Issue #38).
+router = APIRouter()
 
 # Landing endpoints live on a separate router that enforces the shared-token
 # authentication (Issue #8). /api/health and the WebSocket endpoint stay on
 # the public router: health is for liveness monitoring and the WebSocket
 # performs its own ?token= check (browsers cannot attach WS headers).
-protected_router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
+# No prefix here (Issue #38): applied at include time in app.api.main.
+protected_router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 async def get_session(request: Request) -> AsyncSession:

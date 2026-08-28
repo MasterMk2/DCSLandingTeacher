@@ -83,9 +83,16 @@ describe("computeMaxDeviation / computeMaxRange", () => {
     expect(computeMaxDeviation(samples, (s) => s.glideslope_deviation, 30)).toBe(50);
   });
 
-  it("floors the range at 500 m", () => {
-    expect(computeMaxRange([sample({ distance_to_go: 120 })])).toBe(500);
+  it("floors the range at 100 m (Issue #34: low floor preserves short-final precision)", () => {
+    expect(computeMaxRange([sample({ distance_to_go: 120 })])).toBe(200);
     expect(computeMaxRange([sample({ distance_to_go: 3700 })])).toBe(5000);
+  });
+
+  it("does not force a coarse 30 m deviation scale (Issue #34)", () => {
+    // A precise +/-3 m approach used to be zoomed out to a 30 m scale; with the
+    // low floor it now scales to a 5 m axis (niceCeil keeps the label round).
+    const samples = [sample({ centerline_deviation: 2 }), sample({ centerline_deviation: -3 })];
+    expect(computeMaxDeviation(samples, (s) => s.centerline_deviation)).toBe(5);
   });
 });
 

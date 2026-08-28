@@ -15,8 +15,25 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Versioned WebSocket (Issue #38) plus the legacy /api/ws alias. The
+      // plain "/api" proxy below already forwards /api/v1 REST traffic.
+      "/api/v1/ws": { target: BACKEND, ws: true, changeOrigin: true },
       "/api/ws": { target: BACKEND, ws: true, changeOrigin: true },
       "/api": { target: BACKEND, changeOrigin: true },
+    },
+  },
+  build: {
+    // Issue #39: split heavy / rarely-changing vendor code into its own
+    // chunks so the app shell stays small and recharts (the Largest
+    // dependency) is cached independently of application code.
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          recharts: ["recharts"],
+        },
+      },
     },
   },
   test: {
