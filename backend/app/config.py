@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # megabytes. Larger uploads are rejected with 413.
     import_max_upload_mb: int = 200
 
+    # Emit structured (JSON) log lines instead of plain text (Issue #32).
+    structured_logs: bool = True
+
     #: Uploaded recordings are scratch data kept out of the shared history.
     #: They are discarded explicitly by the UI, and any left behind (an
     #: abandoned tab, a restart) are swept once they are this old. 0 disables

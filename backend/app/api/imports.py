@@ -103,6 +103,26 @@ async def import_acmi_file(
 
     settings = request.app.state.settings
     max_bytes = settings.import_max_upload_mb * 1024 * 1024
+
+    # Reject oversized uploads before streaming the body (Issue #29). A
+    # malicious or accidental multi-GB upload would otherwise be read into a
+    # temp file (or memory) before the limit is enforced, enabling an OOM
+    # denial of service on a single-container deployment with no reverse
+    # proxy. The streaming check in ``_save_upload`` remains as a fallback
+    # for clients that omit/forge Content-Length.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"upload exceeds the {settings.import_max_upload_mb} MB limit"
+                    ),
+                )
+        except ValueError:
+            pass
+
     temp_path = await _save_upload(file, max_bytes)
 
     job = manager.create_job(filename)

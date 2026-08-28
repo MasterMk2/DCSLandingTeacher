@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from logging import getLogger
 from typing import Any
 
 from fastapi import WebSocket
+
+logger = getLogger(__name__)
 
 
 class LandingNotifier:
@@ -64,6 +67,11 @@ class LandingNotifier:
             try:
                 await websocket.send_json(message)
             except Exception:
+                # A single dead client must not break delivery to the rest.
                 stale.append(websocket)
         for websocket in stale:
+            logger.warning(
+                "dropped WebSocket client after send failure",
+                extra={"ctx_clients": len(self._clients)},
+            )
             self.disconnect(websocket)

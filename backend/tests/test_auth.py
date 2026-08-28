@@ -47,6 +47,21 @@ async def test_health_stays_public_when_auth_enabled(tmp_path) -> None:
     assert response.json()["status"] == "ok"
 
 
+async def test_health_reports_database_connectivity(tmp_path) -> None:
+    """Issue #45: the health endpoint must surface DB connectivity so probes
+    do not pass against a dead/corrupt database."""
+    app = create_app(make_settings(tmp_path))
+    async with app.router.lifespan_context(app):
+        async with await open_client(app) as client:
+            response = await client.get("/api/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "database" in body
+    assert body["database"]["connected"] is True
+    assert "latency_ms" in body["database"]
+
+
 async def test_rest_rejects_missing_token_with_401(tmp_path) -> None:
     app = create_app(make_settings(tmp_path, auth_token="secret"))
     async with app.router.lifespan_context(app):
@@ -117,3 +132,38 @@ def test_ws_allows_anonymous_when_auth_disabled(tmp_path) -> None:
         with test_client.websocket_connect("/api/ws/landings") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
+
+
+def test_ws_connection_revoked_when_auth_enabled_after_connect(tmp_path) -> None:
+    """Issue #25: enabling auth after a connection was established (while auth
+    was off) must not leave the stale connection open."""
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as test_client:
+        with test_client.websocket_connect("/api/ws/landings") as websocket:
+            websocket.send_text("ping")
+            assert websocket.receive_json() == {"type": "pong"}
+
+            # Operator enables authentication at runtime.
+            app.state.settings.auth_token = "secret"
+
+            # The next interaction must force re-authentication.
+            with pytest.raises(WebSocketDisconnect):
+                websocket.send_text("ping")
+                websocket.receive_json()
+
+
+def test_ws_connection_revoked_on_token_rotation(tmp_path) -> None:
+    """Issue #25: rotating the server token must invalidate old connections."""
+    app = create_app(make_settings(tmp_path, auth_token="old"))
+    with TestClient(app) as test_client:
+        with test_client.websocket_connect(
+            "/api/ws/landings?token=old"
+        ) as websocket:
+            websocket.send_text("ping")
+            assert websocket.receive_json() == {"type": "pong"}
+
+            app.state.settings.auth_token = "new"
+
+            with pytest.raises(WebSocketDisconnect):
+                websocket.send_text("ping")
+                websocket.receive_json()

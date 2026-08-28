@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from logging import getLogger
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -59,6 +60,7 @@ class LandingPipeline:
         notifier: Any | None = None,
         carrier_geometry_book: CarrierGeometryBook | None = None,
         runway_provider: Any | None = None,
+        grading_config_path: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._config = grading_config
@@ -69,6 +71,23 @@ class LandingPipeline:
         # Real runway geometry for land landings; ``None`` falls back to the
         # touchdown-referenced approximation.
         self._runway_provider = runway_provider
+        # Source path so the config can be reloaded at runtime (Issue #40).
+        self._config_path = (
+            Path(grading_config_path) if grading_config_path is not None else None
+        )
+
+    def reload_config(self) -> None:
+        """Reload grading thresholds from disk without restarting (Issue #40).
+
+        New landings use the fresh values immediately. A missing path (config
+        built in-memory) is a no-op so tests and embedded configs are untouched.
+        """
+        if self._config_path is None or not self._config_path.is_file():
+            return
+        from app.grading.config import load_grading_config
+
+        self._config = load_grading_config(self._config_path)
+        logger.info("grading config reloaded from %s", self._config_path)
 
     async def handle_landing(self, context: LandingContext) -> int | None:
         """Grade + persist one detected landing; returns the row id.
@@ -225,7 +244,15 @@ class LandingPipeline:
             from app.grading.config import apply_config_overrides
 
             config = apply_config_overrides(config, overrides)
-        analysis = ApproachAnalysis.from_dict(landing.approach_track)
+        try:
+            analysis = ApproachAnalysis.from_dict(landing.approach_track)
+        except ValueError as exc:
+            # Corrupt stored JSON (Issue #44): report it instead of a raw 500.
+            from app.api.errors import AppError
+
+            raise AppError(
+                422, "MALFORMED_APPROACH_TRACK", str(exc)
+            ) from exc
         if landing.kind == "carrier":
             result = grade_carrier_approach(analysis, config)
             score = None

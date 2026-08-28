@@ -232,6 +232,25 @@ async def test_import_rejects_oversized_upload(tmp_path) -> None:
     assert response.status_code == 413
 
 
+async def test_import_rejects_oversized_upload_via_content_length(tmp_path) -> None:
+    """Issue #29: an upload whose (real) Content-Length exceeds the limit is
+    rejected with 413 before the body is streamed to disk, not after."""
+    app = create_app(_settings(tmp_path, import_max_upload_mb=1))
+    async with app.router.lifespan_context(app):
+        async with await _open_client(app) as http:
+            response = await http.post(
+                "/api/import",
+                files={
+                    "file": (
+                        "big.acmi",
+                        b"x" * (2 * 1024 * 1024),
+                        "text/plain",
+                    )
+                },
+            )
+    assert response.status_code == 413
+
+
 async def test_list_and_get_import_jobs(tmp_path) -> None:
     app = create_app(_settings(tmp_path))
     async with app.router.lifespan_context(app):
@@ -312,3 +331,70 @@ def test_ws_notified_of_import_completion(tmp_path) -> None:
             job_payload = import_message["import"]
             assert job_payload["status"] == "completed"
             assert job_payload["landings_detected"] == 1
+
+
+async def test_import_job_survives_restart(tmp_path) -> None:
+    """Issue #28: import job metadata must persist across server restarts,
+    not live only in the manager's in-memory dict (which is lost on restart,
+    leaving completed jobs un-queryable as 404)."""
+    import asyncio
+
+    db_path = (tmp_path / "persist.db").as_posix()
+    settings1 = Settings(
+        acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}"
+    )
+    app1 = create_app(settings1)
+    async with app1.router.lifespan_context(app1):
+        async with await _open_client(app1) as http:
+            response = await http.post(
+                "/api/import",
+                files={"file": ("session.acmi", _sample_acmi().encode(), "text/plain")},
+            )
+            assert response.status_code == 202
+            job_id = response.json()["id"]
+            await _wait_for_job(http, job_id)
+            # Let the run() finally block persist the row before teardown.
+            await asyncio.sleep(0.05)
+
+    # app1's in-memory manager is gone now. A fresh app against the same
+    # database must rebuild the job history from the import_jobs table.
+    settings2 = Settings(
+        acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}"
+    )
+    app2 = create_app(settings2)
+    async with app2.router.lifespan_context(app2):
+        async with await _open_client(app2) as http:
+            job = await http.get(f"/api/imports/{job_id}")
+            assert job.status_code == 200
+            assert job.json()["status"] == "completed"
+            listing = await http.get("/api/imports")
+            ids = [j["id"] for j in listing.json()["items"]]
+            assert job_id in ids
+
+
+async def test_importing_same_acmi_twice_deduplicates(tmp_path) -> None:
+    """Issue #41: re-importing an ACMI that is already in the database must
+    skip the duplicate landing rather than creating a second row."""
+    app = create_app(_settings(tmp_path))
+    async with app.router.lifespan_context(app):
+        async with await _open_client(app) as http:
+            body = _sample_acmi().encode()
+
+            first = await http.post(
+                "/api/import",
+                files={"file": ("session.acmi", body, "text/plain")},
+            )
+            await _wait_for_job(http, first.json()["id"])
+
+            second = await http.post(
+                "/api/import",
+                files={"file": ("session.acmi", body, "text/plain")},
+            )
+            job2 = await _wait_for_job(http, second.json()["id"])
+            # The second run recognizes the already-recorded touchdown.
+            assert job2["duplicates_skipped"] >= 1
+            assert job2["landings_detected"] == 0
+
+            # Exactly one landing exists in total.
+            landings = await http.get("/api/landings")
+            assert landings.json()["total"] == 1

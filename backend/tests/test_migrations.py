@@ -141,3 +141,31 @@ async def test_app_lifespan_applies_migrations(tmp_path: Path) -> None:
         url = f"sqlite:///{db_path}"
         assert "landings" in _table_names(url)
         assert _version(url) == HEAD_REVISION
+
+
+async def test_downgrade_to_baseline_drops_added_columns(tmp_path: Path) -> None:
+    """Every migration has a working downgrade path (Issue #24).
+
+    Upgrading to head then downgrading back to the baseline must remove the
+    columns added by 0002..0004 and leave the baseline schema intact, so a
+    failed production deploy can be rolled back.
+    """
+    url = f"sqlite:///{(tmp_path / 'rollback.db').as_posix()}"
+    cfg = make_alembic_config(url)
+
+    command.upgrade(cfg, "head")
+    assert "outcome_status" in _columns(url, "landings")
+    assert "source_id" in _columns(url, "flights")
+    assert "approach_pattern" in _columns(url, "landings")
+
+    command.downgrade(cfg, BASELINE_REVISION)
+
+    assert "outcome_status" not in _columns(url, "landings")
+    assert "source_id" not in _columns(url, "flights")
+    assert "source_id" not in _columns(url, "landings")
+    assert "approach_pattern" not in _columns(url, "landings")
+    # Baseline schema survives.
+    assert _table_names(url) >= {"flights", "objects", "tracks", "landings"}
+    # The import_jobs table added by 0006 is gone after full downgrade.
+    assert "import_jobs" not in _table_names(url)
+    assert _version(url) == BASELINE_REVISION

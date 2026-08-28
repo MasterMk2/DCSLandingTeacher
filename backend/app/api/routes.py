@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from sqlalchemy import func, or_, select
+from fastapi.responses import JSONResponse
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_auth, ws_token_ok
+from app.api.auth import (
+    require_auth,
+    ws_connect_authorized,
+    ws_extract_token,
+    ws_still_authorized,
+)
+from app.api.errors import AppError
 from app.importer import IMPORT_SOURCE_PREFIX
 from app.pipeline import _touchdown_epoch
 from app.api.schemas import (
@@ -47,6 +56,24 @@ async def health(request: Request) -> dict:
     notifier = getattr(request.app.state, "notifier", None)
     multi_source_manager = getattr(request.app.state, "multi_source_manager", None)
     sources_status = multi_source_manager.get_source_status() if multi_source_manager else []
+
+    database = await _check_database(request)
+    # A dead database means the service cannot serve landing data, so probes
+    # (k8s/lb) should take it out of rotation (Issue #45).
+    if not database["connected"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "version": request.app.version,
+                "acmi_enabled": settings.acmi_enabled,
+                "acmi_connected": bool(client.connected) if client is not None else False,
+                "acmi_sources": sources_status,
+                "ws_clients": notifier.client_count if notifier is not None else 0,
+                "database": database,
+            },
+        )
+
     return {
         "status": "ok",
         "version": request.app.version,
@@ -54,7 +81,23 @@ async def health(request: Request) -> dict:
         "acmi_connected": bool(client.connected) if client is not None else False,
         "acmi_sources": sources_status,  # Issue #13 multi-source support
         "ws_clients": notifier.client_count if notifier is not None else 0,
+        "database": database,
     }
+
+
+async def _check_database(request: Request) -> dict:
+    """Verify the database is reachable and report round-trip latency (Issue #45)."""
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return {"connected": False, "error": "session factory not configured"}
+    try:
+        start = time.monotonic()
+        async with session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        latency_ms = (time.monotonic() - start) * 1000
+        return {"connected": True, "latency_ms": round(latency_ms, 1)}
+    except Exception as exc:
+        return {"connected": False, "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -243,11 +286,32 @@ async def regrade_landing(
 
     pipeline = getattr(request.app.state, "pipeline", None)
     if pipeline is None:
-        raise HTTPException(status_code=503, detail="grading pipeline unavailable")
+        raise AppError(503, "PIPELINE_UNAVAILABLE", "grading pipeline unavailable")
 
     overrides = body.overrides if body is not None else None
     payload = await pipeline.regrade(landing, overrides=overrides)
     return RegradeResponse(**payload)
+
+
+@protected_router.post("/config/reload")
+async def reload_grading_config(request: Request) -> dict:
+    """Hot-reload grading thresholds from disk without a restart (Issue #40).
+
+    New landings (and future regrades) use the fresh values immediately. The
+    background poller also reloads on file change; this lets an operator force
+    it after an edit. Requires the shared token.
+    """
+    pipeline = getattr(request.app.state, "pipeline", None)
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="grading pipeline unavailable")
+    before = getattr(request.app.state, "config_reload_total", 0)
+    pipeline.reload_config()
+    request.app.state.grading_config = pipeline._config
+    request.app.state.config_reload_total = before + 1
+    return {
+        "reloaded": True,
+        "config_reload_total": request.app.state.config_reload_total,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +319,17 @@ async def regrade_landing(
 # ---------------------------------------------------------------------------
 
 
+#: Idle interval between authorization re-checks for WebSocket clients. A
+#: connection is receive-idle, so without a periodic check a client that was
+#: accepted before authentication was enabled (Issue #25) would stay open
+#: forever. The re-check also catches server-side token rotation.
+WS_AUTH_RECHECK_SECONDS = 30.0
+
+
 @router.websocket("/ws/landings")
 async def ws_landings(websocket: WebSocket) -> None:
-    if not ws_token_ok(websocket):
+    provided = ws_extract_token(websocket)
+    if not ws_connect_authorized(websocket, provided):
         # Reject during the handshake (ASGI servers answer with HTTP 403).
         await websocket.close(code=1008)
         return
@@ -268,8 +340,19 @@ async def ws_landings(websocket: WebSocket) -> None:
     await notifier.connect(websocket)
     try:
         while True:
-            # Clients are receive-idle; any message other than ping closes.
-            message = await websocket.receive_text()
+            try:
+                message = await asyncio.wait_for(
+                    websocket.receive_text(), timeout=WS_AUTH_RECHECK_SECONDS
+                )
+            except asyncio.TimeoutError:
+                # Periodic re-authorization check for idle connections.
+                if not ws_still_authorized(websocket, provided):
+                    await websocket.close(code=1008)
+                    return
+                continue
+            if not ws_still_authorized(websocket, provided):
+                await websocket.close(code=1008)
+                return
             if message.strip().lower() == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:

@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.file_reader import iter_acmi_lines
 from app.ingest import LandingContext, TrackIngestor
-from app.models.entities import DcsObject, Flight, Landing, Track
+from app.models.entities import DcsObject, Flight, ImportJobRow, Landing, Track
 from app.pipeline import LandingPipeline
 
 logger = getLogger(__name__)
@@ -132,7 +132,10 @@ class _DuplicateGuard:
 
     async def handle_landing(self, context: LandingContext) -> int | None:
         if await self._is_duplicate(context):
-            key = (context.acmi_object_id, round(context.event.touchdown.time, 3))
+            # Full-precision timestamp: rounding to 1 ms could otherwise treat
+            # the same touchdown as two distinct skips (Issue #30). The actual
+            # duplicate decision is made in the database by an epsilon compare.
+            key = (context.acmi_object_id, context.event.touchdown.time)
             if key not in self._skipped_keys:
                 self._skipped_keys.add(key)
                 self._job.duplicates_skipped += 1
@@ -206,6 +209,66 @@ class ImportJobManager:
     def list_jobs(self) -> list[ImportJob]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
 
+    # -- persistence (Issue #28) ----------------------------------------
+
+    async def _persist_job(self, job: ImportJob) -> None:
+        """Upsert the job's current state to the ``import_jobs`` table."""
+        row = ImportJobRow(
+            id=job.id,
+            filename=job.filename,
+            status=job.status,
+            progress_percent=job.progress_percent,
+            frames_processed=job.frames_processed,
+            total_frames=job.total_frames,
+            landings_detected=job.landings_detected,
+            duplicates_skipped=job.duplicates_skipped,
+            error=job.error,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+        )
+        async with self._session_factory() as session:
+            await session.merge(row)
+            await session.commit()
+
+    async def load_persisted(self) -> None:
+        """Rebuild in-memory job state from the database after a restart.
+
+        Jobs that were still ``pending``/``processing`` when the server stopped
+        can never resume (their background task is gone), so they are marked
+        ``failed`` with an "interrupted by server restart" error and persisted
+        again, giving an honest status instead of a silent 404.
+        """
+        from sqlalchemy import select
+
+        async with self._session_factory() as session:
+            rows = (await session.execute(select(ImportJobRow))).scalars().all()
+
+        for row in rows:
+            job = self._row_to_job(row)
+            if job.status in ("pending", "processing"):
+                job.status = "failed"
+                job.error = "interrupted by server restart"
+                job.finished_at = job.finished_at or _utcnow()
+                await self._persist_job(job)
+            self._jobs[job.id] = job
+
+    @staticmethod
+    def _row_to_job(row: ImportJobRow) -> ImportJob:
+        return ImportJob(
+            id=row.id,
+            filename=row.filename,
+            status=row.status,
+            created_at=row.created_at,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            frames_processed=row.frames_processed,
+            total_frames=row.total_frames,
+            landings_detected=row.landings_detected,
+            duplicates_skipped=row.duplicates_skipped,
+            error=row.error,
+        )
+
     # -- processing -----------------------------------------------------
 
     async def run(self, job: ImportJob, file_path: str | Path) -> None:
@@ -217,6 +280,7 @@ class ImportJobManager:
         async with self._run_lock:
             job.status = "processing"
             job.started_at = _utcnow()
+            await self._persist_job(job)
             try:
                 await self._process(job, Path(file_path))
                 job.status = "completed"
@@ -233,6 +297,7 @@ class ImportJobManager:
                 logger.exception("import %s failed", job.id)
             finally:
                 job.finished_at = _utcnow()
+                await self._persist_job(job)
                 _remove_quietly(file_path)
                 await self._notify(job)
 
@@ -276,6 +341,9 @@ class ImportJobManager:
                 lines_since_yield += 1
                 if lines_since_yield >= YIELD_EVERY_LINES:
                     lines_since_yield = 0
+                    # Persist progress so a restart mid-import still shows how
+                    # far the job got (Issue #28).
+                    await self._persist_job(job)
                     await asyncio.sleep(0)
         finally:
             await ingestor.close()

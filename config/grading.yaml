@@ -205,9 +205,9 @@ lso_grading:
     # the factor.
     BURBLE:
       severity: minor
-      enabled: true
+      enabled: false           # DISABLED: ACMI 2.2 has no wind data; heuristic is unvalidated
       description: "バーブル (Burble) - 甲板後方の乱気流(バースト)による沈み込み"
-      details: "着艦直前3秒間の平均沈下率が、直前12秒間のベースライン比で+1.5m/sを超えた場合に検出されます。空母後方の甲板乱気流(バーブル)に入った際の特徴的な急激な沈み込みをヒューリスティックに推定します。実データでの調整が必要です。"
+      details: "着艦直前3秒間の平均沈下率が、直前12秒間のベースライン比で+1.5m/sを超えた場合に検出されます。空母後方の甲板乱気流(バーブル)に入った際の特徴的な急激な沈み込みをヒューリスティックに推定します。実データでの調整が必要です。ACMI 2.2 には風データがないため、このヒューリスティックは無効化されています。実データで検証されるまで有効にしないでください。"
       window_s: 3.0            # sink evaluation window before touchdown
       baseline_window_s: 12.0  # stable-approach reference window before that
       extra_descent_ms: 1.5    # mean extra sink (m/s) over baseline to trigger

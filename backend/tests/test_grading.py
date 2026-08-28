@@ -9,6 +9,7 @@ from app.grading.config import load_grading_config
 from app.grading.deviations import build_approach_analysis, estimate_course_deg
 from app.grading.land_grader import grade_land_landing
 from app.grading.lso_grader import grade_carrier_approach
+from app.pipeline import LandingPipeline
 from tests.conftest import GRADING_YAML
 from tests.helpers import DECK_ALTITUDE_M, make_approach_samples, make_carrier_state
 
@@ -80,11 +81,59 @@ def test_estimate_course_deg_prefers_touchdown_heading_over_curved_track() -> No
         TrackSample(time=20.0, latitude=0.02, longitude=0.005),
     ]
     position_bearing = estimate_course_deg(samples, None)
+    # Default kind is "carrier": touchdown heading still wins (de-crabbed at
+    # the angled deck).
     assert estimate_course_deg(samples, 330.0) == pytest.approx(330.0)
     # Sanity check the scenario is meaningful: the position-only fallback
     # really does disagree substantially with the touchdown heading.
     angular_diff = abs(((330.0 - position_bearing + 180) % 360) - 180)
     assert angular_diff > 30
+
+
+def test_estimate_course_deg_land_uses_stabilized_track_not_heading() -> None:
+    """Issue #26: a land crosswind approach crabs the heading away from the
+    runway course. The runway course equals the ground *track* on the
+    stabilized final, so a landed course must follow the track (here ~000,
+    straight north), not the crabbed touchdown heading (030)."""
+    # Straight-in final due north; positions share a longitude.
+    samples = [
+        TrackSample(time=0.0, latitude=34.990, longitude=140.0),
+        TrackSample(time=10.0, latitude=34.995, longitude=140.0),
+        TrackSample(time=20.0, latitude=35.000, longitude=140.0),
+    ]
+    assert estimate_course_deg(samples, 30.0, kind="land") == pytest.approx(0.0, abs=0.5)
+    # Without a track (no positions) the heading is the last-resort fallback.
+    empty = [TrackSample(time=0.0, latitude=None, longitude=None)]
+    assert estimate_course_deg(empty, 30.0, kind="land") == pytest.approx(30.0)
+
+
+def test_land_course_avoids_crosswind_crab_bias() -> None:
+    """End-to-end: a crabbed land approach grades with an unbiased centerline
+    and reports the crosswind crab angle for the UI (Issue #26)."""
+    samples = make_approach_samples(
+        glideslope_deg=3.0,
+        approach_speed_ms=30.0,
+        touchdown_speed_ms=None,
+    )
+    # Crab the heading 30 deg while the ground track stays straight down the
+    # runway centerline (course 0).
+    for s in samples:
+        s.heading = 30.0
+    events = analyze_track(samples, DECK_ALTITUDE_M, carriers={})
+    assert len(events) == 1
+    event = events[0]
+    analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
+
+    assert analysis.kind == "land"
+    # Course follows the runway track, not the crabbed heading.
+    assert analysis.course_deg == pytest.approx(0.0, abs=1.0)
+    assert analysis.crosswind_crab_deg == pytest.approx(30.0, abs=1.0)
+
+    result = grade_land_landing(analysis, CONFIG)
+    # The crab must not leak into the centerline component.
+    centerline = next(c for c in result.components if c.name == "centerline")
+    assert centerline.evidence["max_abs_deviation_m"] == pytest.approx(0.0, abs=1.0)
+    assert result.metrics["crosswind_crab_deg"] == pytest.approx(30.0, abs=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +311,79 @@ def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() ->
     assert glideslope.score < 60
 
 
+def test_pipeline_reload_config_picks_up_file_changes(tmp_path) -> None:
+    """Issue #40: editing grading.yaml and reloading applies new thresholds to
+    subsequent gradings without a server restart."""
+    from pathlib import Path
+
+    config_path = tmp_path / "grading.yaml"
+    original = Path(GRADING_YAML).read_text(encoding="utf-8")
+    config_path.write_text(original, encoding="utf-8")
+
+    pipeline = LandingPipeline(
+        None, load_grading_config(config_path), grading_config_path=config_path
+    )
+    before = next(
+        c
+        for c in grade_land_landing(_analysis_with_gs_deviations([2.0] * 12), pipeline._config).components
+        if c.name == "glideslope"
+    ).score
+
+    # Tighten the poor band so the same offset drops a band.
+    modified = original.replace("poor: 5.0", "poor: 2.0")
+    assert modified != original
+    config_path.write_text(modified, encoding="utf-8")
+    pipeline.reload_config()
+
+    after = next(
+        c
+        for c in grade_land_landing(_analysis_with_gs_deviations([2.0] * 12), pipeline._config).components
+        if c.name == "glideslope"
+    ).score
+    assert after < before
+
+
+async def test_config_reload_endpoint_requires_and_reloads(tmp_path) -> None:
+    """Issue #40: POST /api/config/reload is token-protected and hot-reloads."""
+    from pathlib import Path
+
+    from app.api.main import create_app
+    from tests.test_auth import make_settings, open_client
+
+    config_path = tmp_path / "grading.yaml"
+    original = Path(GRADING_YAML).read_text(encoding="utf-8")
+    config_path.write_text(original, encoding="utf-8")
+
+    settings = make_settings(tmp_path, grading_config_path=str(config_path), auth_token="secret")
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with await open_client(app) as client:
+            # No token -> rejected.
+            denied = await client.post("/api/config/reload")
+            assert denied.status_code == 401
+            # With token -> reloaded.
+            ok = await client.post(
+                "/api/config/reload", headers={"X-Auth-Token": "secret"}
+            )
+            assert ok.status_code == 200
+            assert ok.json()["reloaded"] is True
+
+
+def test_land_grader_rms_penalizes_oscillation_more_than_steady_offset() -> None:
+    """Issue #35: 同じ絶対値平均でも、振動する進入は RMS でより低く評価される。"""
+    steady = grade_land_landing(
+        _analysis_with_gs_deviations([2.0] * 12), CONFIG
+    )
+    # 2m を中心に ±3m 振動する進入。MAD は 2m だが RMS は約 3.6m。
+    oscillating = grade_land_landing(
+        _analysis_with_gs_deviations([-1.0, 5.0] * 6), CONFIG
+    )
+    steady_gs = next(c for c in steady.components if c.name == "glideslope")
+    osc_gs = next(c for c in oscillating.components if c.name == "glideslope")
+    assert osc_gs.evidence["rms_deviation_final_15s_m"] > steady_gs.evidence["rms_deviation_final_15s_m"]
+    assert osc_gs.score < steady_gs.score
+
+
 def test_land_grader_letter_bands() -> None:
     letters = CONFIG.land_grading["letters"]
     assert letters["A"] > letters["B"] > letters["C"] > letters["D"]
@@ -381,10 +503,19 @@ def test_lso_disabled_factors_never_emitted() -> None:
 
 def test_lso_burble_detected_on_sudden_sink() -> None:
     # Steady approach at ~4.3 m/s sink, then ~7 m/s over the last 3 s:
-    # the characteristic burble sink.
+    # the characteristic burble sink. BURBLE is disabled by default
+    # (Issue #23: unvalidated heuristic, no wind data in ACMI), so enable it
+    # explicitly for this test of the heuristic itself.
+    from app.grading.config import apply_config_overrides
+
+    enabled_config = apply_config_overrides(
+        CONFIG,
+        {"lso_grading": {"factors": {"BURBLE": {"enabled": True}}}},
+    )
+
     event = _carrier_event(pre_touchdown_descent_ms=7.0)
     analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
+    result = grade_carrier_approach(analysis, enabled_config)
 
     burble = next((f for f in result.factors if f.name == "BURBLE"), None)
     assert burble is not None
@@ -419,6 +550,19 @@ def test_lso_burble_respects_enabled_flag() -> None:
     event = _carrier_event(pre_touchdown_descent_ms=7.0)
     analysis = build_approach_analysis(event, 3.5)
     result = grade_carrier_approach(analysis, disabled_config)
+
+    assert all(f.name != "BURBLE" for f in result.factors)
+
+
+def test_lso_burble_disabled_by_default() -> None:
+    """BURBLE must be disabled out of the box (Issue #23).
+
+    The heuristic is unvalidated and ACMI 2.2 has no wind data, so it must
+    not influence grades until tuned against real DCS approach data.
+    """
+    event = _carrier_event(pre_touchdown_descent_ms=7.0)
+    analysis = build_approach_analysis(event, 3.5)
+    result = grade_carrier_approach(analysis, CONFIG)
 
     assert all(f.name != "BURBLE" for f in result.factors)
 
@@ -474,3 +618,104 @@ def test_land_analysis_uses_three_degree_reference() -> None:
     event = _land_event(pre_touchdown_descent_ms=1.2)
     analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
     assert analysis.glideslope_deg == pytest.approx(3.0)
+
+
+async def test_reap_stale_provisionals_finalizes_old_ones(session_factory) -> None:
+    """Issue #36: provisionals older than the max age are force-finalized while
+    recent ones stay provisional waiting for their final detection."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.api.main import _settle_stale_provisionals
+    from app.models.entities import DcsObject, Flight, Landing
+
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        flight = Flight(source_id="default")
+        session.add(flight)
+        await session.flush()
+        obj_old = DcsObject(flight_id=flight.id, acmi_id="A1", first_seen=0.0, last_seen=1.0)
+        obj_new = DcsObject(flight_id=flight.id, acmi_id="A2", first_seen=0.0, last_seen=1.0)
+        session.add_all([obj_old, obj_new])
+        await session.flush()
+        session.add_all(
+            [
+                Landing(
+                    flight_id=flight.id, object_id=obj_old.id,
+                    outcome_status="provisional",
+                    created_at=now - timedelta(seconds=400),
+                ),
+                Landing(
+                    flight_id=flight.id, object_id=obj_new.id,
+                    outcome_status="provisional",
+                    created_at=now - timedelta(seconds=10),
+                ),
+            ]
+        )
+        await session.commit()
+
+    reaped = await _settle_stale_provisionals(
+        session_factory, now - timedelta(seconds=300)
+    )
+    assert reaped == 1
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Landing).order_by(Landing.object_id)
+        )
+        rows = result.scalars().all()
+    assert rows[0].outcome_status == "final"
+    assert rows[1].outcome_status == "provisional"
+
+
+def test_approach_analysis_from_dict_rejects_malformed_json() -> None:
+    """Issue #44: a corrupt stored approach_track must fail loudly, not with an
+    opaque TypeError deep in the grader."""
+    from app.grading.deviations import ApproachAnalysis
+
+    with pytest.raises(ValueError):
+        ApproachAnalysis.from_dict({"samples": "not a list"})
+    with pytest.raises(ValueError):
+        ApproachAnalysis.from_dict({"samples": [{"time": 1.0}]})
+
+
+async def test_regrade_malformed_track_returns_structured_error(tmp_path) -> None:
+    """Issues #44/#42: a corrupt approach_track yields the standard error
+    envelope (422 / MALFORMED_APPROACH_TRACK) instead of a raw 500."""
+    from app.api.main import create_app
+    from app.models.entities import DcsObject, Flight, Landing
+    from tests.test_auth import make_settings, open_client
+
+    settings = make_settings(tmp_path, auth_token="secret")
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        sf = app.state.session_factory
+        async with sf() as s:
+            flight = Flight(source_id="default")
+            s.add(flight)
+            await s.flush()
+            obj = DcsObject(
+                flight_id=flight.id, acmi_id="A1", first_seen=0.0, last_seen=1.0
+            )
+            s.add(obj)
+            await s.flush()
+            landing = Landing(
+                flight_id=flight.id,
+                object_id=obj.id,
+                outcome_status="final",
+                approach_track={"samples": "not a list"},
+            )
+            s.add(landing)
+            await s.flush()
+            await s.commit()
+            lid = landing.id
+        async with await open_client(app) as client:
+            resp = await client.post(
+                f"/api/landings/{lid}/regrade",
+                headers={"X-Auth-Token": "secret"},
+            )
+            assert resp.status_code == 422
+            body = resp.json()
+            assert body["error"] == "MALFORMED_APPROACH_TRACK"
+            assert "message" in body

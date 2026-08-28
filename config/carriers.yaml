@@ -35,6 +35,10 @@
 # ACMI object Name; `type_patterns` against the ACMI Type string. First
 # entry that matches wins; ships not listed here fall back to the legacy
 # touchdown-referenced approximation (see app/grading/deviations.py).
+#
+# Validation status: Each carrier entry can include a `validated` section
+# with real in-game measurements. Run `scripts/validate_carrier_geometry.py`
+# to generate validated values from Tacview ACMI trap data.
 
 version: 2
 
@@ -53,6 +57,7 @@ carriers:
     # Russian FLOLS equivalent (Klystron) typically set steeper than USN.
     # Deck height higher due to ski-jump bow structure.
     # Sources: DCS community data, Kuznetsov specs (flight deck ~22m above waterline at landing area)
+    validated: false
     deck_altitude_m: 22.0            # Flight deck height at landing area (MSL)
     ramp_along_m: -110.0             # Ramp/IFLOLS datum ~110m aft of ship reference (stern area)
     ramp_lateral_m: 5.0              # Near centerline for axial approach (slight starboard for angled landing area)
@@ -69,6 +74,7 @@ carriers:
     # 3-wire target: ~230 ft (70m) from stern per ED Supercarrier Guide.
     # IFLOLS vertical position: community research suggests +0.55m correction vs model.
     # Sources: DCS Forum (Matthew10_28), ED Supercarrier Operations Guide, Hoggit Wiki
+    validated: false
     deck_altitude_m: 19.5            # Flight deck height at landing area (MSL) ~64 ft
     ramp_along_m: -140.0             # Ramp/IFLOLS datum ~140m aft of ship reference (near stern)
     ramp_lateral_m: -10.0            # IFLOLS on PORT side of landing area (negative = left of ship heading)
@@ -83,6 +89,7 @@ carriers:
     # Slightly smaller than Nimitz, similar angled deck geometry.
     # Angled deck: ~9° (early angled deck design).
     # Sources: Heatblur forums, Forrestal-class specs, DCS community feedback
+    validated: false
     deck_altitude_m: 17.5            # Flight deck height at landing area (MSL) ~57 ft
     ramp_along_m: -130.0             # Ramp/IFLOLS datum ~130m aft of ship reference
     ramp_lateral_m: -10.0            # IFLOLS on PORT side of landing area

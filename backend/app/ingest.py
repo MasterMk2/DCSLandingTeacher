@@ -22,6 +22,7 @@ landing events are forwarded to the optional ``landing_listener`` callback
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -135,9 +136,16 @@ class TrackIngestor:
         return self._carrier_states
 
     async def handle_line(self, line: str) -> None:
-        """Process one raw line coming from the stream client."""
+        """Process one raw line coming from the stream client.
+
+        ``feed_line`` is CPU-bound (coordinate/property string parsing) and may
+        run for a while on a very large line. It is offloaded to a worker
+        thread (Issue #31) so the event loop stays free to serve WebSocket and
+        HTTP traffic; because each call is awaited before the next, the parser
+        state and detection ordering are preserved.
+        """
         try:
-            events = self._parser.feed_line(line)
+            events = await asyncio.to_thread(self._parser.feed_line, line)
         except AcmiParseError as exc:
             logger.warning("skipping unparsable ACMI line: %s", exc)
             return
@@ -159,40 +167,22 @@ class TrackIngestor:
     async def close(self) -> None:
         """Flush pending writes and release the session."""
         await self._flush(force=True)
-        if self._session is not None:
-            await self._session.close()
-            self._session = None
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
     def _get_session(self) -> AsyncSession:
+        """Create a new short-lived session for the current batch.
+
+        Using a new session per batch (instead of reusing one across commits)
+        ensures the SQLite write lock is released between batches. This allows
+        concurrent writers (API / import / regrade) to acquire the lock during
+        the gap between ingest batches.
+        """
         if self._session is None:
-            # autoflush off: the per-update reads below (session.get /
-            # select on DcsObject) would otherwise flush the queued Track
-            # inserts, which opens SQLite's single write transaction within
-            # milliseconds of the previous commit and holds it for the whole
-            # batching window. Measured on the live server that was a 3.0 s
-            # hold with a 0.17 s gap -- 98.8% occupancy -- which starved the
-            # ACMI importer and /regrade into "database is locked" (SQLite's
-            # busy handler backs off in 100 ms steps and cannot reliably hit
-            # a 0.17 s window).
-            #
-            # Batching is supposed to defer the *writes*, not hold the lock
-            # across them: with autoflush off the inserts land in one burst
-            # at commit. Nothing here reads back an unflushed row -- object
-            # rows are explicitly flushed when created (their ids are needed
-            # for foreign keys) and then served from _object_row_ids and the
-            # identity map.
             self._session = self._session_factory(autoflush=False)
             self._pending = 0
-        # The session object is reused across commits (a commit ends the
-        # transaction, not the session), so a new batch starting on an
-        # *existing* session must still stamp its own opening time -
-        # otherwise _batch_opened_at, cleared by the previous _flush(),
-        # stays None forever and the age trigger only ever fires once.
-        if self._pending == 0:
             self._batch_opened_at = time.monotonic()
         return self._session
 
@@ -213,6 +203,10 @@ class TrackIngestor:
             self._session = None
             raise
         finally:
+            # Close the session to release the SQLite write lock immediately.
+            # Next batch will get a fresh session via _get_session().
+            await self._session.close()
+            self._session = None
             self._pending = 0
             self._batch_opened_at = None
 
@@ -374,9 +368,21 @@ class TrackIngestor:
     #: (_vertical_speed / _descent_rate_before below) instead of a fixed
     #: 0.05s jitter guard.
     GROUND_SPEED_MIN_BASELINE_S = 1.0
+    #: A baseline older than this is too stale to trust: the aircraft may have
+    #: travelled a very different path in between, so the resulting speed is
+    #: noise rather than a measurement (observed live: 1364 m/s spikes). This
+    #: bounds a previously unbounded lookback that could reach minutes back.
+    GROUND_SPEED_MAX_BASELINE_S = 15.0
+    #: Below this horizontal displacement over the baseline the estimate is
+    #: dominated by ACMI partial-update duplication (the last known position
+    #: repeated verbatim) and quantization noise, not real motion.
+    GROUND_SPEED_MIN_DISTANCE_M = 5.0
+    #: Above this ground speed the estimate is implausible for crewed aircraft
+    #: and must be discarded instead of skewing FAST/SLOW factor detection.
+    GROUND_SPEED_MAX_PLAUSIBLE_MS = 1000.0
 
     def _ground_speed_ms(self, obj_id: str, source: AcmiObject) -> float | None:
-        """Best-available horizontal speed in m/s (Issue D-2).
+        """Best-available horizontal speed in m/s (Issue D-2 / #27).
 
         DCS's own Tacview export never emits ``TAS``/``CAS``/``IAS`` (verified
         against a live server: real aircraft object lines carry only
@@ -384,7 +390,9 @@ class TrackIngestor:
         always ``None`` for real games. Fall back to a ground speed estimate
         against this aircraft's own position from at least
         ``GROUND_SPEED_MIN_BASELINE_S`` seconds ago, walking further back in
-        the buffer as needed.
+        the buffer as needed -- but never past ``GROUND_SPEED_MAX_BASELINE_S``
+        seconds of stale data (Issue #27), and only when the displacement is
+        large enough to be real motion.
         """
         if source.speed is not None:
             return source.speed
@@ -399,10 +407,21 @@ class TrackIngestor:
             dt = source.last_seen - previous.time
             if dt < self.GROUND_SPEED_MIN_BASELINE_S:
                 continue
+            if dt > self.GROUND_SPEED_MAX_BASELINE_S:
+                # Everything further back is even staler; no usable baseline.
+                return None
             distance = haversine_m(
                 previous.latitude, previous.longitude, source.latitude, source.longitude
             )
-            return distance / dt
+            if distance < self.GROUND_SPEED_MIN_DISTANCE_M:
+                # ACMI repeats the last position on partial updates; a tiny
+                # delta is noise, not a standstill -- keep walking back within
+                # the fresh window for a sample that actually moved.
+                continue
+            speed = distance / dt
+            if speed > self.GROUND_SPEED_MAX_PLAUSIBLE_MS:
+                return None
+            return speed
         return None
 
     def _ground_altitude_for(
@@ -467,7 +486,11 @@ class TrackIngestor:
             # a brand-new landing (one bouncy arrival produced three rows)
             # and orphaned the earlier provisional rows at "provisional"
             # forever, because their key never came back to be popped.
-            key = (obj_id, round(landing.first_contact_time, 3))
+            # Use the full-precision timestamp (not a rounded value): rounding
+            # to 1 ms can split the provisional and final keys of the same
+            # landing when floating-point representation differs by a hair,
+            # defeating the two-phase correlation (Issue #30).
+            key = (obj_id, landing.first_contact_time)
             context = LandingContext(
                 flight_id=self._flight_id,
                 acmi_object_id=obj_id,

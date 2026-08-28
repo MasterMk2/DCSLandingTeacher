@@ -27,6 +27,11 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: Check migration drift (alembic check)
+        run: |
+          alembic -x db_url=sqlite:///./ci_drift.db upgrade head
+          alembic -x db_url=sqlite:///./ci_drift.db check
+
       - name: Test (pytest)
         run: pytest -q
 

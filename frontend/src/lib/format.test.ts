@@ -78,7 +78,7 @@ describe("formatMetric", () => {
       label: "max_abs_deviation",
       text: "92 ft",
     });
-    expect(formatMetric("mean_abs_deviation_final_15s_m", 16.91).text).toBe("55 ft");
+    expect(formatMetric("rms_deviation_final_15s_m", 16.91).text).toBe("55 ft");
   });
 
   it("distinguishes descent rates from airspeeds, both stored as m/s", () => {

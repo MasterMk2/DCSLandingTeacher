@@ -55,10 +55,37 @@ async def require_auth(request: Request) -> None:
         raise HTTPException(status_code=403, detail="invalid token")
 
 
-def ws_token_ok(websocket: WebSocket) -> bool:
-    """Check the ``?token=`` query parameter for the WebSocket endpoint."""
+def ws_extract_token(websocket: WebSocket) -> str | None:
+    """Return the ``?token=`` query parameter for the WebSocket endpoint."""
+    return websocket.query_params.get("token")
+
+
+def ws_connect_authorized(websocket: WebSocket, provided: str | None) -> bool:
+    """Authorization decision made at connection time.
+
+    Mirrors :func:`require_auth` for REST: when ``auth_token`` is empty the
+    endpoint is open (default deployment); otherwise the supplied token must
+    match in constant time.
+    """
     expected = websocket.app.state.settings.auth_token
     if not expected:
         return True
-    provided = websocket.query_params.get("token")
     return provided is not None and _tokens_match(provided, expected)
+
+
+def ws_still_authorized(websocket: WebSocket, accepted: str | None) -> bool:
+    """Re-check authorization against the *current* token policy.
+
+    A one-time check at connect is not enough (Issue #25): if the server token
+    is rotated, or authentication is enabled after a connection was already
+    established while auth was off, the stale connection must be rejected. We
+    capture the token that was accepted at connect time (``accepted``) and
+    compare it against the live ``settings.auth_token`` on every interaction.
+    """
+    expected = websocket.app.state.settings.auth_token
+    if not expected:
+        # Auth disabled now: only connections that were also made while auth
+        # was disabled remain valid. A connection accepted with a token while
+        # auth was on, but now off, is a policy downgrade -> reject.
+        return accepted is None
+    return accepted is not None and _tokens_match(accepted, expected)
