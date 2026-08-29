@@ -496,3 +496,37 @@ async def test_discarded_import_does_not_come_back_after_a_restart(tmp_path) -> 
             assert (await http.get(f"/api/imports/{job_id}")).status_code == 404
             listing = await http.get("/api/imports")
             assert [j["id"] for j in listing.json()["items"]] == []
+
+
+async def test_import_survives_a_progress_write_mid_batch(tmp_path, monkeypatch) -> None:
+    """The periodic job-progress write must not deadlock against the import's
+    own open ingest batch.
+
+    ``_persist_job`` opens a second connection. If the ingest batch is already
+    holding SQLite's write lock -- which it does as soon as a previously
+    unseen object is flushed to get its row id for a foreign key -- nothing
+    will commit that batch while ``_process`` awaits the progress write, so
+    the write sits out its busy_timeout and the whole import fails with
+    "database is locked".
+
+    Forced deterministic by persisting at every yield; in production the
+    2 s interval only makes it rarer, not safe (the live database averages a
+    new object every ~2200 track rows against a 200-row batch).
+    """
+    import app.importer as importer_module
+
+    monkeypatch.setattr(importer_module, "JOB_PERSIST_INTERVAL_S", 0.0)
+    monkeypatch.setattr(importer_module, "YIELD_EVERY_LINES", 1)
+
+    app = create_app(_settings(tmp_path))
+    async with app.router.lifespan_context(app):
+        async with await _open_client(app) as http:
+            response = await http.post(
+                "/api/import",
+                files={"file": ("session.acmi", _sample_acmi().encode(), "text/plain")},
+            )
+            assert response.status_code == 202
+            job = await _wait_for_job(http, response.json()["id"], timeout_s=60.0)
+
+    assert job["status"] == "completed", job.get("error")
+    assert job["landings_detected"] >= 1

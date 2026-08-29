@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.detection.detector import LandingEvent, TrackSample
-from app.detection.geometry import offset_position, transform_to_frame
+from app.detection.geometry import haversine_m, offset_position, transform_to_frame
 from app.grading.carriers import FlolsGeometry
 from app.runways.models import DEFAULT_AIMING_POINT_M, Runway
 
@@ -248,6 +248,17 @@ STABILIZED_FINAL_S = 12.0
 #: estimate falls back to the touchdown heading.
 MAX_PLAUSIBLE_CRAB_DEG = 40.0
 
+#: Minimum straight-line displacement over the stabilized-final window for its
+#: two-point bearing to be a measurement rather than noise. Measured against
+#: the recorded landings: real finals cover >= 478 m in 12 s, while hovering /
+#: near-stopped cases cover <= 141 m and yield bearings up to 36 deg off.
+MIN_TRACK_DISPLACEMENT_M = 300.0
+
+#: Largest disagreement between the first and second halves of the window
+#: still consistent with a straight final. Beyond this the window is inside a
+#: turn, and a chord across a turn is not the runway course.
+MAX_TRACK_CURVATURE_DEG = 8.0
+
 
 def _position_bearing(
     lat0: float, lon0: float, lat1: float, lon1: float
@@ -260,18 +271,37 @@ def _position_bearing(
 
 
 def _stabilized_track_course(
-    samples: list[TrackSample], window_s: float = STABILIZED_FINAL_S
+    samples: list[TrackSample],
+    window_s: float = STABILIZED_FINAL_S,
+    touchdown_time: float | None = None,
 ) -> float | None:
     """Ground-track bearing over the final ``window_s`` of the approach.
 
     The stabilized final is a straight line whose track equals the runway
     course; using it avoids both the turn-onto-final curvature and the
     crosswind crab angle that would contaminate a heading-based estimate.
+
+    Returns ``None`` -- meaning "no usable estimate", so callers fall back to
+    the touchdown heading -- unless the window really looks like a stabilized
+    final. Two guards, both from measurements against the recorded landings:
+
+    * The aircraft must have covered :data:`MIN_TRACK_DISPLACEMENT_M`. A
+      two-point bearing over a few metres is quantization noise, and ACMI
+      repeats the last position verbatim on partial updates. Replaying this
+      function over the stored tracks separates cleanly: every real final
+      moved >= 478 m through the window, while every helicopter/near-stopped
+      case moved <= 141 m and produced bearings up to 36 deg off the runway.
+    * The two halves of the window must agree. A tight circuit whose rollout
+      is inside the window (a helicopter, a short-field overhead) is still
+      turning, and a chord across a turn is not the runway course -- which is
+      the whole reason the earlier whole-approach bearing was abandoned.
     """
     pts = [
         (s.latitude, s.longitude, s.time)
         for s in samples
-        if s.latitude is not None and s.longitude is not None
+        if s.latitude is not None
+        and s.longitude is not None
+        and (touchdown_time is None or s.time <= touchdown_time)
     ]
     if len(pts) < 2:
         return None
@@ -283,7 +313,22 @@ def _stabilized_track_course(
         seg = pts
     lat0, lon0, _ = seg[0]
     lat1, lon1, _ = seg[-1]
-    return _position_bearing(lat0, lon0, lat1, lon1)
+    if haversine_m(lat0, lon0, lat1, lon1) < MIN_TRACK_DISPLACEMENT_M:
+        return None
+    course = _position_bearing(lat0, lon0, lat1, lon1)
+    if course is None:
+        return None
+    if len(seg) >= 4:
+        mid = len(seg) // 2
+        first = _position_bearing(lat0, lon0, seg[mid][0], seg[mid][1])
+        second = _position_bearing(seg[mid][0], seg[mid][1], lat1, lon1)
+        if (
+            first is not None
+            and second is not None
+            and abs(_angular_diff(second, first)) > MAX_TRACK_CURVATURE_DEG
+        ):
+            return None
+    return course
 
 
 def _angular_diff(a: float, b: float) -> float:
@@ -295,6 +340,7 @@ def estimate_course_deg(
     samples: list[TrackSample],
     touchdown_heading: float | None,
     kind: str = "carrier",
+    touchdown_time: float | None = None,
 ) -> float:
     """Estimate the landing course when nothing published one.
 
@@ -320,7 +366,7 @@ def estimate_course_deg(
     through a turn onto final.
     """
     if kind == "land":
-        track = _stabilized_track_course(samples)
+        track = _stabilized_track_course(samples, touchdown_time=touchdown_time)
         if track is not None:
             if (
                 touchdown_heading is None
@@ -411,7 +457,10 @@ def build_approach_analysis(
         threshold_along = aiming_point_m
     else:
         course = estimate_course_deg(
-            event.approach, touchdown.heading, kind=event.kind
+            event.approach,
+            touchdown.heading,
+            kind=event.kind,
+            touchdown_time=touchdown.time,
         )
         ref_lat, ref_lon = touchdown.latitude, touchdown.longitude
         deck_elevation = (
@@ -424,14 +473,18 @@ def build_approach_analysis(
     if event.kind == "land" and touchdown.heading is not None:
         # Measured against the ground track actually flown on the stabilized
         # final rather than against ``course``: ``course`` is normally the
-        # published runway heading (or, with no runway, the touchdown heading
-        # itself, which would make this a hard 0.0), and heading-minus-track
-        # is the crab angle regardless of where the course came from. UI
-        # evidence only -- nothing scores it (Issue #26).
-        track = _stabilized_track_course(event.approach)
-        crosswind_crab_deg = _angular_diff(
-            touchdown.heading, track if track is not None else course
+        # published runway heading, and heading-minus-track is the crab angle
+        # regardless of where the course came from. UI evidence only --
+        # nothing scores it (Issue #26).
+        #
+        # Stays None when the track is unavailable. Falling back to ``course``
+        # would report a measured 0.0 deg for a hovering helicopter, because
+        # with no runway ``course`` is the touchdown heading itself.
+        track = _stabilized_track_course(
+            event.approach, touchdown_time=touchdown.time
         )
+        if track is not None:
+            crosswind_crab_deg = _angular_diff(touchdown.heading, track)
 
     analysis = ApproachAnalysis(
         kind=event.kind,

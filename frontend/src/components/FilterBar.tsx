@@ -22,8 +22,18 @@ const OUTCOME_OPTIONS = [
   { value: "bolter", label: "ボルター" },
 ];
 
-const GRADE_OPTIONS = [
-  { value: "", label: "すべて" },
+// The server matches `grade` with equality against whatever the grader
+// stored, and the two graders use different scales: land landings get the
+// letters A-E from grading.yaml, carrier traps get the US Navy LSO grades.
+// Listing only the LSO grades made the control unusable on this deployment,
+// which records land landings almost exclusively -- every option matched zero
+// rows.
+const LAND_GRADE_OPTIONS = ["A", "B", "C", "D", "E"].map((g) => ({
+  value: g,
+  label: g,
+}));
+
+const CARRIER_GRADE_OPTIONS = [
   { value: "OK", label: "OK" },
   { value: "OK-", label: "OK-" },
   { value: "(OK)", label: "(OK)" },
@@ -104,11 +114,21 @@ export function FilterBar({ filters, onChange, sources }: FilterBarProps) {
           value={filters.grade ?? ""}
           onChange={(e) => set({ grade: e.target.value || undefined })}
         >
-          {GRADE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
+          <option value="">すべて</option>
+          <optgroup label="陸上">
+            {LAND_GRADE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="空母 (LSO)">
+            {CARRIER_GRADE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
         </select>
       </label>
       <label>

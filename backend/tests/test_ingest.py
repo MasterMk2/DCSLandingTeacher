@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, text
 
 from app.ingest import TrackIngestor
 from app.models.database import create_engine, create_session_factory, init_db
@@ -359,3 +359,58 @@ async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> No
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", _count)
         await engine.dispose()
+
+
+async def test_a_failed_write_does_not_wedge_the_ingestor(tmp_path) -> None:
+    """A write failure has to discard the batch, not keep it.
+
+    The session.flush() calls that fetch row ids for foreign keys raise before
+    _flush() is ever reached, and SQLAlchemy deactivates the transaction on a
+    failed flush. Keeping that session makes every later line -- and close()
+    itself -- raise PendingRollbackError, and the live source's supervisor
+    just calls run() again on the same ingestor, so one "database is locked"
+    would wedge ingestion into a permanent reconnect loop storing nothing.
+    """
+    db_path = (tmp_path / "wedge.db").as_posix()
+    url = f"sqlite+aiosqlite:///{db_path}"
+
+    engine = create_engine(url)
+    await init_db(engine)
+    # Fail immediately instead of waiting out the 5 s busy timeout.
+    @event.listens_for(engine.sync_engine, "connect")
+    def _no_wait(dbapi_connection, _record):  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA busy_timeout=0")
+        cursor.close()
+
+    session_factory = create_session_factory(engine)
+    ingestor = TrackIngestor(session_factory)
+    lines = (FIXTURES / "sample.acmi").read_text(encoding="utf-8").splitlines()
+
+    # Hold SQLite's single write lock from an unrelated connection: an
+    # uncommitted write to a scratch table keeps it until we roll back.
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE TABLE _lock_probe (x INTEGER)"))
+    blocker_engine = create_engine(url)
+    blocker = await blocker_engine.connect()
+    await blocker.execute(text("INSERT INTO _lock_probe VALUES (1)"))
+
+    with pytest.raises(Exception):
+        for line in lines:
+            await ingestor.handle_line(line)
+
+    await blocker.rollback()
+    await blocker.close()
+    await blocker_engine.dispose()
+
+    # The ingestor has to be usable again once the lock is free.
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    async with session_factory() as session:
+        flights = (await session.execute(select(Flight))).scalars().all()
+        tracks = (await session.execute(select(Track))).scalars().all()
+    assert len(flights) >= 1
+    assert len(tracks) > 0
+    await engine.dispose()

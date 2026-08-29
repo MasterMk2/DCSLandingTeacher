@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listLandings } from "../api/client";
 import { LandingSocket } from "../api/ws";
-import { applyLandingMessage } from "../lib/landings";
+import { applyLandingMessage, countsAsUnseen } from "../lib/landings";
 import type {
   LandingFilters,
   LandingListResponse,
@@ -67,11 +67,18 @@ export function useLandings(
       // The whole filter set is handed over rather than just `source`: the
       // reducer needs `source` to keep uploaded recordings out of the shared
       // history, and the remaining fields for the Issue #33 check.
-      const isNew = msg.type === "landing";
-      setData((prev) =>
-        prev ? applyLandingMessage(prev, msg, offset, filtersRef.current) : prev,
-      );
-      if (isNew) setLiveCount((c) => c + 1);
+      //
+      // The badge is decided by countsAsUnseen against the same state and the
+      // same filters, so it can never claim news the reducer discarded (an
+      // import's landings, a replayed frame after a reconnect, a row the
+      // filters exclude) -- clicking it would refetch and reveal nothing.
+      setData((prev) => {
+        if (!prev) return prev;
+        if (countsAsUnseen(prev, msg, filtersRef.current)) {
+          setLiveCount((c) => c + 1);
+        }
+        return applyLandingMessage(prev, msg, offset, filtersRef.current);
+      });
     });
     socket.connect();
     return () => socket.close();

@@ -244,6 +244,10 @@ class ImportJobManager:
         # the busy_timeout is exceeded. Serializing imports here removes the
         # import-vs-import case entirely.
         self._run_lock = asyncio.Lock()
+        #: Ids discarded while their import was still running. run()'s
+        #: finally consults this before persisting, so a discard cannot be
+        #: undone by the task it cancelled finishing afterwards.
+        self._discarded: set[str] = set()
 
     # -- registry -------------------------------------------------------
 
@@ -346,9 +350,29 @@ class ImportJobManager:
                 logger.exception("import %s failed", job.id)
             finally:
                 job.finished_at = _utcnow()
-                await self._persist_job(job)
+                # Delete the spooled upload first: it is up to
+                # import_max_upload_mb of scratch data and must go regardless
+                # of what happens below. Persisting is a SQLite write and can
+                # raise "database is locked" like any other, and letting that
+                # escape the finally would leak the file, skip the completion
+                # broadcast, and replace whatever error was recorded above.
                 _remove_quietly(file_path)
-                await self._notify(job)
+                if job.id in self._discarded:
+                    # discard() ran while this import was still going: it
+                    # already deleted the job row and everything the import
+                    # created, so re-persisting here would put the row back
+                    # and load_persisted() would resurrect the job -- with no
+                    # data behind it -- on the next restart.
+                    self._discarded.discard(job.id)
+                    logger.info("import %s was discarded while running", job.id)
+                else:
+                    try:
+                        await self._persist_job(job)
+                    except Exception:  # noqa: BLE001 - progress is not the payload
+                        logger.exception(
+                            "could not persist final state of import %s", job.id
+                        )
+                    await self._notify(job)
 
     async def _process(self, job: ImportJob, path: Path) -> None:
         # The duplicate guard needs the ingestor (for the ACMI header), so the
@@ -404,6 +428,13 @@ class ImportJobManager:
                     now = time.monotonic()
                     if now - last_persist >= JOB_PERSIST_INTERVAL_S:
                         last_persist = now
+                        # Commit the ingest batch first. It may already hold
+                        # SQLite's write lock (a new object in this batch was
+                        # flushed to get its row id), and nothing here will
+                        # commit it while we await our own write -- so
+                        # _persist_job would wait out busy_timeout and fail the
+                        # whole import with "database is locked".
+                        await ingestor.flush()
                         await self._persist_job(job)
         finally:
             await ingestor.close()
@@ -415,6 +446,15 @@ class ImportJobManager:
         flights of this import's source removes the whole scratch dataset.
         """
         source_id = import_source_id(job_id)
+        # Tell a still-running run() not to write the job row back after we
+        # delete it. ImportPanel fires discardImportOnUnload on pagehide
+        # whatever the job's status, so closing the tab during a multi-minute
+        # import takes this path routinely.
+        if job_id in self._jobs and self._jobs[job_id].status in (
+            "pending",
+            "processing",
+        ):
+            self._discarded.add(job_id)
         async with self._session_factory() as session:
             flight_ids = select(Flight.id).where(Flight.source_id == source_id)
             # Delete the children explicitly. The ON DELETE CASCADE on these

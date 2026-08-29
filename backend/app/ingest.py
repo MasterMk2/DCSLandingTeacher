@@ -157,19 +157,46 @@ class TrackIngestor:
             logger.warning("skipping unparsable ACMI line: %s", exc)
             return
 
-        for event in events:
-            if isinstance(event, ObjectUpdateEvent):
-                await self._handle_update(event)
-            elif isinstance(event, ObjectRemoveEvent):
-                await self._handle_remove(event)
-            elif isinstance(event, MissionEvent):
-                logger.debug(
-                    "mission event %s at t=%.2f ids=%s text=%r",
-                    event.event_type,
-                    event.time,
-                    list(event.object_ids),
-                    event.text,
-                )
+        try:
+            for event in events:
+                if isinstance(event, ObjectUpdateEvent):
+                    await self._handle_update(event)
+                elif isinstance(event, ObjectRemoveEvent):
+                    await self._handle_remove(event)
+                elif isinstance(event, MissionEvent):
+                    logger.debug(
+                        "mission event %s at t=%.2f ids=%s text=%r",
+                        event.event_type,
+                        event.time,
+                        list(event.object_ids),
+                        event.text,
+                    )
+        except Exception:
+            # Any write failure has to take the session with it, not just a
+            # failure at commit time. The explicit session.flush() calls that
+            # fetch row ids for foreign keys raise *before* _flush() is ever
+            # reached, and SQLAlchemy deactivates the transaction on a failed
+            # flush -- so leaving the session in place makes every subsequent
+            # line raise PendingRollbackError, including close(). The live
+            # source's supervisor catches that, sleeps a second and calls
+            # run() again on the same ingestor, so a single "database is
+            # locked" would otherwise wedge ingestion into a permanent
+            # reconnect loop that stores nothing until the container restarts.
+            await self._discard_session()
+            raise
+
+    async def flush(self) -> None:
+        """Commit the open batch and release SQLite's write lock.
+
+        A caller that is driving this ingestor in a loop and wants to write to
+        the same database from another session has to call this first. The
+        batch may already hold the write lock -- ``_ensure_flight`` and the
+        new-object path both ``session.flush()`` to obtain row ids for foreign
+        keys -- and nothing will commit it while the caller is awaiting its own
+        write, so the second writer would sit out its ``busy_timeout`` and fail
+        with "database is locked".
+        """
+        await self._flush(force=True)
 
     async def close(self) -> None:
         """Flush pending writes and release the session."""
@@ -192,6 +219,22 @@ class TrackIngestor:
             self._pending = 0
             self._batch_opened_at = time.monotonic()
         return self._session
+
+    async def _discard_session(self) -> None:
+        """Drop the current batch after a write failure; never raises."""
+        session, self._session = self._session, None
+        self._pending = 0
+        self._batch_opened_at = None
+        if session is None:
+            return
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001 - already unwinding another error
+            logger.debug("rollback failed while discarding batch", exc_info=True)
+        try:
+            await session.close()
+        except Exception:  # noqa: BLE001 - same
+            logger.debug("close failed while discarding batch", exc_info=True)
 
     async def _flush(self, force: bool = False) -> None:
         if self._session is None:

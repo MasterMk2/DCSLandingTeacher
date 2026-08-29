@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyLandingMessage, isProvisional, matchesFilters } from "./landings";
+import {
+  applyLandingMessage,
+  countsAsUnseen,
+  isProvisional,
+  matchesFilters,
+} from "./landings";
 import type { LandingListResponse, LandingSummary } from "../types/api";
 
 function summary(overrides: Partial<LandingSummary> = {}): LandingSummary {
@@ -102,9 +107,13 @@ describe("applyLandingMessage", () => {
       0,
       { venue: "CV-59" },
     );
-    // Filtered out: not inserted, but the unseen total still bumps.
+    // Filtered out entirely: neither inserted nor counted. `total` is the
+    // server's filtered count, so bumping it would make the pager disagree
+    // with the list until the next refetch -- and the next refetch would
+    // report the original number, because the server excludes the row too.
+    expect(next).toBe(res);
     expect(next.items.map((it) => it.id)).toEqual([2]);
-    expect(next.total).toBe(2);
+    expect(next.total).toBe(1);
   });
 
   it("inserts a new landing when it matches the active filters", () => {
@@ -176,5 +185,45 @@ describe("applyLandingMessage / live payloads", () => {
     expect(
       applyLandingMessage(base, msg, 0, "import:abc123").items,
     ).toHaveLength(1);
+  });
+});
+
+describe("countsAsUnseen", () => {
+  it("counts a shared landing the current view would show", () => {
+    const res = response([summary({ id: 2 })]);
+    const msg = { type: "landing", landing: summary({ id: 3 }) } as const;
+    expect(countsAsUnseen(res, msg)).toBe(true);
+  });
+
+  it("does not count an uploaded recording's landing", () => {
+    const res = response([summary({ id: 2 })]);
+    const msg = {
+      type: "landing",
+      landing: summary({ id: 3, source_id: "import:abc" }),
+    } as const;
+    expect(countsAsUnseen(res, msg)).toBe(false);
+  });
+
+  it("does not count a landing the active filters exclude", () => {
+    const res = response([summary({ id: 2, venue_name: "CV-59" })]);
+    const msg = {
+      type: "landing",
+      landing: summary({ id: 3, venue_name: "Stennis" }),
+    } as const;
+    expect(countsAsUnseen(res, msg, { venue: "CV-59" })).toBe(false);
+  });
+
+  it("does not count a replay of a row already on screen", () => {
+    // LandingNotifier replays its last messages to every new connection, so a
+    // reconnect must not manufacture "new" rows out of what is displayed.
+    const res = response([summary({ id: 2 })]);
+    const msg = { type: "landing", landing: summary({ id: 2 }) } as const;
+    expect(countsAsUnseen(res, msg)).toBe(false);
+  });
+
+  it("does not count a confirmation of an existing row", () => {
+    const res = response([summary({ id: 2 })]);
+    const msg = { type: "landing_update", landing: summary({ id: 2 }) } as const;
+    expect(countsAsUnseen(res, msg)).toBe(false);
   });
 });

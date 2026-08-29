@@ -128,13 +128,16 @@ export function listImports(): Promise<{ items: ImportJob[] }> {
  *  the user is done looking at them.
  */
 export async function discardImport(jobId: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/imports/${jobId}`, {
+  const res = await fetch(`${BASE}${API_V1}/imports/${jobId}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
   if (!res.ok && res.status !== 404) {
     if (res.status === 401 || res.status === 403) notifyAuthInvalid();
-    throw new ApiError(res.status, `DELETE /api/imports failed: ${res.status}`);
+    throw new ApiError(
+      res.status,
+      `DELETE ${API_V1}/imports failed: ${res.status}`,
+    );
   }
 }
 
@@ -146,7 +149,7 @@ export async function discardImport(jobId: string): Promise<void> {
  *  still slips through (a crash, a killed tab).
  */
 export function discardImportOnUnload(jobId: string): void {
-  const url = `${BASE}/api/imports/${jobId}/discard`;
+  const url = `${BASE}${API_V1}/imports/${jobId}/discard`;
   if (typeof navigator !== "undefined" && navigator.sendBeacon) {
     navigator.sendBeacon(url, new Blob([], { type: "text/plain" }));
     return;

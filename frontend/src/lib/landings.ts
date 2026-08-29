@@ -125,10 +125,15 @@ export function applyLandingMessage(
     return { ...res, items };
   }
 
-  // Brand-new landing: prepend on the first page when it matches the active
-  // filters; deeper pages (or filtered-out rows) only bump the total so the
-  // unseen badge stays correct without polluting the displayed list.
-  if (offset === 0 && matchesFilters(landing as LandingSummary, active)) {
+  // Brand-new landing. `total` is the server's *filtered* count, so a row the
+  // filters exclude must not bump it: the server will not count it on the next
+  // refetch either, and the disagreement is visible immediately ("0 件" of list
+  // under a "1 件中" pager, and an enabled 次へ that fetches an empty page).
+  if (!matchesFilters(landing as LandingSummary, active)) return res;
+
+  // Deeper pages bump the total but do not prepend -- the row belongs on page
+  // one, and the count is what tells the pager it exists.
+  if (offset === 0) {
     return {
       ...res,
       items: [landing as LandingSummary, ...res.items],
@@ -141,4 +146,28 @@ export function applyLandingMessage(
 /** True when the row still awaits its final outcome ("評価中" badge). */
 export function isProvisional(item: LandingSummary): boolean {
   return item.outcome_status === "provisional";
+}
+
+/**
+ * Whether a live "landing" frame should bump the unseen badge.
+ *
+ * The badge counts rows the user has not looked at *in the list they are
+ * looking at*, so it has to agree with what applyLandingMessage did with the
+ * same frame. Counting unconditionally means importing a 25-landing ACMI --
+ * imports broadcast through the same notifier -- shows "新着 25 件" on every
+ * dashboard, and clicking it refetches nothing; and because the notifier
+ * replays its last 20 messages to each new connection, a brief network blip
+ * manufactures a "新着 20 件" out of rows already on screen.
+ */
+export function countsAsUnseen(
+  res: LandingListResponse,
+  msg: WsLandingMessage,
+  filters?: LandingFilters | string,
+): boolean {
+  if (msg.type !== "landing") return false;
+  const landing = msg.landing;
+  if (landing.id === undefined) return false;
+  // Already displayed: this is a replay or a re-notification, not news.
+  if (res.items.some((it) => it.id === landing.id)) return false;
+  return applyLandingMessage(res, msg, 0, filters) !== res;
 }
