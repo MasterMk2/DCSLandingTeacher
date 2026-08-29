@@ -39,6 +39,8 @@ describe("landingsToCsv", () => {
         airframe: "F/A-18C",
         touchdown_time: 1700000000,
         touchdown_epoch: 1700000000,
+        created_at: "2026-08-26T16:04:37.812390",
+        approach_pattern: "overhead",
         grade: "_NO_GRADE_",
         score: null,
       },
@@ -46,8 +48,26 @@ describe("landingsToCsv", () => {
     const lines = csv.split("\r\n");
     expect(lines[0]).toContain("id,kind,outcome");
     expect(lines[1]).toBe(
-      "7,carrier,bolter,CVN-73,テスト太郎,F/A-18C,1700000000,1700000000,_NO_GRADE_,",
+      "7,carrier,bolter,CVN-73,テスト太郎,F/A-18C,1700000000,1700000000," +
+        "2026-08-26T16:04:37.812390,overhead,_NO_GRADE_,",
     );
+  });
+
+  it("leaves the new columns empty when the row predates them", () => {
+    const csv = landingsToCsv([
+      {
+        id: 8,
+        kind: "land",
+        outcome: "full_stop",
+        venue_name: null,
+        pilot: null,
+        airframe: null,
+        touchdown_time: null,
+        grade: "B",
+        score: 86.4,
+      },
+    ]);
+    expect(csv.split("\r\n")[1]).toBe("8,land,full_stop,,,,,,,,B,86.4");
   });
 });
 

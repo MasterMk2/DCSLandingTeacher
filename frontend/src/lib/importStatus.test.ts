@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ImportJob } from "../types/api";
 import {
   formatImportSummary,
+  importSourceId,
   importStatusLabel,
   isActiveImportStatus,
   isTerminalImportStatus,
@@ -64,7 +65,7 @@ describe("formatImportSummary", () => {
     expect(text).toContain("1200 フレーム");
   });
 
-  it("mentions zero detections for a completed job without landings", () => {
+  it("says a file genuinely had no landings in it", () => {
     const text = formatImportSummary(
       makeJob({
         status: "completed",
@@ -72,7 +73,31 @@ describe("formatImportSummary", () => {
         duplicates_skipped: 0,
       }),
     );
-    expect(text).toContain("検出 0 件");
+    expect(text).toContain("着陸は検出されませんでした");
     expect(text).not.toContain("重複");
+  });
+
+  it("distinguishes 'nothing found' from 'already on record'", () => {
+    // Uploading a recording of a session that was captured live finds every
+    // landing and then skips all of them. Reporting that as "検出 0 件" reads
+    // as a broken importer.
+    const text = formatImportSummary(
+      makeJob({
+        status: "completed",
+        landings_detected: 0,
+        duplicates_skipped: 25,
+      }),
+    );
+    expect(text).toContain("新規なし（すべて記録済み）");
+    expect(text).toContain("重複スキップ 25 件");
+    expect(text).not.toContain("着陸は検出されませんでした");
+  });
+});
+
+describe("importSourceId", () => {
+  it("matches the backend's scoping so the results can be fetched back", () => {
+    // app.importer.import_source_id builds the same string; the panel lists
+    // its own results with ?source=<this>.
+    expect(importSourceId("abc123")).toBe("import:abc123");
   });
 });

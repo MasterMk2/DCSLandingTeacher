@@ -4,13 +4,12 @@
  * Similar to an aircraft's profile view of the approach.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   CartesianGrid,
   Line,
   ReferenceLine,
   LineChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -18,8 +17,51 @@ import {
 import { mToFt, mToNm } from "../lib/format";
 import type { ApproachTrack } from "../types/api";
 
+/** Drawn at a fixed size and scaled by CSS: see the note at the chart. */
+const CHART_WIDTH = 760;
+const CHART_HEIGHT = 320;
+
 export interface GlideslopeProfileChartProps {
   track: ApproachTrack;
+  /** Grading metrics; carries the roll-out time used for the base->final mark. */
+  metrics?: Record<string, unknown> | null;
+}
+
+/** Distance-to-go (nm) at the roll-out onto final, or null if unknown.
+ *
+ * This is the point the approach has to be ON the glidepath by: everything
+ * left of it on this chart is the turn, where being off the slope is
+ * expected and is not what the grade is about. Without the mark the reader
+ * has no way to tell which part of the trace they are supposed to judge.
+ */
+export function rolloutDistanceNm(
+  track: ApproachTrack,
+  metrics?: Record<string, unknown> | null,
+): number | null {
+  const num = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const touchdown = num(track.touchdown_time);
+  let time = num(metrics?.["pattern_rollout_time"]);
+  if (time === null && touchdown !== null) {
+    // Straight-in: no turn to roll out of, so fall back to where the graded
+    // final began (the stabilization gate).
+    const window = num(metrics?.["final_window_s"]);
+    if (window !== null) time = touchdown - window;
+  }
+  if (time === null) return null;
+
+  let best: number | null = null;
+  let bestGap = Infinity;
+  for (const sample of track.samples) {
+    const gap = Math.abs(sample.time - time);
+    if (gap < bestGap && Number.isFinite(sample.distance_to_go)) {
+      bestGap = gap;
+      best = sample.distance_to_go;
+    }
+  }
+  // A match many seconds away means the sample simply is not in the record.
+  if (best === null || bestGap > 3.0) return null;
+  return mToNm(best);
 }
 
 interface ProfilePoint {
@@ -102,8 +144,20 @@ function inboundLeg(points: ProfilePoint[]): ProfilePoint[] {
   return points.slice(start);
 }
 
-export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
+export function GlideslopeProfileChart({ track, metrics }: GlideslopeProfileChartProps) {
   const points = useMemo(() => inboundLeg(buildProfilePoints(track)), [track]);
+  const rolloutNm = useMemo(
+    () => rolloutDistanceNm(track, metrics),
+    [track, metrics],
+  );
+  // On a phone the chart is wider than the screen and scrolls. Start it at
+  // the touchdown end: the x axis is reversed, so the default left edge is
+  // the far end of the approach -- the least interesting part of it.
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = scroller.current;
+    if (box) box.scrollLeft = box.scrollWidth;
+  }, [track]);
 
   if (points.length === 0) {
     return <p className="empty-message">グライドスローププロファイルデータがありません。</p>;
@@ -145,15 +199,24 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
   ];
 
   return (
-    <div className="glideslope-profile-chart no-print">
+    <div className="glideslope-profile-chart">
       <h3>グライドスロープ プロファイル（横断面図）</h3>
       <div className="chart-legend">
         <span className="legend-item"><span className="legend-color ideal"></span>理想グライドスロープ ({(track.glideslope_deg ?? 3.5).toFixed(1)}°)</span>
         <span className="legend-item"><span className="legend-color actual"></span>実飛行AGL (ft)</span>
         <span className="legend-item"><span className="legend-color deviation"></span>グライドスロープ偏差 (ft, 右軸)</span>
+        {rolloutNm !== null && (
+          <span className="legend-item"><span className="legend-color rollout"></span>ベース→ファイナル（ここでグライドスロープに乗る）</span>
+        )}
       </div>
-      <ResponsiveContainer width="100%" height={300}>
-        <LineChart
+      {/* Fixed size, scaled by CSS, rather than a ResponsiveContainer.
+          The container measures its parent on mount and does not re-measure
+          for print, so the printed chart came out drawn at the on-screen
+          column width and squeezed into a third of the page. */}
+      <div className="chart-scroll" ref={scroller}>
+      <LineChart
+          width={CHART_WIDTH}
+          height={CHART_HEIGHT}
           data={points}
           margin={{ top: 8, right: 70, bottom: 28, left: 60 }}
         >
@@ -270,10 +333,28 @@ export function GlideslopeProfileChart({ track }: GlideslopeProfileChartProps) {
             stroke="#ff4444"
             strokeDasharray="4 4"
           />
+
+          {/* Base -> final. Left of this the aircraft is still turning and
+              being off the slope is expected; right of it is what is graded. */}
+          {rolloutNm !== null && (
+            <ReferenceLine
+              x={rolloutNm}
+              yAxisId="left"
+              stroke="#b98bff"
+              strokeDasharray="6 4"
+              label={{
+                value: "ベース→ファイナル",
+                position: "insideTopLeft",
+                fill: "#b98bff",
+                fontSize: 10,
+              }}
+            />
+          )}
         </LineChart>
-      </ResponsiveContainer>
+      </div>
       <p className="chart-note">
-        ※ 横軸は接地点までの距離（左：進入開始側 → 右：接地点）。グライドスロープ偏差は右軸（ft、+ が理想より上）。横ずれは方位スコープを参照。
+        ※ 横軸は接地点までの距離（左：進入開始側 → 右：接地点）。グライドスロープ偏差は右軸（ft、+ が理想より上）。横ずれはパターン軌跡を参照。
+        紫の破線がベース→ファイナルの境目で、採点対象はその右側。
       </p>
     </div>
   );

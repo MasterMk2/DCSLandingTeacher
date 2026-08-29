@@ -8,6 +8,8 @@ stored alongside the evaluation so thresholds can be re-applied later via
 
 from __future__ import annotations
 
+import math
+
 from datetime import datetime, timezone
 from logging import getLogger
 from typing import Any
@@ -26,6 +28,23 @@ from app.ingest import LandingContext
 from app.models.entities import DcsObject, Landing
 
 logger = getLogger(__name__)
+
+
+def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> None:
+    """Re-anchor the stored deviations to a (possibly changed) reference slope.
+
+    ``glideslope_deviation`` is metres above/below the ideal path, so it is a
+    function of the reference angle. Changing the angle without recomputing
+    it would leave the charts drawing an ideal line that the plotted
+    deviations no longer refer to.
+    """
+    if abs(slope_deg - analysis.glideslope_deg) < 1e-9:
+        return
+    analysis.glideslope_deg = slope_deg
+    tan_slope = math.tan(math.radians(slope_deg))
+    for sample in analysis.samples:
+        if sample.agl is not None:
+            sample.glideslope_deviation = sample.agl - sample.distance_to_go * tan_slope
 
 GRADING_VERSION = "1"
 
@@ -174,9 +193,10 @@ class LandingPipeline:
         event = context.event
         analysis = build_approach_analysis(
             event,
-            self._config.glideslope_for(event.kind),
+            self._config.glideslope_for(event.kind, event.approach_pattern),
             geometry=self._resolve_geometry(event),
             runway=runway,
+            airframe=context.airframe,
         )
         if event.kind == "carrier":
             return analysis, grade_carrier_approach(analysis, self._config), None
@@ -192,12 +212,24 @@ class LandingPipeline:
         status: str,
     ) -> dict[str, Any]:
         event = context.event
+        # This payload is inserted straight into the dashboard's list as a
+        # row, so it has to carry every field that row renders. It did not
+        # carry ``score`` -- the argument was accepted and dropped -- and the
+        # table called ``score.toFixed()`` on the resulting ``undefined``,
+        # which throws, unmounts the React tree and leaves a blank page. Any
+        # field added to the list view has to be added here too.
         return {
             "id": landing_id,
+            "flight_id": context.flight_id,
+            "source_id": context.source_id,
+            "source_name": context.source_id,
             "kind": event.kind,
             "outcome": event.outcome,
             "outcome_status": status,
+            "created_at": _utcnow().isoformat(),
             "grade": result.grade,
+            "score": score,
+            "approach_pattern": event.approach_pattern,
             "pilot": context.pilot,
             "airframe": context.airframe,
             "venue_name": event.carrier_name if event.kind == "carrier" else None,
@@ -209,6 +241,18 @@ class LandingPipeline:
                 context.flight_reference_time, event.touchdown.time
             ),
         }
+
+    async def _airframe_of(self, landing: Landing) -> str | None:
+        """ACMI name of the aircraft that flew this landing, or ``None``."""
+        from sqlalchemy import select
+
+        if landing.object_id is None:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(DcsObject.name).where(DcsObject.id == landing.object_id)
+            )
+            return result.scalar_one_or_none()
 
     async def regrade(
         self, landing: Landing, overrides: dict[str, Any] | None = None
@@ -226,6 +270,20 @@ class LandingPipeline:
 
             config = apply_config_overrides(config, overrides)
         analysis = ApproachAnalysis.from_dict(landing.approach_track)
+        # 進入パターンと機体は landings / objects 側が正。approach_track に
+        # 入れるようにしたのは後からなので、それ以前に記録された着陸では
+        # 空のままになる。ここで補わないと、既存データの再採点だけ
+        # 「パターン不明・機体不明」で採点されて結果が食い違う。
+        analysis.approach_pattern = landing.approach_pattern or analysis.approach_pattern
+        if analysis.airframe is None:
+            analysis.airframe = await self._airframe_of(landing)
+        if landing.kind != "carrier":
+            # 基準スロープは設定から引き直す。保存済みの値を使い続けると
+            # `overhead_glideslope_deg` を変えても既存の着陸に反映されず、
+            # 「設定を変えて再採点」が効かない。
+            _reapply_reference_slope(
+                analysis, config.glideslope_for("land", analysis.approach_pattern)
+            )
         if landing.kind == "carrier":
             result = grade_carrier_approach(analysis, config)
             score = None
@@ -236,6 +294,7 @@ class LandingPipeline:
         async with self._session_factory() as session:
             # The caller may hold the entity in a different session; merge it.
             landing = await session.merge(landing)
+            landing.approach_track = analysis.as_dict()
             landing.grade = result.grade
             landing.score = score
             landing.comment = result.comment

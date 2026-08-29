@@ -33,6 +33,8 @@ type SummaryRow = {
   airframe: string | null;
   touchdown_time: number | null;
   touchdown_epoch?: number | null;
+  created_at?: string | null;
+  approach_pattern?: string | null;
   grade: string | null;
   score: number | null;
 };
@@ -46,6 +48,8 @@ const SUMMARY_HEADERS = [
   "airframe",
   "touchdown_mission_time_s",
   "touchdown_epoch_s",
+  "recorded_at",
+  "approach_pattern",
   "grade",
   "score",
 ];
@@ -62,6 +66,8 @@ export function landingsToCsv(items: SummaryRow[]): string {
       it.airframe ?? "",
       it.touchdown_time ?? "",
       it.touchdown_epoch ?? "",
+      it.created_at ?? "",
+      it.approach_pattern ?? "",
       it.grade ?? "",
       it.score ?? "",
     ]),

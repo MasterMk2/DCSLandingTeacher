@@ -49,13 +49,23 @@ class LandingSummary(BaseModel):
 
 class FactorOut(BaseModel):
     name: str
+    #: LSO ファクター (空母) の重大度。陸上の採点コンポーネントには無い。
     severity: str | None = None
+    #: 陸上の採点コンポーネントの素点 (0..100) と合成重み。これを返さないと
+    #: UI 側に「どの項目で何点落としたか」を出す手段が無く、講評文だけを
+    #: 見て理由を推測することになる。LSO ファクター側では None。
+    score: float | None = None
+    weight: float | None = None
     evidence: dict[str, Any] | None = None
 
 
 class DeviationSampleOut(BaseModel):
     time: float
     distance_to_go: float
+    #: Unclamped along-course position (negative once past the reference).
+    #: Needed to plot the break / upwind leg, which ``distance_to_go``
+    #: flattens onto the threshold line. ``None`` on older tracks.
+    signed_distance_to_go: float | None = None
     glideslope_deviation: float | None = None
     centerline_deviation: float | None = None
     speed: float | None = None

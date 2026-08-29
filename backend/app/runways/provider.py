@@ -18,6 +18,11 @@ from app.runways.models import Runway, match_runway
 
 logger = getLogger(__name__)
 
+#: Bumped when the stored geometry changes meaning. v2 rotates the DCS grid
+#: frame onto geographic axes (meridian convergence); v1 caches are ~5 deg
+#: out and must be re-swept.
+CACHE_VERSION = 2
+
 
 class RunwayProvider:
     """Resolves the runway a landing belongs to, or ``None`` when unknown."""
@@ -49,6 +54,12 @@ class RunwayProvider:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if int(data.get("version", 1)) != CACHE_VERSION:
+                # Geometry written by an older build. Re-sweeping costs one
+                # pass over the theatre; serving a rotated runway silently
+                # mis-grades every landing at it.
+                logger.info("runway cache is stale (v%s): %s", data.get("version"), path)
+                return None
             return [Runway.from_dict(r) for r in data.get("runways", [])]
         except Exception:
             logger.warning("runway cache unreadable: %s", path, exc_info=True)
@@ -60,7 +71,11 @@ class RunwayProvider:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
                 json.dumps(
-                    {"theatre": theatre, "runways": [r.as_dict() for r in runways]},
+                    {
+                        "version": CACHE_VERSION,
+                        "theatre": theatre,
+                        "runways": [r.as_dict() for r in runways],
+                    },
                     indent=1,
                 ),
                 encoding="utf-8",

@@ -74,6 +74,18 @@ export function FilterBar({ filters, onChange, sources }: FilterBarProps) {
         </label>
       )}
       <label>
+        進入方式
+        <select
+          value={filters.pattern ?? ""}
+          onChange={(e) => set({ pattern: e.target.value || undefined })}
+        >
+          <option value="">すべて</option>
+          <option value="overhead">オーバーヘッド</option>
+          <option value="straight_in">ストレートイン</option>
+          <option value="unknown">不明</option>
+        </select>
+      </label>
+      <label>
         種別
         <select
           value={filters.kind ?? ""}

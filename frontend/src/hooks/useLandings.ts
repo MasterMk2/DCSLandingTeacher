@@ -63,7 +63,9 @@ export function useLandings(
       // replaces the provisional row with its confirmed outcome (Issue #5).
       const isNew = msg.type === "landing";
       setData((prev) =>
-        prev ? applyLandingMessage(prev, msg, offset) : prev,
+        prev
+          ? applyLandingMessage(prev, msg, offset, filtersRef.current.source)
+          : prev,
       );
       if (isNew) setLiveCount((c) => c + 1);
     });

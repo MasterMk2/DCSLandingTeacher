@@ -140,12 +140,21 @@ def make_acmi_text(
     aircraft_name: str = "F/A-18C",
     pilot: str = "Viggen",
     base_time: float = 1000.0,
+    recording_time: str | None = None,
 ) -> str:
-    """Render samples as an ACMI 2.2 text stream (for ingest E2E tests)."""
+    """Render samples as an ACMI 2.2 text stream (for ingest E2E tests).
+
+    ``recording_time`` is what distinguishes two sessions of the SAME
+    mission: ReferenceTime is the .miz's in-game date and is identical
+    across them.
+    """
+    header = "0,ReferenceTime=2024-01-01T00:00:00Z,DataSource=Test,Title=synthetic"
+    if recording_time is not None:
+        header += f",RecordingTime={recording_time}"
     lines = [
         "FileType=text/acmi/tacview",
         "FileVersion=2.2",
-        "0,ReferenceTime=2024-01-01T00:00:00Z,DataSource=Test,Title=synthetic",
+        header,
     ]
     if include_carrier:
         lines.append("#0")

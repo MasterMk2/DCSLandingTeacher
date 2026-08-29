@@ -7,25 +7,13 @@
  * leaves the detail page blank. That shipped once already, so the chart is
  * mounted here for real.
  *
- * ResponsiveContainer has to be replaced: it measures its parent, and jsdom
- * reports 0x0, so Recharts would skip rendering the chart entirely and the
- * test would pass no matter how badly the axes were wired.
+ * The chart is drawn at a fixed pixel size rather than in a
+ * ResponsiveContainer -- the container measures its parent on mount and does
+ * not re-measure for print, so the printed sheet got a chart squeezed into a
+ * third of the page. Nothing to stub as a result.
  */
-import { cloneElement, isValidElement } from "react";
-import type { ReactElement } from "react";
+import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("recharts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("recharts")>();
-  return {
-    ...actual,
-    ResponsiveContainer: ({ children }: { children: ReactElement }) =>
-      isValidElement(children)
-        ? cloneElement(children, { width: 800, height: 300 } as never)
-        : children,
-  };
-});
 
 const { GlideslopeProfileChart } = await import("./GlideslopeProfileChart");
 
@@ -120,5 +108,29 @@ describe("overhead patterns", () => {
     const increasing = xs.every((x, i) => i === 0 || x >= xs[i - 1]);
     const decreasing = xs.every((x, i) => i === 0 || x <= xs[i - 1]);
     expect(increasing || decreasing).toBe(true);
+  });
+});
+
+describe("rolloutDistanceNm", () => {
+  it("marks the roll-out where the turn onto final ended", async () => {
+    const { rolloutDistanceNm } = await import("./GlideslopeProfileChart");
+    const t = track();
+    // The fixture's samples run t=76..99 with touchdown at 100.
+    const nm = rolloutDistanceNm(t, { pattern_rollout_time: 86 });
+    expect(nm).not.toBeNull();
+    expect(nm as number).toBeGreaterThan(0);
+  });
+
+  it("falls back to the graded final's start for a straight-in", async () => {
+    const { rolloutDistanceNm } = await import("./GlideslopeProfileChart");
+    const t = track();
+    expect(rolloutDistanceNm(t, { final_window_s: 14 })).not.toBeNull();
+  });
+
+  it("returns null rather than guessing when the moment is not in the record", async () => {
+    const { rolloutDistanceNm } = await import("./GlideslopeProfileChart");
+    const t = track();
+    expect(rolloutDistanceNm(t, {})).toBeNull();
+    expect(rolloutDistanceNm(t, { pattern_rollout_time: 10 })).toBeNull();
   });
 });

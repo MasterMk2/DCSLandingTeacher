@@ -132,6 +132,7 @@ def runway_pair_from_dcs(
     length_m: float,
     width_m: float,
     airbase_ref: tuple[float, float, float, float],
+    convergence_deg: float = 0.0,
 ) -> list[Runway]:
     """Expand one DCS runway record into its two landing directions.
 
@@ -144,6 +145,14 @@ def runway_pair_from_dcs(
     (verified against the sister DCSWebGCA project and DCS's own runway
     numbering, e.g. Batumi's single strip yields 305.6 deg / 125.6 deg for
     runways 31 and 13).
+
+    ``convergence_deg`` rotates the DCS frame onto the geographic one. DCS's
+    x/z is the map projection's GRID, whose north is meridian convergence
+    away from true north -- 4.9 deg at Sochi on Caucasus, 5.7 deg at Batumi.
+    Treating x as due north (which this did) silently rotated every runway
+    about its airfield by that much, so an aircraft flying the runway
+    heading measured as 6 deg off centreline the whole way down final. It
+    showed on 13 landings across four airfields, all with the same sign.
     """
     from app.detection.geometry import (
         meters_per_degree_latitude,
@@ -151,23 +160,32 @@ def runway_pair_from_dcs(
     )
 
     lat_ref, lon_ref, x_ref, z_ref = airbase_ref
-    heading = normalize_heading(math.degrees(-course_rad))
+    grid_heading = normalize_heading(math.degrees(-course_rad))
     m_per_deg_lat = meters_per_degree_latitude(lat_ref)
     m_per_deg_lon = max(meters_per_degree_longitude(lat_ref), 1e-6)
+    convergence = math.radians(convergence_deg)
+    cos_c, sin_c = math.cos(convergence), math.sin(convergence)
 
     runways: list[Runway] = []
-    for index, head in enumerate((heading, normalize_heading(heading + 180.0))):
-        rad = math.radians(head)
+    for index, grid_head in enumerate(
+        (grid_heading, normalize_heading(grid_heading + 180.0))
+    ):
+        rad = math.radians(grid_head)
         # The threshold of a landing direction sits half a length *behind*
-        # the centre, along that direction. DCS x is north, z is east.
+        # the centre, along that direction. DCS x is grid north, z grid east.
         x = centre_x - math.cos(rad) * (length_m / 2.0)
         z = centre_z - math.sin(rad) * (length_m / 2.0)
-        lat = lat_ref + (x - x_ref) / m_per_deg_lat
-        lon = lon_ref + (z - z_ref) / m_per_deg_lon
+        # Rotate the grid offset onto geographic axes before it becomes a
+        # latitude and a longitude.
+        north = (x - x_ref) * cos_c - (z - z_ref) * sin_c
+        east = (x - x_ref) * sin_c + (z - z_ref) * cos_c
+        lat = lat_ref + north / m_per_deg_lat
+        lon = lon_ref + east / m_per_deg_lon
+        head = normalize_heading(grid_head + convergence_deg)
         runways.append(
             Runway(
                 airbase=airbase,
-                name=_runway_name(dcs_name, head, primary=index == 0),
+                name=_runway_name(dcs_name, grid_head, primary=index == 0),
                 threshold_lat=lat,
                 threshold_lon=lon,
                 elevation_m=elevation_m,

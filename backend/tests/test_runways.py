@@ -277,9 +277,9 @@ def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> N
         for i, d in enumerate(range(2600, 1000, -100))
     ]
 
-    mean_abs, mean_signed, method = _glideslope_errors(window, 3.0)
-    assert method == "path-angle"
-    assert mean_abs is not None and mean_signed is not None
+    error = _glideslope_errors(window, 3.0)
+    assert error is not None and error.method == "path-angle"
+    mean_abs, mean_signed = error.abs_error_deg, error.signed_error_deg
     # The path flown really is 3.0 deg, so the error is ~0 either way it is
     # rounded -- not the ~-1.5 deg the anchored measurement reports.
     assert mean_signed == pytest.approx(0.0, abs=0.05)
@@ -310,6 +310,87 @@ def test_glidepath_with_a_runway_keeps_the_absolute_aiming_point_error() -> None
         )
         for i, d in enumerate(range(2600, 1000, -100))
     ]
-    mean_abs, mean_signed, method = _glideslope_errors(window, 3.0)
-    assert method == "aiming-point"
-    assert mean_signed is not None and mean_signed < -0.8
+    error = _glideslope_errors(window, 3.0)
+    assert error is not None and error.method == "aiming-point"
+    mean_abs, mean_signed = error.abs_error_deg, error.signed_error_deg
+    assert mean_signed < -0.8
+
+
+def test_runways_are_rotated_from_the_dcs_grid_onto_true_north() -> None:
+    """DCS x/z is the map projection's grid, not true north.
+
+    Treating x as due north rotated every runway about its airfield by the
+    local meridian convergence -- 4.9 deg at Sochi, 5.7 deg at Batumi on
+    Caucasus. It showed up as a consistent ~6 deg offset between the runway
+    centreline and the ground track of 13 landings across four airfields,
+    all with the same sign; the touchdown-anchored landings, whose course
+    comes from the aircraft itself, had no such bias.
+    """
+    import math
+
+    from app.runways.models import runway_pair_from_dcs
+
+    reference = (43.44, 39.93, 0.0, 0.0)  # lat, lon, x, z of the airfield
+    course_rad = -math.radians(62.0)  # DCS reports the negated heading
+    kwargs = dict(
+        airbase="Sochi",
+        dcs_name="06",
+        course_rad=course_rad,
+        centre_x=0.0,
+        centre_z=0.0,
+        elevation_m=10.0,
+        length_m=2500.0,
+        width_m=60.0,
+        airbase_ref=reference,
+    )
+
+    grid = runway_pair_from_dcs(**kwargs, convergence_deg=0.0)
+    rotated = runway_pair_from_dcs(**kwargs, convergence_deg=4.87)
+
+    assert grid[0].heading_deg == pytest.approx(62.0, abs=0.01)
+    assert rotated[0].heading_deg == pytest.approx(66.87, abs=0.01)
+    # Both ends move together: still a straight strip, just pointing where
+    # the aircraft actually flies.
+    assert rotated[1].heading_deg == pytest.approx(246.87, abs=0.01)
+
+    # The thresholds rotate with it rather than staying put.
+    moved = math.hypot(
+        (rotated[0].threshold_lat - grid[0].threshold_lat) * 111_320,
+        (rotated[0].threshold_lon - grid[0].threshold_lon) * 111_320
+        * math.cos(math.radians(43.44)),
+    )
+    assert moved > 50.0
+
+    # The runway number still comes from DCS, not from the rotated heading:
+    # runway designators are magnetic and are not ours to renumber.
+    assert rotated[0].name == "06"
+
+
+def test_a_stale_runway_cache_is_ignored(tmp_path) -> None:
+    """v1 caches hold grid-framed geometry and must be re-swept, not served."""
+    import json
+
+    from app.runways.provider import CACHE_VERSION, RunwayProvider
+
+    provider = RunwayProvider(None, tmp_path)
+    path = tmp_path / "runways-Caucasus.json"
+    payload = {
+        "theatre": "Caucasus",
+        "runways": [
+            {
+                "airbase": "Sochi",
+                "name": "06",
+                "threshold_lat": 43.44,
+                "threshold_lon": 39.93,
+                "elevation_m": 10.0,
+                "heading_deg": 62.0,
+                "length_m": 2500.0,
+                "width_m": 60.0,
+            }
+        ],
+    }
+    path.write_text(json.dumps({"version": 1, **payload}), encoding="utf-8")
+    assert provider._load_cache("Caucasus") is None
+
+    path.write_text(json.dumps({"version": CACHE_VERSION, **payload}), encoding="utf-8")
+    assert provider._load_cache("Caucasus") is not None

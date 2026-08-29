@@ -633,6 +633,17 @@ main {
   font-size: 12px;
 }
 
+.factor-details {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.legend-color.rollout {
+  background: #b98bff;
+}
+
 .metrics-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -673,6 +684,11 @@ main {
 
 /* ---------- Print (FR-6 data sheet) ---------- */
 
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+
 @media print {
   body {
     background: #fff;
@@ -690,14 +706,86 @@ main {
   }
 
   .print-sheet {
-    border: 1px solid #999;
+    border: none;
     background: #fff;
     color: #000;
+  }
+
+  /* ONE column on paper, not two.
+     A4 portrait is 190 mm of usable width; splitting that in half leaves a
+     ~90 mm column, and the factor table has four columns of Japanese prose
+     in it. At that width the browser wraps the 説明 column to one character
+     per line and clips 根拠データ off the right edge -- which is what the
+     printed sheet actually looked like. Full width fits the table and makes
+     the scopes bigger at the same time. */
+  .sheet-grid {
+    display: block;
+  }
+
+  .sheet-left,
+  .sheet-right {
+    width: 100%;
+  }
+
+  /* Only avoid breaking things that CAN fit on a page. The grade panel and
+     the factor table are both taller than A4, so asking the browser not to
+     split them cannot be honoured: it bails out to the next page and leaves
+     the first one blank (the printed sheet opened with an empty page), then
+     splits them anyway. */
+  figure,
+  .pattern-view,
+  .gca-scopes,
+  .grade-headline,
+  .grade-comment,
+  tr {
+    break-inside: avoid;
     page-break-inside: avoid;
   }
 
-  .sheet-title {
-    color: #000;
+  /* Repeat the header row when a long table crosses a page -- and never
+     leave it stranded at the bottom with its first row overleaf, which is
+     what a bare table-header-group does when the break lands just after it. */
+  thead {
+    display: table-header-group;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  .print-sheet h2,
+  .print-sheet h3,
+  .print-sheet h4,
+  .pattern-heading {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* Fixed layout so the columns get the width they need instead of the
+     width the longest unbreakable token demands. */
+  .factor-table {
+    table-layout: fixed;
+    width: 100%;
+    font-size: 10px;
+  }
+
+  .factor-table th:nth-child(1),
+  .factor-table td:nth-child(1) { width: 13%; }
+  .factor-table th:nth-child(2),
+  .factor-table td:nth-child(2) { width: 12%; }
+  .factor-table th:nth-child(3),
+  .factor-table td:nth-child(3) { width: 27%; }
+  .factor-table th:nth-child(4),
+  .factor-table td:nth-child(4) { width: 48%; }
+
+  .factor-table td,
+  .factor-table th {
+    overflow-wrap: anywhere;
+    word-break: normal;
+    line-height: 1.5;
+    padding: 4px 6px;
+  }
+
+  .info-table {
+    width: 60%;
   }
 
   .info-table th,
@@ -714,20 +802,117 @@ main {
     color: #000;
   }
 
-  /* Keep the radar-scope colors in the printed sheet. */
-  .scope-svg {
+  /* Scopes stay dark on paper (the traces are drawn in light green and
+     would vanish on white), so the text inside them must stay light too --
+     turning it to ink made the labels invisible against the black. */
+  .scope-svg,
+  .pattern-svg {
+    width: 100%;
+    max-width: 150mm;
+    height: auto;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }
 
+  /* The GCA scopes draw their title and axis labels OUTSIDE the dark plot
+     rect, on white paper -- those need ink. The pattern view draws its
+     labels inside the rect, so those must stay light or they vanish into
+     the black. Same class, opposite requirement; separate by the svg. */
+  .scope-svg .scope-label,
+  .scope-svg .scope-title {
+    fill: #333;
+  }
+
+  .pattern-svg .scope-label {
+    fill: #9fb8a8;
+  }
+
+  .pattern-downwind-label {
+    fill: #9ccdff;
+  }
+
+  /* Outside the scopes the dim greys are on white paper and need ink. */
+  .grade-sub,
+  .sheet-footer,
+  .factor-evidence,
+  .factor-details,
+  .metrics-row dt,
+  .metrics-row dd,
+  .pattern-legend,
+  .chart-note {
+    color: #333;
+  }
+
+  .grade-panel {
+    background: none;
+    border: 1px solid #999;
+    padding: 8px 10px;
+  }
+
+  .grade-comment {
+    background: #f2f2f2;
+    border-left: 3px solid #666;
+    color: #000;
+  }
+
+  /* The badge is light-on-light in the dark theme; on paper it has to be
+     legible without relying on the background printing at all. */
   .grade-badge {
+    color: #000 !important;
+    background: none !important;
+    border: 1px solid #666;
+    font-weight: 700;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }
 
   .pattern-badge {
+    color: #000 !important;
+    background: none !important;
+    border: 1px solid #666;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+  }
+
+  .metrics-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    font-size: 10px;
+  }
+
+  /* The chart keeps its dark panel on paper: its axes and series are drawn
+     in light colours and would vanish on white. So its own text has to stay
+     light too -- the generic "dim greys become ink" rule above would bury
+     the title and the note in the black. */
+  .glideslope-profile-chart {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-sheet .glideslope-profile-chart h3 {
+    color: var(--accent);
+    font-size: 13px;
+  }
+
+  .glideslope-profile-chart .chart-note,
+  .glideslope-profile-chart .chart-legend {
+    color: #9fb8a8;
+  }
+
+
+  .sheet-title {
+    color: #000;
+    font-size: 16px;
+  }
+
+  /* Section headings are the theme's radar green; on white they are legible
+     but weak, and they are the sheet's only navigation. */
+  .print-sheet h2,
+  .print-sheet h3,
+  .print-sheet h4,
+  .pattern-heading {
+    color: #000;
   }
 }
 
@@ -870,14 +1055,229 @@ main {
 
 /* ---------- Responsive (desktop-first) ---------- */
 
+/* Horizontal scroller for anything that has a minimum sensible width.
+   Applied to a wrapper, never to the <table> itself: `display: block` on a
+   table drops table layout and the columns stop lining up with the header,
+   which is what the narrow-screen rule used to do. */
+.table-scroll,
+.chart-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
 @media (max-width: 900px) {
-  .landing-table {
+  /* One column. Two ~180 px columns on a phone wrap the info table's
+     headers to one character per line and squeeze the plan view into a
+     thumbnail. */
+  .sheet-grid {
     display: block;
-    overflow-x: auto;
   }
 
-  .gca-scopes {
-    flex-direction: column;
-    align-items: center;
+  .sheet-right {
+    margin-top: 16px;
   }
+
+  /* Let the tables keep a readable width and scroll sideways instead of
+     compressing every column to nothing -- and drop the two columns that
+     never differentiate anything on this server (one source, one kind), so
+     the grade and the score come into view without scrolling as far. */
+  .landing-table .col-source,
+  .landing-table .col-kind {
+    display: none;
+  }
+
+  .landing-table {
+    min-width: 620px;
+  }
+
+  .factor-table {
+    min-width: 620px;
+  }
+
+  .info-table th {
+    white-space: nowrap;
+  }
+
+  /* The profile chart is drawn at 760 px; scaling that into a 350 px phone
+     leaves ~5 px axis text. Keep it legible and let it scroll. */
+  .chart-scroll .recharts-wrapper,
+  .chart-scroll svg {
+    min-width: 700px;
+    width: 700px !important;
+  }
+
+  .metrics-list {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-bar {
+    gap: 8px;
+  }
+
+  .view-header h1 {
+    font-size: 17px;
+  }
+
+  .app-nav {
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+
+  main {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .grade-headline {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .pattern-legend {
+    gap: 8px;
+    font-size: 10px;
+  }
+}
+
+/* ---------- Pattern plan view ---------- */
+
+.pattern-svg {
+  width: 460px;
+  max-width: 100%;
+  height: auto;
+}
+
+.pattern-centerline {
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  opacity: 0.55;
+}
+
+.pattern-runway {
+  stroke: var(--warn);
+  stroke-width: 5;
+  stroke-linecap: butt;
+}
+
+.pattern-leg {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* 脚ごとに色を変える。順に「入ってくる → 回る → 降りる」で寒色から暖色へ。 */
+.pattern-leg-entry { stroke: #6f7f95; }
+.pattern-leg-break { stroke: #f0a44a; }
+.pattern-leg-downwind { stroke: #4aa3ff; }
+.pattern-leg-base { stroke: #b98bff; }
+.pattern-leg-final { stroke: var(--accent); }
+.pattern-leg-rollout { stroke: var(--text-dim); stroke-dasharray: 4 4; }
+
+.pattern-start {
+  fill: #aef3cf;
+}
+
+.pattern-scalebar {
+  stroke: var(--text-dim);
+  stroke-width: 1.4;
+}
+
+.pattern-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.pattern-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pattern-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  border-top-width: 3px;
+  border-top-style: solid;
+  border-top-color: currentColor;
+}
+
+.pattern-legend-swatch.pattern-leg-entry { border-top-color: #6f7f95; }
+.pattern-legend-swatch.pattern-leg-break { border-top-color: #f0a44a; }
+.pattern-legend-swatch.pattern-leg-downwind { border-top-color: #4aa3ff; }
+.pattern-legend-swatch.pattern-leg-base { border-top-color: #b98bff; }
+.pattern-legend-swatch.pattern-leg-final { border-top-color: var(--accent); }
+.pattern-legend-swatch.pattern-leg-rollout { border-top-color: var(--text-dim); }
+
+.pattern-downwind-ideal {
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+  opacity: 0.8;
+}
+
+.pattern-downwind-fit {
+  stroke: #4aa3ff;
+  stroke-width: 1.4;
+  opacity: 0.9;
+}
+
+.pattern-downwind-label {
+  fill: #9ccdff;
+  font-size: 11px;
+}
+
+.landing-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.landing-table th.sortable:hover {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  margin-left: 4px;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+/* ---------- Import results (scratch data, kept visually separate) ---------- */
+
+.import-results {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--warn);
+  border-radius: 6px;
+  background: rgba(240, 164, 74, 0.05);
+}
+
+.import-results h4 {
+  margin: 0 0 8px;
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.import-results .landing-table {
+  font-size: 12px;
+}
+
+/* The profile chart is drawn at a fixed pixel size (Recharts does not
+   re-measure for print); CSS scales it to whatever box it lands in. */
+.glideslope-profile-chart svg {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
 }

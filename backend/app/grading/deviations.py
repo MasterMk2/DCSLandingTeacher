@@ -45,6 +45,14 @@ class DeviationSample:
     #: aircraft is over the runway. ``None`` when no runway is known, which
     #: is what tells the grader to fall back to an AGL-based cut-off.
     distance_to_threshold: float | None = None
+    #: ``distance_to_go`` without the clamp at zero: negative once the
+    #: aircraft is PAST the reference point. The clamped value is what the
+    #: graders want (a distance), but it collapses everything beyond the
+    #: aiming point onto one line -- which is exactly where the break and
+    #: the upwind leg of an overhead pattern live, so a plan view of the
+    #: pattern cannot be drawn from it. ``None`` on tracks recorded before
+    #: this field existed.
+    signed_distance_to_go: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -66,6 +74,11 @@ class DeviationSample:
             "distance_to_threshold": (
                 round(self.distance_to_threshold, 2)
                 if self.distance_to_threshold is not None
+                else None
+            ),
+            "signed_distance_to_go": (
+                round(self.signed_distance_to_go, 2)
+                if self.signed_distance_to_go is not None
                 else None
             ),
         }
@@ -100,6 +113,13 @@ class ApproachAnalysis:
     #: Per-carrier FLOLS geometry used for this analysis (Issue #3).
     #: ``None`` means the legacy touchdown-referenced approximation.
     geometry: dict[str, Any] | None = None
+    #: 進入パターン ("overhead" | "straight_in" | "unknown")。採点側が
+    #: オーバーヘッド固有の項目を出すかどうかの判断に使う。
+    approach_pattern: str = "unknown"
+    #: 機体名 (ACMI の Name)。接地降下率の許容幅は機体クラスで大きく違う
+    #: ので、採点にはこれが要る。再採点でも同じ判断ができるよう、
+    #: :meth:`as_dict` で approach_track に一緒に保存する。
+    airframe: str | None = None
 
     def window(self, seconds_before_touchdown: float) -> list[DeviationSample]:
         """Samples strictly before touchdown within the given lookback.
@@ -123,6 +143,8 @@ class ApproachAnalysis:
             "touchdown_speed_ms": self.touchdown_speed_ms,
             "touchdown_descent_rate_ms": round(self.touchdown_descent_rate_ms, 3),
             "geometry": self.geometry,
+            "approach_pattern": self.approach_pattern,
+            "airframe": self.airframe,
             "samples": [s.as_dict() for s in self.samples],
         }
 
@@ -151,6 +173,11 @@ class ApproachAnalysis:
                     if row.get("distance_to_threshold") is not None
                     else None
                 ),
+                signed_distance_to_go=(
+                    float(row["signed_distance_to_go"])
+                    if row.get("signed_distance_to_go") is not None
+                    else None
+                ),
             )
             for row in data.get("samples", [])
         ]
@@ -167,6 +194,8 @@ class ApproachAnalysis:
             ),
             touchdown_descent_rate_ms=float(data.get("touchdown_descent_rate_ms", 0.0)),
             geometry=data.get("geometry"),
+            approach_pattern=data.get("approach_pattern") or "unknown",
+            airframe=data.get("airframe"),
             samples=samples,
         )
 
@@ -211,6 +240,7 @@ def build_approach_analysis(
     geometry: FlolsGeometry | None = None,
     runway: Runway | None = None,
     aiming_point_m: float = DEFAULT_AIMING_POINT_M,
+    airframe: str | None = None,
 ) -> ApproachAnalysis:
     """Compute the deviation time series for one detected landing event.
 
@@ -280,6 +310,8 @@ def build_approach_analysis(
         touchdown_speed_ms=touchdown.speed,
         touchdown_descent_rate_ms=touchdown.descent_rate_ms,
         geometry=geometry_payload,
+        approach_pattern=event.approach_pattern,
+        airframe=airframe,
     )
 
     tan_slope = math.tan(math.radians(slope_deg))
@@ -319,6 +351,7 @@ def build_approach_analysis(
                 aoa=sample.aoa,
                 agl=agl,
                 distance_to_threshold=distance_to_threshold,
+                signed_distance_to_go=-along,
             )
         )
     return analysis

@@ -14,6 +14,7 @@ spacing directly costs server frame time; don't.
 from __future__ import annotations
 
 import asyncio
+import math
 from logging import getLogger
 from typing import Any
 
@@ -113,11 +114,76 @@ class DcssbClient:
                 except Exception:
                     logger.warning("DCSSB: /airbase failed for %s", name, exc_info=True)
                     continue
-                runways.extend(_parse_airbase(airbase, detail))
+                runways.extend(
+                    _parse_airbase(airbase, detail, _convergence_deg(airbase, airbases))
+                )
         return runways
 
 
-def _parse_airbase(airbase: dict[str, Any], detail: Any) -> list[Runway]:
+def _convergence_deg(
+    airbase: dict[str, Any], airbases: list[dict[str, Any]]
+) -> float:
+    """Angle from DCS grid north to true north at ``airbase``.
+
+    DCS's x/z is the theatre's map projection, whose north only coincides
+    with true north on the central meridian. Rather than hard-coding each
+    theatre's projection, measure it: every airbase comes with BOTH its
+    lat/lng and its x/z, so the bearing to a neighbour computed each way
+    differs by exactly the local convergence.
+
+    Checked against ``(lon - 33) * sin(lat)`` -- the closed form for
+    Caucasus's transverse Mercator -- across 26 airbases from 37.3 to
+    41.6 E: agreement within 0.1 deg, 3.17 to 5.66 deg.
+
+    Returns 0.0 when there is no usable neighbour, which leaves the previous
+    (uncorrected) behaviour rather than inventing a rotation.
+    """
+    try:
+        lat = float(airbase["lat"])
+        lon = float(airbase["lng"])
+        position = airbase["position"]
+        x = float(position["x"])
+        z = float(position["z"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+    best: tuple[float, float, float, float, float] | None = None
+    for other in airbases:
+        if other is airbase:
+            continue
+        try:
+            other_pos = other["position"]
+            ox, oz = float(other_pos["x"]), float(other_pos["z"])
+            olat, olon = float(other["lat"]), float(other["lng"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        distance = math.hypot(ox - x, oz - z)
+        # Close neighbours make the bearing noisy; far ones average the
+        # convergence over a span of longitude it actually varies across.
+        if distance < 5000.0:
+            continue
+        if best is None or distance < best[0]:
+            best = (distance, olat, olon, ox, oz)
+    if best is None:
+        return 0.0
+
+    _, olat, olon, ox, oz = best
+    lat1, lat2 = math.radians(lat), math.radians(olat)
+    delta = math.radians(olon - lon)
+    geographic = math.degrees(
+        math.atan2(
+            math.sin(delta) * math.cos(lat2),
+            math.cos(lat1) * math.sin(lat2)
+            - math.sin(lat1) * math.cos(lat2) * math.cos(delta),
+        )
+    )
+    grid = math.degrees(math.atan2(oz - z, ox - x))
+    return (geographic - grid + 180.0) % 360.0 - 180.0
+
+
+def _parse_airbase(
+    airbase: dict[str, Any], detail: Any, convergence_deg: float = 0.0
+) -> list[Runway]:
     payload = detail.get("airbase") if isinstance(detail, dict) else None
     if not isinstance(payload, dict):
         return []
@@ -148,6 +214,7 @@ def _parse_airbase(airbase: dict[str, Any], detail: Any) -> list[Runway]:
                     length_m=float(record.get("length") or 2000.0),
                     width_m=float(record.get("width") or 45.0),
                     airbase_ref=reference,
+                    convergence_deg=convergence_deg,
                 )
             )
         except (KeyError, TypeError, ValueError):

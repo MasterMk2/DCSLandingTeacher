@@ -215,13 +215,46 @@ def test_unknown_ground_altitude_uses_on_ground_flag() -> None:
 
 
 def test_approach_window_respects_distance_limit() -> None:
-    config = DetectionConfig(approach_window_s=60.0, approach_distance_m=3704.0)
+    """The walk-back stops at the configured radius, not just the time window."""
+    config = DetectionConfig(
+        approach_window_s=60.0,
+        approach_distance_m=3704.0,
+        # Land landings normally use the wider pattern-sized capture; pin it
+        # to the carrier figures so this test measures the radius cut alone.
+        land_approach_window_s=60.0,
+        land_approach_distance_m=3704.0,
+    )
     samples = make_approach_samples(duration_before_s=120)
     events = analyze_track(samples, DECK_ALTITUDE_M, carriers={}, config=config)
     assert len(events) == 1
     times = [s.time for s in events[0].approach]
     # 3704 m + margin at 70 m/s ~= 60 s; nothing much older may slip in.
     assert min(times) >= -70.0
+
+
+def test_land_approach_captures_the_pattern_not_just_the_final() -> None:
+    """Land landings must capture far enough back to hold the circuit.
+
+    The pattern is what the overhead grading judges, and it does not fit in
+    the carrier-sized 60 s / 2 nm cut: a fighter circuit at 1.5 nm abeam is
+    already ~4.5 km from the touchdown point. Carrier passes keep the short
+    window -- there is no pattern there and the LSO grader never looks past
+    the last few seconds.
+    """
+    samples = make_approach_samples(duration_before_s=120)
+
+    land = analyze_track(samples, DECK_ALTITUDE_M, carriers={})
+    assert len(land) == 1
+    # 5556 m + 500 m margin at 70 m/s ~= 86 s of walk-back.
+    assert min(s.time for s in land[0].approach) < -70.0
+
+    carrier_samples = make_approach_samples(duration_before_s=120)
+    carrier = analyze_track(
+        carrier_samples, DECK_ALTITUDE_M, carriers={"C1": make_carrier_state()}
+    )
+    assert len(carrier) == 1
+    assert carrier[0].kind == "carrier"
+    assert min(s.time for s in carrier[0].approach) >= -70.0
 
 
 def test_bounce_sequence_keeps_a_stable_identity_as_it_is_absorbed() -> None:
@@ -314,3 +347,43 @@ def test_approach_pattern_carrier_straight_in() -> None:
     event = events[0]
     assert event.kind == "carrier"
     assert event.approach_pattern == "straight_in"
+
+
+def test_land_capture_stops_at_the_previous_touchdown() -> None:
+    """A circuit starts where the last one ended.
+
+    The land window reaches 300 s / 8 nm back so the recording begins before
+    the initial. A closed pattern -- touch and go, round again -- fits inside
+    that, so without a stop the capture would run into the previous arrival:
+    two loops on the plan view and two downwinds for the leg finder to pick
+    between.
+    """
+    from app.detection.detector import TrackSample
+
+    first = make_approach_samples(outcome="touch_and_go", duration_before_s=60)
+    # Fly the same profile again, 100 s later, ending in a full stop.
+    gap = max(s.time for s in first) + 100.0
+    second = [
+        TrackSample(
+            time=s.time + gap,
+            latitude=s.latitude,
+            longitude=s.longitude,
+            altitude=s.altitude,
+            agl=s.agl,
+            heading=s.heading,
+            speed=s.speed,
+            on_ground=s.on_ground,
+        )
+        for s in make_approach_samples(outcome="full_stop", duration_before_s=60)
+    ]
+
+    events = analyze_track(first + second, DECK_ALTITUDE_M, carriers={})
+    assert len(events) == 2
+    final_arrival = events[-1]
+    earliest = min(s.time for s in final_arrival.approach)
+    first_contact = max(
+        s.time for s in first if s.on_ground
+    )
+    assert earliest > first_contact, (
+        "the second circuit's capture reached back past the first touchdown"
+    )

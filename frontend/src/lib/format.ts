@@ -38,31 +38,50 @@ export function mToNm(meters: number): number {
  */
 export function formatMetric(key: string, value: unknown): { label: string; text: string } {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return {
-      label: key,
-      text: value === null || value === undefined ? "-" : String(value),
-    };
+    const text =
+      value === null || value === undefined
+        ? "-"
+        : typeof value === "object"
+          // sub_scores / bands_fpm のような入れ子。String() だと
+          // "[object Object]" になって根拠が読めなくなる。
+          ? JSON.stringify(value)
+          : String(value);
+    // Strip the unit suffix here too: a metric that came back null still
+    // has a Japanese label, and looking up only the full key printed the
+    // raw "mean_path_angle_deg" next to a "-".
+    const stem = key.replace(/_(ms|fpm|m|deg|s)$/, "");
+    return { label: metricLabel(key, stem), text };
   }
   if (key.endsWith("_ms")) {
-    const label = key.slice(0, -"_ms".length);
-    return /descent|sink/.test(label)
+    const stem = key.slice(0, -"_ms".length);
+    const label = metricLabel(key, stem);
+    return /descent|sink/.test(stem)
       ? { label, text: `${Math.round(msToFpm(value))} fpm` }
       : { label, text: `${Math.round(msToKnots(value))} kt` };
   }
   if (key.endsWith("_fpm")) {
-    return { label: key.slice(0, -"_fpm".length), text: `${Math.round(value)} fpm` };
+    const stem = key.slice(0, -"_fpm".length);
+    return { label: metricLabel(key, stem), text: `${Math.round(value)} fpm` };
   }
   if (key.endsWith("_m")) {
-    return { label: key.slice(0, -"_m".length), text: `${Math.round(mToFt(value))} ft` };
+    const stem = key.slice(0, -"_m".length);
+    // パターンの離隔は海里で述べる: 1.5 nm を 9000 ft と言われても
+    // 飛んでいる側の感覚と結びつかない。
+    const text = /abeam/.test(stem)
+      ? `${(value / 1852).toFixed(2)} nm`
+      : `${Math.round(mToFt(value))} ft`;
+    return { label: metricLabel(key, stem), text };
   }
   if (key.endsWith("_deg")) {
-    return { label: key.slice(0, -"_deg".length), text: `${value.toFixed(1)}°` };
+    const stem = key.slice(0, -"_deg".length);
+    return { label: metricLabel(key, stem), text: `${value.toFixed(1)}°` };
   }
   if (key.endsWith("_s")) {
-    return { label: key.slice(0, -"_s".length), text: `${value.toFixed(1)} s` };
+    const stem = key.slice(0, -"_s".length);
+    return { label: metricLabel(key, stem), text: `${value.toFixed(1)} s` };
   }
   return {
-    label: key,
+    label: metricLabel(key, key),
     text: Number.isInteger(value) ? String(value) : value.toFixed(2),
   };
 }
@@ -80,12 +99,56 @@ export function formatEpoch(epochSeconds: number | null | undefined): string {
   );
 }
 
-/** Format an ISO-8601 datetime string for display. */
+/** Format an ISO-8601 datetime string for display.
+ *
+ * A string with no timezone designator is treated as UTC, because that is
+ * what the backend sends: it stores naive UTC and FastAPI serialises it
+ * without an offset. `new Date()` would read it as local time instead and
+ * shift every recorded timestamp by the viewer's offset (9 hours in JST).
+ */
 export function formatIso(iso: string | null | undefined): string {
   if (!iso) return "-";
-  const d = new Date(iso);
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(iso);
+  const d = new Date(hasZone ? iso : `${iso}Z`);
   if (Number.isNaN(d.getTime())) return iso;
   return formatEpoch(d.getTime() / 1000);
+}
+
+/** Mission-clock time of the touchdown, i.e. the date set inside the .miz.
+ *
+ * Kept separate from the recorded time on purpose: ACMI's ReferenceTime is
+ * the simulated world's date (the Caucasus mission here is set in June
+ * 2026), so presenting it as "the time of the landing" reads as a bug to
+ * anyone who flew it this morning. Imported recordings carry no real-world
+ * timestamp at all -- only this one.
+ */
+export function formatMissionTime(epochSeconds: number | null | undefined): string {
+  return formatEpoch(epochSeconds);
+}
+
+/** Japanese label for an approach pattern. */
+export function patternLabel(pattern: string | null | undefined): string {
+  switch (pattern) {
+    case "overhead":
+      return "オーバーヘッド";
+    case "straight_in":
+      return "ストレートイン";
+    case "unknown":
+      return "不明";
+    default:
+      return "-";
+  }
+}
+
+/** Badge class for an approach pattern.
+ *
+ * The stylesheet keys on `pattern-overhead` / `pattern-straight_in` /
+ * `pattern-unknown`; interpolating the raw value produces `overhead`, which
+ * matches nothing and silently renders an unstyled badge (it did, on the
+ * detail page).
+ */
+export function patternClass(pattern: string | null | undefined): string {
+  return pattern ? `pattern-badge pattern-${pattern}` : "pattern-badge pattern-unknown";
 }
 
 export function kindLabel(kind: string | null | undefined): string {
@@ -142,7 +205,116 @@ const FACTOR_DESCRIPTIONS: Record<string, string> = {
   OPEN: "スロットル操作不良（オープン）",
   POWER: "パワー不足",
   BURBLE: "甲板風乱流（バーブル）の影響",
+  // 陸上飛行場の採点コンポーネント (LSO ファクターと違い加点式)。
+  descent_rate: "接地降下率（機体クラス別の許容幅で判定）",
+  touchdown_speed: "接地速度（ファイナル区間の平均速度に対する比）",
+  glideslope: "グライドスロープ追従（ファイナル開始から閾値まで）",
+  centerline: "センターライン保持（接地直前）",
+  pattern: "オーバーヘッドパターン（旋回明けの軸ずれ / ダウンウィンドの方位・高度）",
 };
+
+/** 評価メトリクスの日本語ラベル。無いキーは従来どおりキー名を出す。 */
+const METRIC_LABELS: Record<string, string> = {
+  touchdown_descent_rate: "接地降下率",
+  touchdown_speed: "接地速度",
+  mean_approach_speed: "基準速度（ファイナル平均）",
+  speed_ratio: "速度比",
+  speed_reference: "速度基準区間",
+  touchdown_speed_ratio: "速度比",
+  verdict: "判定",
+  airframe: "機体",
+  airframe_class: "機体クラス",
+  bands_fpm: "許容幅 (fpm)",
+  mean_abs_error: "平均グライドスロープ誤差",
+  mean_signed_error: "平均誤差（+ = 高い）",
+  mean_abs_deviation: "平均偏差",
+  mean_signed_deviation: "平均偏差（+ = 高い）",
+  mean_glideslope_error: "平均グライドスロープ誤差",
+  mean_signed_glideslope_error: "平均誤差（+ = 高い）",
+  mean_glideslope_deviation: "平均偏差",
+  mean_signed_glideslope_deviation: "平均偏差（+ = 高い）",
+  mean_path_angle: "飛んだ経路角",
+  path_angle_spread: "直線からの浮き沈み",
+  aim_offset: "狙点のずれ（+ = 接地点より手前）",
+  glideslope: "基準スロープ",
+  samples: "サンプル数",
+  method: "測定方法",
+  reference: "基準",
+  max_abs_deviation: "最大横ずれ",
+  max_centerline_deviation: "最大横ずれ",
+  window: "評価窓",
+  overshoot: "センターライン突き抜け",
+  centerline_overshoot: "センターライン突き抜け",
+  glideslope_reference: "基準",
+  glideslope_method: "測定方法",
+  outcome: "結果",
+  approach_pattern: "進入パターン",
+  rollout_before_touchdown: "旋回明け（接地前）",
+  // オーバーヘッドパターン
+  rollout_offset: "旋回明けの軸ずれ（+ = 手前 / - = 突き抜け）",
+  alignment_error: "旋回明けの軸ずれ量",
+  downwind_course_error: "ダウンウィンド方位差",
+  downwind_course_offset: "ダウンウィンド方位差（+ = 外へ広がる）",
+  downwind_course_rms: "ダウンウィンドの直線からのばらつき",
+  pattern_downwind_course_offset: "ダウンウィンド方位差（+ = 外へ広がる）",
+  pattern_downwind_course_rms: "ダウンウィンドの直線からのばらつき",
+  final_window: "採点したファイナルの長さ",
+  final_start_anchor: "ファイナル起点の決まり方",
+  pattern_rollout_time: "旋回明け時刻",
+  pattern_downwind_start_time: "ダウンウィンド開始時刻",
+  pattern_downwind_end_time: "ダウンウィンド終了時刻",
+  downwind_altitude_spread: "ダウンウィンド高度変動",
+  downwind_abeam: "ダウンウィンド離隔",
+  downwind_duration: "ダウンウィンド長さ",
+  downwind_samples: "ダウンウィンドのサンプル数",
+  downwind_judged: "ダウンウィンドを採点したか",
+  break_altitude_spread: "ブレイク中の高度変動",
+  break_duration: "ブレイクの長さ",
+  break_samples: "ブレイクのサンプル数",
+  break_judged: "ブレイクを採点したか",
+  pattern_break_altitude_spread: "ブレイク中の高度変動",
+  pattern_break_duration: "ブレイクの長さ",
+  pattern_break_samples: "ブレイクのサンプル数",
+  pattern_break_judged: "ブレイクを採点したか",
+  sub_scores: "内訳スコア",
+  pattern_rollout_offset: "旋回明けの軸ずれ（+ = 手前 / - = 突き抜け）",
+  pattern_alignment_error: "旋回明けの軸ずれ量",
+  pattern_downwind_course_error: "ダウンウィンド方位差",
+  pattern_downwind_altitude_spread: "ダウンウィンド高度変動",
+  pattern_downwind_abeam: "ダウンウィンド離隔",
+  pattern_downwind_duration: "ダウンウィンド長さ",
+  pattern_downwind_samples: "ダウンウィンドのサンプル数",
+  pattern_downwind_judged: "ダウンウィンドを採点したか",
+  pattern_overshoot: "センターライン突き抜け",
+};
+
+/** Keys that exist for the charts, not for the reader.
+ *
+ * The plan view needs the leg boundaries as raw mission seconds to colour
+ * the track; printing "19219.73" in a data sheet just adds noise, and the
+ * same information is already there as 旋回明け（接地前）.
+ */
+const INTERNAL_METRIC_KEYS = new Set([
+  "rollout_time",
+  "downwind_start_time",
+  "downwind_end_time",
+  "pattern_rollout_time",
+  "pattern_downwind_start_time",
+  "pattern_downwind_end_time",
+  "break_start_time",
+  "break_end_time",
+  "pattern_break_start_time",
+  "pattern_break_end_time",
+]);
+
+export function isInternalMetricKey(key: string): boolean {
+  return INTERNAL_METRIC_KEYS.has(key);
+}
+
+/** Full key first, then the unit-stripped stem, then the raw stem. */
+function metricLabel(key: string, stem: string): string {
+  return METRIC_LABELS[key] ?? METRIC_LABELS[stem] ?? stem;
+}
 
 export function factorDescription(name: string): string {
   return FACTOR_DESCRIPTIONS[name] ?? "";

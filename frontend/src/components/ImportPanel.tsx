@@ -6,28 +6,37 @@ import {
   discardImportOnUnload,
   getImport,
   importAcmiFile,
+  listLandings,
 } from "../api/client";
+import { LandingTable } from "./LandingTable";
+import { importSourceId } from "../lib/importStatus";
 import {
   IMPORT_ACCEPT,
   formatImportSummary,
   importStatusLabel,
   isActiveImportStatus,
 } from "../lib/importStatus";
-import type { ImportJob } from "../types/api";
+import type { ImportJob, LandingSummary } from "../types/api";
 
 export interface ImportPanelProps {
   /** Called when a job reaches a terminal state so the list can refresh. */
   onImported?: () => void;
+  /** Opens a landing's detail sheet; enables the results table below. */
+  onSelectLanding?: (id: number) => void;
 }
 
 const POLL_INTERVAL_MS = 1000;
 
-export function ImportPanel({ onImported }: ImportPanelProps) {
+export function ImportPanel({ onImported, onSelectLanding }: ImportPanelProps) {
   const [open, setOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<ImportJob | null>(null);
+  // Results of THIS import, kept out of the shared history on purpose: the
+  // recording is usually from another server or another day, and mixing it
+  // into the server's own list makes both unreadable.
+  const [results, setResults] = useState<LandingSummary[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Kept in a ref as well so the unload handler below always sees the current
   // job without being torn down and re-registered on every poll tick.
@@ -56,6 +65,7 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
       return;
     }
     setJob(null);
+    setResults(null);
     setError(null);
     onImported?.();
   }, [onImported]);
@@ -71,6 +81,20 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
           } else {
             setUploading(false);
             onImported?.();
+            if (current.status === "completed") {
+              try {
+                const page = await listLandings(
+                  { source: importSourceId(jobId) },
+                  200,
+                  0,
+                );
+                setResults(page.items);
+              } catch {
+                // The summary line already says how many were found; a
+                // failed listing must not look like a failed import.
+                setResults([]);
+              }
+            }
           }
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
@@ -86,6 +110,7 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
     async (file: File) => {
       setError(null);
       setJob(null);
+      setResults(null);
       setUploading(true);
       try {
         const started = await importAcmiFile(file);
@@ -217,6 +242,19 @@ export function ImportPanel({ onImported }: ImportPanelProps) {
             </>
           )}
           {error && <p className="error-message">インポートエラー: {error}</p>}
+
+          {results !== null && onSelectLanding && (
+            <div className="import-results">
+              <h4>インポート結果（{results.length} 件・一時データ）</h4>
+              {results.length === 0 ? (
+                <p className="empty-message">
+                  このファイルから新しい着陸は取り込まれませんでした。
+                </p>
+              ) : (
+                <LandingTable items={results} onSelect={onSelectLanding} />
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

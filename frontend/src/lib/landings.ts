@@ -16,13 +16,29 @@ function mergeItem(existing: LandingSummary, patch: Partial<LandingSummary>): La
   return { ...existing, ...patch } as LandingSummary;
 }
 
+/** Uploaded recordings are scratch data scoped to their own source. */
+export const IMPORT_SOURCE_PREFIX = "import:";
+
 export function applyLandingMessage(
   res: LandingListResponse,
   msg: WsLandingMessage,
   offset: number,
+  activeSource?: string | null,
 ): LandingListResponse {
   const landing = msg.landing;
   if (landing.id === undefined) return res;
+
+  // The list endpoint hides uploaded recordings from the shared history, so
+  // the live feed must hide them too -- otherwise an import drops rows into
+  // everyone's dashboard that vanish again on the next refetch.
+  const source = landing.source_id;
+  if (
+    typeof source === "string" &&
+    source.startsWith(IMPORT_SOURCE_PREFIX) &&
+    activeSource !== source
+  ) {
+    return res;
+  }
 
   const index = res.items.findIndex((it) => it.id === landing.id);
 

@@ -201,3 +201,85 @@ def test_websocket_receives_landing_update_messages(settings) -> None:
             assert message["type"] == "landing_update"
             assert message["landing"]["id"] == 8
             assert message["landing"]["outcome_status"] == "final"
+
+
+async def test_list_landings_sorts_by_the_requested_column(client) -> None:
+    """The history list can be reordered from the column headers.
+
+    Sorting by "time" means ``created_at``, not ``touchdown_time``: the
+    latter is mission-elapsed seconds and restarts every mission, so it
+    interleaves days once the history spans more than one.
+    """
+    http, app = client
+    sf = app.state.session_factory
+    pipeline = app.state.pipeline
+
+    await seed_landing(sf, pipeline, pilot="Charlie", kind="land")
+    await seed_landing(sf, pipeline, acmi_id="202", pilot="Alpha", kind="land")
+    await seed_landing(sf, pipeline, acmi_id="203", pilot="Bravo", kind="land")
+
+    body = (await http.get("/api/landings", params={"sort": "pilot", "order": "asc"})).json()
+    pilots = [i["pilot"] for i in body["items"]]
+    assert pilots == sorted(pilots)
+
+    body = (await http.get("/api/landings", params={"sort": "pilot", "order": "desc"})).json()
+    assert [i["pilot"] for i in body["items"]] == sorted(pilots, reverse=True)
+
+    body = (await http.get("/api/landings", params={"sort": "score", "order": "desc"})).json()
+    scores = [i["score"] for i in body["items"] if i["score"] is not None]
+    assert scores == sorted(scores, reverse=True)
+
+    # An unknown column falls back to the default instead of erroring: a
+    # stale bookmark must not break the page.
+    assert (await http.get("/api/landings", params={"sort": "nonsense"})).status_code == 200
+    assert (await http.get("/api/landings", params={"order": "sideways"})).status_code == 422
+
+
+async def test_list_landings_filters_by_approach_pattern(client) -> None:
+    http, app = client
+    sf = app.state.session_factory
+    pipeline = app.state.pipeline
+
+    await seed_landing(sf, pipeline, acmi_id="204", kind="land")
+
+    body = (await http.get("/api/landings", params={"pattern": "straight_in"})).json()
+    assert all(i["approach_pattern"] == "straight_in" for i in body["items"])
+    assert (await http.get("/api/landings", params={"pattern": "sideways"})).status_code == 422
+
+
+async def test_detail_serves_every_stored_sample_field(client) -> None:
+    """The detail endpoint must not quietly drop columns of the track.
+
+    It used to build each sample field by field, so anything added to the
+    stored representation afterwards was serialised as null even though it
+    was in the database. `signed_distance_to_go` went that way, and the plan
+    view -- which needs it to place the break and the upwind leg, everything
+    PAST the touchdown point -- fell back to the clamped distance and drew
+    142 of landing #54's 515 samples stacked on the threshold line.
+    """
+    from app.api.schemas import DeviationSampleOut
+
+    http, app = client
+    sf = app.state.session_factory
+    pipeline = app.state.pipeline
+    landing_id = await seed_landing(sf, pipeline, kind="land", acmi_id="301")
+
+    body = (await http.get(f"/api/landings/{landing_id}")).json()
+    samples = body["approach_track"]["samples"]
+    assert samples
+
+    stored = await _stored_track(sf, landing_id)
+    for field in DeviationSampleOut.model_fields:
+        served = [s.get(field) for s in samples]
+        kept = [s.get(field) for s in stored["samples"]]
+        assert len(served) == len(kept)
+        if any(v is not None for v in kept):
+            assert any(v is not None for v in served), f"{field} dropped by the API"
+
+
+async def _stored_track(session_factory, landing_id: int) -> dict:
+    from app.models.entities import Landing
+
+    async with session_factory() as session:
+        landing = await session.get(Landing, landing_id)
+        return landing.approach_track

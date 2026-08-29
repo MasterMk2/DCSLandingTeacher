@@ -25,7 +25,13 @@ class Flight(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     source_id: Mapped[str] = mapped_column(String(64), index=True, default="default")
+    #: ACMI ``ReferenceTime`` -- the mission's IN-GAME date, taken from the
+    #: .miz. Identical for every session of the same mission, so it does not
+    #: identify a session.
     reference_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: ACMI ``RecordingTime`` -- when this recording started, in real time.
+    #: This is what distinguishes one session from another.
+    recording_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
     data_recorder: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str | None] = mapped_column(String(256), nullable=True)

@@ -312,3 +312,47 @@ def test_ws_notified_of_import_completion(tmp_path) -> None:
             job_payload = import_message["import"]
             assert job_payload["status"] == "completed"
             assert job_payload["landings_detected"] == 1
+
+
+async def test_two_sessions_of_the_same_mission_are_both_imported(tmp_path) -> None:
+    """A recording of a DIFFERENT sortie must not be swallowed as a duplicate.
+
+    The duplicate key was (slot id, mission-elapsed time, ReferenceTime), and
+    ReferenceTime is the .miz's in-game date -- the same for every session of
+    a mission. A server flying one mission all week therefore had every
+    uploaded recording collide with what it had already recorded live, and
+    the import reported "0 landings detected". RecordingTime is stamped per
+    recording, so it is what tells the sessions apart.
+    """
+    app = create_app(_settings(tmp_path))
+    async with app.router.lifespan_context(app):
+        async with await _open_client(app) as http:
+            monday = make_acmi_text(
+                make_approach_samples(outcome="full_stop"),
+                recording_time="2026-08-25T07:03:07Z",
+            ).encode()
+            tuesday = make_acmi_text(
+                make_approach_samples(outcome="full_stop"),
+                recording_time="2026-08-26T07:03:07Z",
+            ).encode()
+
+            first = await http.post(
+                "/api/import", files={"file": ("mon.acmi", monday, "text/plain")}
+            )
+            job1 = await _wait_for_job(http, first.json()["id"])
+            assert job1["landings_detected"] == 1
+
+            second = await http.post(
+                "/api/import", files={"file": ("tue.acmi", tuesday, "text/plain")}
+            )
+            job2 = await _wait_for_job(http, second.json()["id"])
+            assert job2["landings_detected"] == 1, job2
+            assert job2["duplicates_skipped"] == 0
+
+            # The same recording twice is still a duplicate.
+            again = await http.post(
+                "/api/import", files={"file": ("tue.acmi", tuesday, "text/plain")}
+            )
+            job3 = await _wait_for_job(http, again.json()["id"])
+            assert job3["landings_detected"] == 0
+            assert job3["duplicates_skipped"] == 1

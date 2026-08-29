@@ -28,7 +28,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.file_reader import iter_acmi_lines
@@ -149,7 +149,30 @@ class _DuplicateGuard:
         return landing_id
 
     async def _is_duplicate(self, context: LandingContext) -> bool:
-        reference_time = self._ingestor.parser.header.get("ReferenceTime")
+        """Has this exact touchdown already been recorded?
+
+        The identity of a touchdown is (aircraft slot, mission-elapsed time,
+        session). All three parts are needed and only the third is hard:
+        ACMI object ids are mission unit ids that get reused as slots change
+        hands, and ``touchdown_time`` is mission-elapsed seconds, which
+        restarts at zero every session.
+
+        ``ReferenceTime`` cannot stand in for the session: it is the .miz's
+        in-game date, so every session of the same mission carries the same
+        value -- 24 of this server's flights share
+        ``2026-06-11T04:30:00Z``. Keyed on that alone, a recording of
+        yesterday's sortie counts as "already known" as soon as a slot id
+        and a mission clock line up with today's, and the import reports
+        nothing found. ``RecordingTime`` is stamped when the recording
+        started, so it does identify the session.
+
+        Rows written before that column existed have it NULL; treat those as
+        possible matches rather than as non-matches, or re-importing a
+        session that IS already in the history would duplicate all of it.
+        """
+        header = self._ingestor.parser.header
+        recording_time = header.get("RecordingTime")
+        reference_time = header.get("ReferenceTime")
         touchdown_time = context.event.touchdown.time
         statement = (
             select(Landing.id)
@@ -162,6 +185,13 @@ class _DuplicateGuard:
                 < TOUCHDOWN_EPSILON_S
             )
         )
+        if recording_time is not None:
+            statement = statement.where(
+                or_(
+                    Flight.recording_time == recording_time,
+                    Flight.recording_time.is_(None),
+                )
+            )
         if reference_time is not None:
             statement = statement.where(Flight.reference_time == reference_time)
         else:

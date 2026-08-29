@@ -24,6 +24,15 @@ function formatEvidence(evidence: Record<string, unknown> | null | undefined): s
     .join(" / ");
 }
 
+/** 陸上は素点と重み、空母 (LSO) は重大度。どちらも無ければ "-"。 */
+function factorWeightText(f: Factor): string {
+  if (typeof f.score === "number") {
+    const weight = typeof f.weight === "number" ? `（重み ${f.weight.toFixed(2)}）` : "";
+    return `${f.score.toFixed(0)} 点${weight}`;
+  }
+  return f.severity ?? "-";
+}
+
 export function GradeSummary({
   kind,
   outcome,
@@ -60,7 +69,7 @@ export function GradeSummary({
             <tr>
               <th>ファクター</th>
               <th>説明</th>
-              <th>重要度</th>
+              <th>素点 / 重要度</th>
               <th>根拠データ</th>
             </tr>
           </thead>
@@ -69,7 +78,7 @@ export function GradeSummary({
               <tr key={`${f.name}-${i}`}>
                 <td className="factor-name">{f.name}</td>
                 <td>{factorDescription(f.name) || "-"}</td>
-                <td>{f.severity ?? "-"}</td>
+                <td>{factorWeightText(f)}</td>
                 <td className="factor-evidence">{formatEvidence(f.evidence)}</td>
               </tr>
             ))}

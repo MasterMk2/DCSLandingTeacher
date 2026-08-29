@@ -6,6 +6,12 @@ import type { ImportJob } from "../types/api";
 
 export type ImportStatus = ImportJob["status"];
 
+/** Source id the backend scopes an import's records to. Must match
+ *  `app.importer.import_source_id`. */
+export function importSourceId(jobId: string): string {
+  return `import:${jobId}`;
+}
+
 /** Accepted file extensions for the upload dialog / drag & drop. */
 export const IMPORT_ACCEPT = ".acmi,.acmi.txt,.acmi.zip";
 
@@ -35,10 +41,21 @@ export function importStatusLabel(status: string): string {
   }
 }
 
-/** One-line result summary, e.g. 「検出 3 件・重複スキップ 1 件」. */
+/** One-line result summary, e.g. 「検出 3 件・重複スキップ 1 件」.
+ *
+ * A bare "検出 0 件" reads as "there are no landings in this file", which is
+ * the wrong conclusion when every landing in it was already on record. Say
+ * which of the two happened.
+ */
 export function formatImportSummary(job: ImportJob): string {
   const parts: string[] = [];
-  if (job.landings_detected > 0 || job.status === "completed") {
+  if (job.landings_detected === 0 && job.status === "completed") {
+    parts.push(
+      job.duplicates_skipped > 0
+        ? "新規なし（すべて記録済み）"
+        : "着陸は検出されませんでした",
+    );
+  } else if (job.landings_detected > 0 || job.status === "completed") {
     parts.push(`検出 ${job.landings_detected} 件`);
   }
   if (job.duplicates_skipped > 0) {

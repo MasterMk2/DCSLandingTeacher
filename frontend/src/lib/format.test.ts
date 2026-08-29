@@ -75,7 +75,7 @@ describe("formatMetric", () => {
   it("renders metre-suffixed deviations as feet and drops the stale suffix", () => {
     // Issue D-4: the UI is ft/kt/nm everywhere else; these read as metres.
     expect(formatMetric("max_abs_deviation_m", 28.01)).toEqual({
-      label: "max_abs_deviation",
+      label: "最大横ずれ",
       text: "92 ft",
     });
     expect(formatMetric("mean_abs_deviation_final_15s_m", 16.91).text).toBe("55 ft");
@@ -83,7 +83,7 @@ describe("formatMetric", () => {
 
   it("distinguishes descent rates from airspeeds, both stored as m/s", () => {
     expect(formatMetric("touchdown_speed_ms", 89.86)).toEqual({
-      label: "touchdown_speed",
+      label: "接地速度",
       text: "175 kt",
     });
     expect(formatMetric("recent_descent_ms", 4.0)).toEqual({
@@ -100,11 +100,33 @@ describe("formatMetric", () => {
 
   it("leaves unitless and non-numeric values alone", () => {
     expect(formatMetric("speed_ratio", 0.867)).toEqual({
-      label: "speed_ratio",
+      label: "速度比",
       text: "0.87",
     });
     expect(formatMetric("major_factor_count", 2).text).toBe("2");
     expect(formatMetric("verdict", "hard").text).toBe("hard");
     expect(formatMetric("touchdown_speed_ms", null).text).toBe("-");
+  });
+
+  it("keeps the raw stem for keys nobody has labelled yet", () => {
+    // 未知のキーで "undefined" を出さないこと: 採点側が新しい evidence を
+    // 足したときに、UI 側の辞書更新が漏れても読める形で出る必要がある。
+    expect(formatMetric("some_new_thing_m", 30.48).label).toBe("some_new_thing");
+    expect(formatMetric("recent_descent_ms", 4.0).label).toBe("recent_descent");
+  });
+
+  it("labels the overhead pattern evidence in Japanese", () => {
+    expect(formatMetric("downwind_course_error_deg", 9.4)).toEqual({
+      label: "ダウンウィンド方位差",
+      text: "9.4°",
+    });
+    // 離隔だけは nm。1.5 nm を 9000 ft と言われても飛ぶ側の感覚と合わない。
+    expect(formatMetric("downwind_abeam_m", 2778).text).toBe("1.50 nm");
+    expect(formatMetric("rollout_offset_m", -91.84).text).toBe("-301 ft");
+  });
+
+  it("renders nested evidence instead of [object Object]", () => {
+    const { text } = formatMetric("sub_scores", { alignment: 98.6 });
+    expect(text).toBe('{"alignment":98.6}');
   });
 });

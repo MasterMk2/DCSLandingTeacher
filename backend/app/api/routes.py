@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, or_, select
@@ -88,6 +89,26 @@ def _summary(
     )
 
 
+#: Sortable columns of the history list, mapped to what to order by.
+#:
+#: "time" orders by ``created_at``, NOT by ``touchdown_time``: the latter is
+#: mission-elapsed seconds and restarts at zero every mission, so ordering a
+#: multi-mission history by it interleaves days. It is also the column the
+#: list actually displays.
+_SORT_COLUMNS: dict[str, Any] = {
+    "time": Landing.created_at,
+    "pilot": DcsObject.pilot,
+    "airframe": DcsObject.name,
+    "venue": Landing.venue_name,
+    "source": Landing.source_id,
+    "kind": Landing.kind,
+    "pattern": Landing.approach_pattern,
+    "grade": Landing.grade,
+    "score": Landing.score,
+    "outcome": Landing.outcome,
+}
+
+
 @protected_router.get("/landings", response_model=LandingListResponse)
 async def list_landings(
     request: Request,
@@ -102,15 +123,26 @@ async def list_landings(
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
     source: str | None = Query(default=None, description="Filter by Tacview source ID"),
+    pattern: str | None = Query(
+        default=None,
+        pattern="^(overhead|straight_in|unknown)$",
+        description="Filter by approach pattern",
+    ),
+    sort: str = Query(default="time", description="Column to sort by"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> LandingListResponse:
+    column = _SORT_COLUMNS.get(sort, Landing.created_at)
+    direction = column.asc() if order == "asc" else column.desc()
     query = (
         select(Landing, DcsObject, Flight)
         .join(DcsObject, Landing.object_id == DcsObject.id, isouter=True)
         .join(Flight, Landing.flight_id == Flight.id, isouter=True)
-        .order_by(Landing.touchdown_time.is_(None), Landing.touchdown_time.desc(), Landing.id.desc())
+        # Nulls last whichever way round, so an ungraded row never takes the
+        # top of a "best first" sort; id breaks ties so paging is stable.
+        .order_by(column.is_(None), direction, Landing.id.desc())
     )
 
     if player:
@@ -125,6 +157,8 @@ async def list_landings(
         query = query.where(Landing.grade == grade)
     if outcome:
         query = query.where(Landing.outcome == outcome)
+    if pattern:
+        query = query.where(Landing.approach_pattern == pattern)
     if date_from is not None:
         query = query.where(Landing.created_at >= date_from)
     if date_to is not None:
@@ -190,15 +224,13 @@ async def get_landing(
     if landing.approach_track:
         data = dict(landing.approach_track)
         samples = [
-            DeviationSampleOut(
-                time=s["time"],
-                distance_to_go=s["distance_to_go"],
-                glideslope_deviation=s.get("glideslope_deviation"),
-                centerline_deviation=s.get("centerline_deviation"),
-                speed=s.get("speed"),
-                aoa=s.get("aoa"),
-                agl=s.get("agl"),
-            )
+            # Built from the stored dict wholesale, not field by field: the
+            # explicit list silently dropped every field added after it was
+            # written. `distance_to_threshold` and `signed_distance_to_go`
+            # were both stored and both served as null, which collapsed the
+            # break and the upwind leg -- 142 of landing #54's 515 samples --
+            # onto the threshold line in the plan view.
+            DeviationSampleOut(**s)
             for s in data.pop("samples", [])
         ]
         approach = ApproachTrackOut(**data, samples=samples)

@@ -224,6 +224,7 @@ class TrackIngestor:
         flight = Flight(
             source_id=self._source_id,
             reference_time=header.get("ReferenceTime"),
+            recording_time=header.get("RecordingTime"),
             data_source=header.get("DataSource"),
             data_recorder=header.get("DataRecorder"),
             title=header.get("Title"),

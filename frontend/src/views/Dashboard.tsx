@@ -7,15 +7,39 @@ import { ImportPanel } from "../components/ImportPanel";
 import { LandingTable } from "../components/LandingTable";
 import { LANDING_PAGE_SIZE, useLandings } from "../hooks/useLandings";
 import { downloadCsv, landingsToCsv } from "../lib/csv";
-import type { LandingFilters } from "../types/api";
+import type { LandingFilters, LandingSortKey } from "../types/api";
 
 export interface DashboardProps {
   onSelectLanding: (id: number) => void;
 }
 
 export function Dashboard({ onSelectLanding }: DashboardProps) {
-  const [filters, setFilters] = useState<LandingFilters>({});
+  // Sort lives in `filters` so it flows through the same query builder and
+  // refetch key as everything else; a separate piece of state would need its
+  // own plumbing into useLandings for no benefit.
+  const [filters, setFilters] = useState<LandingFilters>({
+    sort: "time",
+    order: "desc",
+  });
   const [offset, setOffset] = useState(0);
+
+  const handleSort = (key: LandingSortKey) => {
+    setFilters((prev) => ({
+      ...prev,
+      sort: key,
+      // Same column toggles direction; a new column starts descending,
+      // except the text columns where A-Z is the useful first look.
+      order:
+        prev.sort === key
+          ? prev.order === "asc"
+            ? "desc"
+            : "asc"
+          : key === "pilot" || key === "airframe" || key === "venue" || key === "grade"
+            ? "asc"
+            : "desc",
+    }));
+    setOffset(0);
+  };
   const { data, loading, error, liveCount, refresh } = useLandings(filters, offset);
 
   const total = data?.total ?? 0;
@@ -50,20 +74,27 @@ export function Dashboard({ onSelectLanding }: DashboardProps) {
       <FilterBar
         filters={filters}
         onChange={(f) => {
-          setFilters(f);
+          // The filter bar does not own the sort, so carry it across.
+          setFilters((prev) => ({ ...f, sort: prev.sort, order: prev.order }));
           setOffset(0);
         }}
         sources={data?.sources}
       />
 
-      <ImportPanel onImported={refresh} />
+      <ImportPanel onImported={refresh} onSelectLanding={onSelectLanding} />
 
       {error && <p className="error-message">読み込みエラー: {error}</p>}
       {loading && <p className="loading-message">読み込み中...</p>}
 
       {!loading && data && (
         <>
-          <LandingTable items={data.items} onSelect={onSelectLanding} />
+          <LandingTable
+            items={data.items}
+            onSelect={onSelectLanding}
+            sort={filters.sort}
+            order={filters.order}
+            onSort={handleSort}
+          />
           <div className="pagination no-print">
             <span>
               {total} 件中 {offset + 1}–{Math.min(offset + LANDING_PAGE_SIZE, total)} 件

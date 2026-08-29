@@ -27,7 +27,8 @@ Outcome classification:
   ``full_stop``.
 
 The final-approach segment is cut backwards from touchdown up to
-``approach_window_s`` / ``approach_distance_m`` (2 nm), plus a short
+``approach_window_s`` / ``approach_distance_m`` (2 nm; land landings use
+the longer ``land_approach_*`` pair so the pattern fits), plus a short
 post-touchdown tail for context.
 """
 
@@ -49,6 +50,16 @@ class DetectionConfig:
     carrier_proximity_m: float = 800.0
     approach_window_s: float = 60.0
     approach_distance_m: float = 3704.0
+    #: Land landings capture further back than the ~2 nm final: the graded
+    #: pattern (break -> downwind -> base) simply does not fit in 60 s.
+    #: A fighter circuit at 1.5 nm abeam sits ~4.5 km from the touchdown
+    #: point, i.e. outside the carrier-sized radius above, and the initial
+    #: that precedes the break runs 3-5 nm out -- 3 nm cut it off mid-leg
+    #: (landing #54's capture stopped dead at 5.77 km). Carrier passes keep
+    #: the short window: there is no pattern to capture and the LSO grader
+    #: only ever looks at the last seconds.
+    land_approach_window_s: float = 300.0
+    land_approach_distance_m: float = 14816.0  # 8 nm
     #: Extra horizontal slack when walking backwards along the approach.
     approach_distance_margin_m: float = 500.0
     #: Seconds of post-touchdown samples kept in the stored approach track.
@@ -356,10 +367,24 @@ def _cut_approach(
     touchdown_index: int,
     touchdown: Touchdown,
     config: DetectionConfig,
+    kind: str = "carrier",
+    wow: list[bool | None] | None = None,
 ) -> list[TrackSample]:
-    """Walk backwards from touchdown collecting the final-approach segment."""
+    """Walk backwards from touchdown collecting the final-approach segment.
+
+    The walk stops at the previous ground contact when there is one. A
+    circuit begins where the last one ended, so anything before that belongs
+    to a different arrival -- and the land window is now wide enough
+    (300 s / 8 nm) to reach back into it, which would draw two loops on the
+    plan view and give the leg finder two downwinds to choose between.
+    """
+    window_s = config.approach_window_s
+    distance_m = config.approach_distance_m
+    if kind == "land":
+        window_s = max(window_s, config.land_approach_window_s)
+        distance_m = max(distance_m, config.land_approach_distance_m)
     start_index = touchdown_index
-    limit_time = touchdown.time - config.approach_window_s
+    limit_time = touchdown.time - window_s
     for j in range(touchdown_index - 1, -1, -1):
         sample = samples[j]
         if sample.time < limit_time:
@@ -370,8 +395,11 @@ def _cut_approach(
             and haversine_m(
                 sample.latitude, sample.longitude, touchdown.latitude, touchdown.longitude
             )
-            > config.approach_distance_m + config.approach_distance_margin_m
+            > distance_m + config.approach_distance_margin_m
         ):
+            break
+        if wow is not None and wow[j] is True:
+            # A previous touchdown / roll-out: this circuit started here.
             break
         start_index = j
     tail_limit = touchdown.time + config.post_touchdown_tail_s
@@ -452,7 +480,7 @@ def analyze_track(
         if kind == "carrier" and outcome == "touch_and_go":
             outcome = "bolter"
 
-        approach = _cut_approach(samples, index, touchdown, config)
+        approach = _cut_approach(samples, index, touchdown, config, kind, wow)
         approach_pattern = _classify_approach_pattern(approach)
         if outcome != "full_stop" or current_time is None:
             finalized = True

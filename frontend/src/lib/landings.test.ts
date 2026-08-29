@@ -102,3 +102,36 @@ describe("isProvisional", () => {
     expect(isProvisional(summary({ outcome_status: "provisional" }))).toBe(true);
   });
 });
+
+describe("applyLandingMessage / live payloads", () => {
+  const base = {
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  } as unknown as import("../types/api").LandingListResponse;
+
+  it("inserts a live landing even when the payload is partial", () => {
+    const msg = {
+      type: "landing",
+      landing: { id: 9, grade: "B", source_id: "default" },
+    } as unknown as import("../types/api").WsLandingMessage;
+    const next = applyLandingMessage(base, msg, 0);
+    expect(next.items).toHaveLength(1);
+    expect(next.total).toBe(1);
+  });
+
+  it("keeps uploaded recordings out of the shared history", () => {
+    // The list endpoint hides them; the live feed must agree, or an import
+    // drops rows into every dashboard that vanish on the next refetch.
+    const msg = {
+      type: "landing",
+      landing: { id: 10, grade: "A", source_id: "import:abc123" },
+    } as unknown as import("../types/api").WsLandingMessage;
+    expect(applyLandingMessage(base, msg, 0).items).toHaveLength(0);
+    // ...unless that source is the one being looked at.
+    expect(
+      applyLandingMessage(base, msg, 0, "import:abc123").items,
+    ).toHaveLength(1);
+  });
+});

@@ -18,12 +18,37 @@ geometry:
   # the standard visual approach slope; keep it at 3.0 unless a specific
   # airfield publishes a different PAPI/VASI angle.
   land_glideslope_deg: 3.0
+  # Optional separate reference for the overhead pattern, whose final is
+  # flown visually and much shorter than an instrument final. Left null it
+  # uses land_glideslope_deg.
+  #
+  # There is no authoritative public number for "the" overhead final angle:
+  # AFMAN 11-217 puts ILS glideslopes at 2.5-3.0 deg depending on siting,
+  # and the overhead pattern itself is specified geometrically (roll out no
+  # lower than 300 ft AGL, no closer than 1/4 mile) rather than as an angle.
+  # Measured on this server (2026-08-27, 4 overhead landings with a usable
+  # final): mean path angle median 2.72 deg, range 1.56-3.28. Too few
+  # samples to conclude; set this to 2.5 and re-grade if you want to try it.
+  overhead_glideslope_deg: null
   earth_radius_m: 6371000.0
 
 approach:
   # Final-approach segment cut out before touchdown (FR-2: ~2nm / ~60 s).
+  # This is the carrier figure; carrier passes have no pattern to capture
+  # and the LSO grader only looks at the last seconds.
   window_s: 60.0
   distance_m: 3704.0   # 2 nm
+  # Land landings capture further back, because the graded pattern (break
+  # -> downwind -> base -> final) does not fit in 60 s / 2 nm: a fighter
+  # circuit at 1.5 nm abeam is already ~4.5 km from the touchdown point.
+  # Raising these only changes how much of each approach is STORED, and
+  # the per-object track table dwarfs it either way.
+  # Wide enough to start a little BEFORE the initial: the run-in to a
+  # fighter overhead begins 3-5 nm out, so 5 nm put the first recorded
+  # sample right on top of it. The walk-back stops at the previous ground
+  # contact regardless, so a closed pattern still yields one circuit.
+  land_window_s: 300.0
+  land_distance_m: 14816.0   # 8 nm
 
 detection:
   # Weight-on-wheels equivalent: AGL at or below this is "on deck".
@@ -46,23 +71,123 @@ detection:
 
 land_grading:
   # Score components are 0..100 each; total is the weighted mean.
+  # Weights are normalised before the mean is taken, so a component that
+  # could not be measured lowers nobody's score -- it just drops out.
   weights:
     descent_rate: 0.30
     touchdown_speed: 0.20
     glideslope: 0.25
     centerline: 0.25
-  # Touchdown descent rate bands in feet per minute.
+  # Used instead of `weights` when the approach was classified "overhead".
+  # The pattern is half the exercise in an overhead break, so it gets a
+  # share of its own rather than being invisible to the score.
+  overhead_weights:
+    descent_rate: 0.25
+    touchdown_speed: 0.15
+    glideslope: 0.20
+    centerline: 0.20
+    pattern: 0.20
+
+  # ---------------------------------------------------------------------
+  # Segmentation: where the final approach starts.
+  #
+  # Everything below that is measured "on final" needs to know where final
+  # begins. A fixed lookback cannot answer that: in an overhead pattern the
+  # aircraft is still in the base turn 30 s before touchdown. The roll-out
+  # is found from the GROUND TRACK in runway coordinates (not the aircraft
+  # heading -- crab angle is irrelevant to pattern geometry, and heading is
+  # not stored in older approach tracks).
+  # ---------------------------------------------------------------------
+  # Lookback used to differentiate position into a track angle. One sample
+  # interval (~0.25 s) is buried in position quantisation noise.
+  track_smoothing_s: 2.0
+  # Below this displacement the track angle is undefined (hover, ground roll).
+  track_min_step_m: 20.0
+  # Track angle within this of the runway course counts as "on final".
+  rollout_align_deg: 15.0
+  # ...and within this of the LANDING direction counts as the initial, which
+  # is where the break turn is taken to have started.
+  initial_align_deg: 20.0
+  # The downwind leg is found in two stages, and it matters that they are
+  # separate. The cone only says "the aircraft is on the downwind side of
+  # the pattern" (as opposed to final or upwind) and is deliberately wide;
+  # the leg's ENDS are decided by turn rate, i.e. by where the aircraft
+  # stopped/started turning.
+  #
+  # Using closeness-to-the-reciprocal to find the end of the leg -- which is
+  # what this did until 2026-08-27 -- is self-referential: that closeness IS
+  # the quantity being measured, so the more a downwind is off, the less
+  # band is left before the base turn counts as part of it, and the pulled
+  # fit reports the leg as better aligned than it was. Landing #27 flew a
+  # rock-steady 11.6 deg off for 9 s and was reported at 6.4 deg because
+  # 6 s of base turn had been swallowed.
+  downwind_cone_deg: 60.0
+  downwind_max_turn_rate_deg_s: 1.5
+  # Stabilization gate: the approach is judged from the moment it last
+  # descended through this AGL (or the roll-out, whichever is LATER).
+  #
+  # This is what lets a long stabilized straight-in be judged over the 3 nm
+  # it was actually flown instead of its last kilometre, while an overhead
+  # pattern still starts at the roll-out. The gate is defined by height, not
+  # by how close to the slope the aircraft was: a tolerance-based rule would
+  # pick the on-slope samples and then score how on-slope they are, so an
+  # approach flown at 5 deg for 2 nm and joined to 3 deg for the last mile
+  # would come out perfect. 1000 ft is the usual stabilized-approach gate.
+  stabilization_gate_agl_m: 305.0   # 1000 ft
+
+  # Touchdown descent rate bands in feet per minute, per airframe class.
+  # Scores interpolate linearly between bands (a step function makes 450
+  # fpm worth 80 points and 451 fpm worth 55, for the same landing).
+  #
+  # Why per class: a fighter flown at on-speed AoA down a 3 deg path with a
+  # short flare touches down around 400-500 fpm by design, and its gear is
+  # built for it. Grading that against transport-category bands (the
+  # `default` row) reported "hard" for correctly flown F-16 landings.
+  # Airframes are matched by substring against the ACMI name, in the order
+  # listed under airframe_classes; anything unmatched uses `default`.
   descent_rate_fpm:
-    excellent: 120   # <= this -> 100 pts
-    good: 250        # <= this -> 80 pts
-    fair: 450        # <= this -> 55 pts
-    hard: 650        # <= this -> 30 pts, else 5 pts
-  # Touchdown speed judged RELATIVE to the mean approach speed of the final
-  # segment (airframe independent). ratio = touchdown speed / mean speed.
+    default:
+      excellent: 120   # <= this -> 100 pts
+      good: 250        # <= this -> 80 pts
+      fair: 450        # <= this -> 55 pts
+      hard: 650        # <= this -> 30 pts, decaying to 5
+    fighter:
+      excellent: 300
+      good: 450
+      fair: 650
+      hard: 850
+    helicopter:
+      excellent: 100
+      good: 200
+      fair: 350
+      hard: 550
+  airframe_classes:
+    helicopter:
+      ["UH-1", "AH-64", "AH-1", "UH-60", "CH-47", "KA-50", "Mi-8", "Mi-24",
+       "SA342", "OH-58"]
+    fighter:
+      ["F-16", "FA-18", "F/A-18", "F-15", "F-14", "F-5", "F-4", "F-86",
+       "F-100", "F-117", "A-10", "AV8B", "AJS37", "Viggen", "JF-17",
+       "M-2000", "Mirage", "MiG-", "Su-2", "Su-3", "J-11", "Tornado",
+       "EF2000"]
+
+  # Touchdown speed judged RELATIVE to the mean speed of the STABILIZED
+  # FINAL (airframe independent). ratio = touchdown speed / that mean.
+  #
+  # The bands are deliberately asymmetric. Arriving a few per cent slower
+  # than approach speed is what a flare *is*; a symmetric +/-5% band scored
+  # correctly flown landings as "off speed". Touching down FASTER than
+  # approach speed, on the other hand, means float and runway remaining, so
+  # that side stays tight.
   touchdown_speed_ratio:
-    good_band: 0.05      # within +/-5% -> 100 pts
-    fair_band: 0.12      # within +/-12% -> 65 pts
-    # beyond -> 30 pts
+    slow_good: 0.88      # >= this -> 100 pts
+    slow_fair: 0.80      # >= this -> 65 pts, decaying to 30
+    fast_good: 1.03      # <= this -> 100 pts
+    fast_fair: 1.10      # <= this -> 65 pts, decaying to 30
+  # Seconds before touchdown excluded from the reference mean: that is the
+  # flare, where losing speed is the point. Including it would make the
+  # reference chase the number being judged.
+  speed_flare_exclude_s: 4.0
   # Glideslope tracking, judged as an ANGULAR error against the reference
   # slope. Metres are not usable here: the same piloting accuracy produces a
   # far bigger metre error 1.5 km out than over the threshold, so fixed
@@ -78,6 +203,11 @@ land_grading:
   # at the aiming point. Touchdown quality is the descent_rate component's
   # job. Without resolved runway geometry the AGL floor approximates the
   # threshold crossing height.
+  #
+  # glideslope_window_s is now only the FALLBACK, used when neither anchor
+  # above exists (no turn to roll out of, never above the gate -- e.g. a low
+  # slow rotary-wing approach). Otherwise the window runs from
+  # max(roll-out, gate) to the threshold and has no fixed length.
   glideslope_window_s: 30.0
   glideslope_min_agl_m: 15.0
   # Angles computed from a few metres of distance are meaningless; below
@@ -94,6 +224,54 @@ land_grading:
     good: 3.0
     fair: 8.0
     poor: 20.0
+
+  # ---------------------------------------------------------------------
+  # Overhead pattern (scored only when approach_pattern == "overhead").
+  # Judges the circuit, not the last few seconds: by the time the aircraft
+  # is on final the pattern has already decided whether it is set up or
+  # being salvaged.
+  # ---------------------------------------------------------------------
+  pattern:
+    # A downwind shorter than this is not a leg; it is not judged. (The
+    # metrics are still reported so it is visible why.) At pattern speeds
+    # 5 s is ~400 m, which is enough to read a heading off; conditioning of
+    # the fit itself is guarded separately by its own 200 m span minimum.
+    min_downwind_s: 5.0
+    # Anything shorter than this is not a break turn, just a heading change.
+    min_break_s: 6.0
+    # Height gained or lost during the break, which is supposed to be a
+    # LEVEL 180 deg turn: whatever is lost here is what puts the downwind
+    # off pattern altitude. Measured 19-294 m over this server's overhead
+    # landings (2026-08-27), so the band separates technique rather than
+    # noise. 30 m is about 100 ft.
+    break_altitude_spread_m:
+      good: 30.0
+      fair: 75.0
+      poor: 180.0
+    # Lateral offset left over when the turn to final was completed --
+    # rolled out short of the centerline (undershoot) or through it
+    # (overshoot). Both are the same misjudged perch, so one band; the
+    # sign is kept in the evidence.
+    alignment_error_m:
+      good: 100.0
+      fair: 250.0
+      poor: 600.0
+    # How far the downwind ground track was from the runway reciprocal.
+    # A downwind that is not parallel guarantees a base turn that cannot
+    # roll out on centerline, whatever is done at the perch.
+    downwind_course_error_deg:
+      good: 8.0
+      fair: 18.0
+      poor: 35.0
+    # Altitude spread (max - min) over the downwind leg. Holding pattern
+    # altitude is what makes the perch point repeatable.
+    downwind_altitude_spread_m:
+      good: 45.0    # ~150 ft
+      fair: 90.0    # ~300 ft
+      poor: 200.0
+    # Abeam distance is measured and shown in the evidence but NOT scored:
+    # the "right" spacing differs per airframe and per squadron habit, and
+    # there is no calibration data here to justify attaching points to it.
   # Final letter grades by weighted score.
   letters:
     A: 90

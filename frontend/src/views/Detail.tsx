@@ -1,19 +1,30 @@
-/** Landing detail view: GCA scopes, glideslope chart, data sheet (FR-5/FR-6).
- * A4 printable layout. Top-down track removed (overlaps with GCA azimuth scope). */
+/** Landing detail view: pattern plan view, glideslope profile, data sheet
+ * (FR-5/FR-6). A4 printable layout.
+ *
+ * The GCA azimuth/elevation scopes used to sit here too. They were dropped
+ * once the pattern view (equal scale, whole circuit, unclamped along-course
+ * axis) and the glideslope profile (height and deviation against range)
+ * between them covered the same ground: two more dark boxes plotting the
+ * same final approach was noise, not information. */
 
 import { useEffect, useState } from "react";
 import { getLanding } from "../api/client";
-import { GcaScope } from "../components/GcaScope";
+import { PatternTrack } from "../components/PatternTrack";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
 import { GlideslopeProfileChart } from "../components/GlideslopeProfileChart";
 import {
+  factorDescription,
   formatEpoch,
   formatIso,
+  formatMetric,
   gradeClass,
+  isInternalMetricKey,
   kindLabel,
   mToFt,
   msToKnots,
   msToFpm,
+  patternClass,
+  patternLabel,
 } from "../lib/format";
 import { downloadCsv, samplesToCsv } from "../lib/csv";
 import type { LandingDetail } from "../types/api";
@@ -59,6 +70,16 @@ export function Detail({ id, onBack }: DetailProps) {
   }
 
   const track = detail.approach_track ?? null;
+  // A plan view only earns its space when there is a circuit to look at.
+  // "overhead" is the classifier's answer; the lateral test catches the
+  // approaches it left as "unknown" that were in fact flown as patterns.
+  const showPattern =
+    detail.kind === "land" &&
+    !!track &&
+    (detail.approach_pattern === "overhead" ||
+      track.samples.some(
+        (s) => Math.abs(s.centerline_deviation ?? 0) > 500,
+      ));
   const td = detail.touchdown ?? null;
 
   const handleExportCsv = () => {
@@ -91,7 +112,8 @@ export function Detail({ id, onBack }: DetailProps) {
           <h1 className="sheet-title">DCS Landing Teacher — 着陸評価データシート</h1>
           <div className="sheet-meta no-print">
             <span>記録 ID: {detail.id}</span>
-            <span>日時: {formatEpoch(detail.touchdown_epoch ?? detail.touchdown_time)}</span>
+            <span>日時: {formatIso(detail.created_at)}</span>
+            <span>ミッション時刻: {formatEpoch(detail.touchdown_epoch)}</span>
             <span>評価時刻: {formatIso(detail.graded_at)}</span>
           </div>
         </header>
@@ -99,6 +121,7 @@ export function Detail({ id, onBack }: DetailProps) {
         <div className="sheet-grid">
           {/* Left column: Basic info + GCA Scopes */}
           <div className="sheet-left">
+            <div className="table-scroll">
             <table className="info-table">
               <tbody>
                 <tr>
@@ -129,19 +152,25 @@ export function Detail({ id, onBack }: DetailProps) {
                   <th>進入パターン</th>
                   <td>
                     {detail.approach_pattern && (
-                      <span className={`pattern-badge ${detail.approach_pattern}`}>
-                        {detail.approach_pattern === "overhead" && "オーバーヘッド"}
-                        {detail.approach_pattern === "straight_in" && "ストレートイン"}
-                        {detail.approach_pattern === "unknown" && "不明"}
+                      <span className={patternClass(detail.approach_pattern)}>
+                        {patternLabel(detail.approach_pattern)}
                       </span>
                     )}
                   </td>
                 </tr>
               </tbody>
             </table>
+            </div>
 
             {track && track.samples.length > 0 ? (
-              <GcaScope samples={track.samples} />
+              <>
+                {showPattern && (
+                  <>
+                    <h4 className="pattern-heading">パターン軌跡</h4>
+                    <PatternTrack track={track} metrics={detail.metrics} />
+                  </>
+                )}
+              </>
             ) : (
               <p className="empty-message">進入軌跡データが保存されていません。</p>
             )}
@@ -166,7 +195,7 @@ export function Detail({ id, onBack }: DetailProps) {
 
               {/* Glideslope Profile Chart (horizontal, A4-friendly) */}
               {track && track.samples.length > 0 && (
-                <GlideslopeProfileChart track={track} />
+                <GlideslopeProfileChart track={track} metrics={detail.metrics} />
               )}
 
               {/* Factors Table */}
@@ -175,31 +204,50 @@ export function Detail({ id, onBack }: DetailProps) {
                 {detail.factors.length === 0 ? (
                   <p className="empty-message">顕著なファクターは検出されませんでした。</p>
                 ) : (
+                  <div className="table-scroll">
                   <table className="factor-table">
                     <thead>
                       <tr>
                         <th>ファクター</th>
-                        <th>重要度</th>
+                        <th>素点 / 重要度</th>
                         <th>説明</th>
-                        <th>詳細</th>
                         <th>根拠データ</th>
                       </tr>
                     </thead>
                     <tbody>
                       {detail.factors.map((f, i) => {
                         const ev = f.evidence ?? {};
+                        // 空母の LSO ファクターは重大度と説明文を evidence に
+                        // 持つが、陸上の採点コンポーネントは素点と重みを持つ。
+                        // 片方の形だけを描くと、もう片方は列が全部 "-" になる。
+                        const scored = typeof f.score === "number";
+                        const weight =
+                          typeof f.weight === "number" ? `（重み ${f.weight.toFixed(2)}）` : "";
+                        const description =
+                          ev.description !== undefined && ev.description !== null
+                            ? String(ev.description)
+                            : factorDescription(f.name) || "-";
+                        const details =
+                          ev.details !== undefined && ev.details !== null
+                            ? String(ev.details)
+                            : null;
                         return (
                           <tr key={`${f.name}-${i}`}>
                             <td className="factor-name">{f.name}</td>
-                            <td className={`factor-severity ${f.severity}`}>{f.severity ?? "-"}</td>
-                            <td className="factor-description">{String(ev.description ?? "-")}</td>
-                            <td className="factor-details">{String(ev.details ?? "-")}</td>
+                            <td className={`factor-severity ${f.severity ?? ""}`}>
+                              {scored ? `${(f.score as number).toFixed(0)} 点${weight}` : (f.severity ?? "-")}
+                            </td>
+                            <td className="factor-description">
+                              {description}
+                              {details && <span className="factor-details">{details}</span>}
+                            </td>
                             <td className="factor-evidence">{formatFactorEvidence(ev)}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
 
@@ -208,12 +256,17 @@ export function Detail({ id, onBack }: DetailProps) {
                 <div className="metrics-section">
                   <h4>評価メトリクス</h4>
                   <dl className="metrics-list">
-                    {Object.entries(detail.metrics).map(([k, v]) => (
-                      <div key={k} className="metrics-row">
-                        <dt>{k}</dt>
-                        <dd>{typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}</dd>
-                      </div>
-                    ))}
+                    {Object.entries(detail.metrics)
+                      .filter(([k]) => !isInternalMetricKey(k))
+                      .map(([k, v]) => {
+                      const { label, text } = formatMetric(k, v);
+                      return (
+                        <div key={k} className="metrics-row">
+                          <dt>{label}</dt>
+                          <dd>{text}</dd>
+                        </div>
+                      );
+                      })}
                   </dl>
                 </div>
               )}
@@ -284,8 +337,15 @@ export function Detail({ id, onBack }: DetailProps) {
 // Helper to format factor evidence excluding description/details
 function formatFactorEvidence(evidence: Record<string, unknown> | null | undefined): string {
   if (!evidence || Object.keys(evidence).length === 0) return "";
+  // formatMetric supplies the Japanese label and the unit conversion, and --
+  // the reason this is no longer a bare template string -- a readable form
+  // for nested values: `${v}` printed "bands_fpm: [object Object]".
   return Object.entries(evidence)
     .filter(([k]) => k !== "description" && k !== "details")
-    .map(([k, v]) => `${k}: ${v}`)
+    .filter(([k]) => !isInternalMetricKey(k))
+    .map(([k, v]) => {
+      const { label, text } = formatMetric(k, v);
+      return `${label}: ${text}`;
+    })
     .join(" / ");
 }

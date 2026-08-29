@@ -50,7 +50,11 @@ export interface LandingSummary {
 /** FactorOut. */
 export interface Factor {
   name: string;
+  /** LSO factors only (carrier). */
   severity?: string | null;
+  /** Land grading components only: raw 0..100 score and its blend weight. */
+  score?: number | null;
+  weight?: number | null;
   evidence?: Record<string, unknown> | null;
 }
 
@@ -65,6 +69,10 @@ export interface DeviationSample {
   agl?: number | null;
   /** Metres still to fly to the runway threshold; negative once over it. */
   distance_to_threshold?: number | null;
+  /** Along-course position without the clamp at zero: negative once past
+   *  the reference point. Needed to plot the break / upwind leg, which
+   *  `distance_to_go` folds onto the threshold line. Absent on older tracks. */
+  signed_distance_to_go?: number | null;
 }
 
 /** ApproachTrackOut. */
@@ -124,6 +132,11 @@ export interface LandingFilters {
   date_to?: string;
   /** Filter by Tacview source ID (Issue #13 multi-source support) */
   source?: string;
+  /** "overhead" | "straight_in" | "unknown" */
+  pattern?: string;
+  /** Column to sort by; see LANDING_SORT_COLUMNS. */
+  sort?: LandingSortKey;
+  order?: "asc" | "desc";
 }
 
 /**
@@ -136,6 +149,19 @@ export interface WsLandingMessage {
   type: "landing" | "landing_update";
   landing: Partial<LandingSummary>;
 }
+
+/** Columns the history list can be sorted by (mirrors the backend map). */
+export type LandingSortKey =
+  | "time"
+  | "pilot"
+  | "airframe"
+  | "venue"
+  | "source"
+  | "kind"
+  | "pattern"
+  | "grade"
+  | "score"
+  | "outcome";
 
 /** ImportJobOut (GET /api/imports, GET /api/imports/{id}, WS "import"). */
 export interface ImportJob {
