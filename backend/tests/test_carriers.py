@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 
@@ -68,6 +69,38 @@ def test_unknown_carrier_falls_back_to_none() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)
     assert book.resolve("Unknown CV") is None
     assert book.resolve("Charles de Gaulle", "Sea+Watercraft+AircraftCarrier") is None
+
+
+def _geom(key: str) -> "FlolsGeometry":
+    return FlolsGeometry(
+        key=key,
+        deck_altitude_m=20.0,
+        ramp_along_m=100.0,
+        ramp_lateral_m=0.0,
+        glideslope_deg=3.5,
+        landing_course_offset_deg=9.0,
+    )
+
+
+def test_resolve_prefers_type_over_name() -> None:
+    """Issue #37: the standardized Type string must win over the free-form Name."""
+    book = CarrierGeometryBook(
+        {
+            "alpha": (["alpha"], ["type_alpha"], _geom("alpha")),
+            "bravo": (["bravo"], ["type_bravo"], _geom("bravo")),
+        }
+    )
+    resolved = book.resolve("alpha", "type_bravo")
+    assert resolved is not None and resolved.key == "bravo"
+    # Name-only resolution still works when Type is absent.
+    assert book.resolve("alpha", None).key == "alpha"
+
+
+def test_resolve_logs_warning_on_fallback(caplog) -> None:
+    book = load_carrier_geometry_book(CARRIERS_YAML)
+    with caplog.at_level(logging.WARNING):
+        assert book.resolve("Ghost Ship", "Sea+Watercraft+AircraftCarrier+Ghost") is None
+    assert any("not in geometry book" in rec.message for rec in caplog.records)
 
 
 def test_missing_config_file_yields_empty_book(tmp_path) -> None:

@@ -31,13 +31,15 @@ export function niceCeil(value: number): number {
 }
 
 /**
- * Max absolute deviation used for the horizontal scale, with a floor so a
- * perfectly centered approach does not collapse the scale.
+ * Max absolute deviation used for the horizontal scale. A small floor keeps a
+ * dead-centered approach from collapsing the scale to zero, but it is kept low
+ * (Issue #34): a high floor such as the old 30 m zoomed the scope out so far
+ * that a precise ±2 m approach looked identical to a ±30 m one.
  */
 export function computeMaxDeviation(
   samples: DeviationSample[],
   pick: (s: DeviationSample) => number | null | undefined,
-  floorMeters = 30,
+  floorMeters = 5,
 ): number {
   let maxAbs = 0;
   for (const s of samples) {
@@ -51,8 +53,8 @@ export function computeMaxDeviation(
   return Math.max(niceCeil(maxAbs), floorMeters);
 }
 
-/** Max distance-to-go rounded to a nice value, floored at 500 m. */
-export function computeMaxRange(samples: DeviationSample[], floorMeters = 500): number {
+/** Max distance-to-go rounded to a nice value, with a small floor (Issue #34). */
+export function computeMaxRange(samples: DeviationSample[], floorMeters = 100): number {
   let maxRange = 0;
   for (const s of samples) {
     if (Number.isFinite(s.distance_to_go)) {

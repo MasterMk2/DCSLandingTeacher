@@ -61,11 +61,15 @@ export function useLandings(
     const socket = new LandingSocket((msg) => {
       // "landing" inserts a new (possibly provisional) row; "landing_update"
       // replaces the provisional row with its confirmed outcome (Issue #5).
+      // Capturing filters via filtersRef (not the effect closure) keeps the
+      // live insert consistent with the currently displayed filter set
+      // (Issue #33), so a filtered-out landing is counted but not shown.
+      // The whole filter set is handed over rather than just `source`: the
+      // reducer needs `source` to keep uploaded recordings out of the shared
+      // history, and the remaining fields for the Issue #33 check.
       const isNew = msg.type === "landing";
       setData((prev) =>
-        prev
-          ? applyLandingMessage(prev, msg, offset, filtersRef.current.source)
-          : prev,
+        prev ? applyLandingMessage(prev, msg, offset, filtersRef.current) : prev,
       );
       if (isNew) setLiveCount((c) => c + 1);
     });

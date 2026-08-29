@@ -279,7 +279,7 @@ def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> N
 
     error = _glideslope_errors(window, 3.0)
     assert error is not None and error.method == "path-angle"
-    mean_abs, mean_signed = error.abs_error_deg, error.signed_error_deg
+    mean_signed = error.signed_error_deg
     # The path flown really is 3.0 deg, so the error is ~0 either way it is
     # rounded -- not the ~-1.5 deg the anchored measurement reports.
     assert mean_signed == pytest.approx(0.0, abs=0.05)
@@ -312,7 +312,7 @@ def test_glidepath_with_a_runway_keeps_the_absolute_aiming_point_error() -> None
     ]
     error = _glideslope_errors(window, 3.0)
     assert error is not None and error.method == "aiming-point"
-    mean_abs, mean_signed = error.abs_error_deg, error.signed_error_deg
+    mean_signed = error.signed_error_deg
     assert mean_signed < -0.8
 
 

@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     # megabytes. Larger uploads are rejected with 413.
     import_max_upload_mb: int = 200
 
+    # Emit structured (JSON) log lines instead of plain text (Issue #32).
+    # Off by default: this deployment is read with `docker logs`, and JSON
+    # would only be half the picture anyway -- uvicorn's access logger keeps
+    # its own handler, so enabling this mixes two formats in one stream.
+    # Turn it on (DLT_STRUCTURED_LOGS=1) when shipping to a log aggregator.
+    structured_logs: bool = False
+
+    # Root log level applied by configure_logging().
+    log_level: str = "INFO"
+
     #: Uploaded recordings are scratch data kept out of the shared history.
     #: They are discarded explicitly by the UI, and any left behind (an
     #: abandoned tab, a restart) are swept once they are this old. 0 disables

@@ -17,6 +17,10 @@ import type {
 // (e.g. "/landing-teacher/"): "/foo/" -> "/foo", "/" -> "".
 const BASE = new URL(".", window.location.href).pathname.replace(/\/$/, "");
 
+// API version prefix (Issue #38). Pinned to v1 so the contract is stable; a
+// future breaking change ships under /api/v2 without affecting this client.
+const API_V1 = "/api/v1";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -65,12 +69,12 @@ export function listLandings(
   offset = 0,
 ): Promise<LandingListResponse> {
   return getJson<LandingListResponse>(
-    `/api/landings${buildQuery(filters, limit, offset)}`,
+    `${API_V1}/landings${buildQuery(filters, limit, offset)}`,
   );
 }
 
 export function getLanding(id: number): Promise<LandingDetail> {
-  return getJson<LandingDetail>(`/api/landings/${id}`);
+  return getJson<LandingDetail>(`${API_V1}/landings/${id}`);
 }
 
 /** Fetch every page matching the filters (for CSV export). */
@@ -97,24 +101,24 @@ export async function listAllLandings(
 export async function importAcmiFile(file: File): Promise<ImportStartResponse> {
   const body = new FormData();
   body.append("file", file);
-  const res = await fetch(`${BASE}/api/import`, {
+  const res = await fetch(`${BASE}${API_V1}/import`, {
     method: "POST",
     headers: authHeaders(),
     body,
   });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) notifyAuthInvalid();
-    throw new ApiError(res.status, `POST /api/import failed: ${res.status}`);
+    throw new ApiError(res.status, `POST ${API_V1}/import failed: ${res.status}`);
   }
   return (await res.json()) as ImportStartResponse;
 }
 
 export function getImport(jobId: string): Promise<ImportJob> {
-  return getJson<ImportJob>(`/api/imports/${jobId}`);
+  return getJson<ImportJob>(`${API_V1}/imports/${jobId}`);
 }
 
 export function listImports(): Promise<{ items: ImportJob[] }> {
-  return getJson<{ items: ImportJob[] }>("/api/imports");
+  return getJson<{ items: ImportJob[] }>(`${API_V1}/imports`);
 }
 
 /** Discard an import and everything it created.

@@ -22,7 +22,7 @@ logger = getLogger(__name__)
 #: First revision; matches the pre-Alembic ``create_all`` schema.
 BASELINE_REVISION = "0001_baseline"
 #: Newest revision; kept in sync with migrations/versions/.
-HEAD_REVISION = "0005_flight_recording_time"
+HEAD_REVISION = "0007_import_jobs"
 
 #: Tables that identify an existing (pre- or post-migration) database.
 _SCHEMA_TABLES = {"flights", "objects", "tracks", "landings"}

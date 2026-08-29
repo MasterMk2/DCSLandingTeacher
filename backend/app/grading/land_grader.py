@@ -37,6 +37,15 @@ from app.grading.pattern import ApproachSegments, pattern_metrics, segment_appro
 MS_TO_FPM = 60.0 / 0.3048  # ~196.85
 M_TO_FT = 1.0 / 0.3048     # ~3.281
 
+# ---------------------------------------------------------------------------
+# Tunable thresholds (Issue #43). The remaining inline literals that represent
+# adjustable behavior are pulled out here so they are easy to find and tune
+# instead of being scattered magic numbers.
+# ---------------------------------------------------------------------------
+CENTERLINE_DEVIATION_FLAG_M = 5.0  # centerline deviation that raises a flag (m)
+DESCENT_RATE_EXTREME_SCORE = 5.0   # floor score for an extremely hard landing
+SPEED_UNKNOWN_SCORE = 50.0         # score when touchdown-speed ratio is unknown
+
 
 @dataclass
 class ComponentScore:
@@ -141,7 +150,13 @@ def _descent_rate_score(fpm: float, bands: dict[str, Any]) -> tuple[float, str]:
     hard = float(bands["hard"])
     score = _interpolate(
         fpm,
-        [(excellent, 100.0), (good, 80.0), (fair, 55.0), (hard, 30.0), (hard * 1.5, 5.0)],
+        [
+            (excellent, 100.0),
+            (good, 80.0),
+            (fair, 55.0),
+            (hard, 30.0),
+            (hard * 1.5, DESCENT_RATE_EXTREME_SCORE),
+        ],
     )
     if fpm <= excellent:
         label = "very smooth"
@@ -165,7 +180,7 @@ def _speed_ratio_score(ratio: float | None, bands: dict[str, Any]) -> tuple[floa
     接地はフロート・オーバーランに直結するので狭くする。
     """
     if ratio is None:
-        return 50.0, "unknown"
+        return SPEED_UNKNOWN_SCORE, "unknown"
     slow_good = float(bands.get("slow_good", 0.88))
     slow_fair = float(bands.get("slow_fair", 0.80))
     fast_good = float(bands.get("fast_good", 1.03))
@@ -779,6 +794,7 @@ def grade_land_landing(
         "centerline_overshoot_m": overshoot_m,
         "glideslope_reference": _reference_label(analysis),
         "glideslope_method": gs_method,
+        "crosswind_crab_deg": analysis.crosswind_crab_deg,
         "outcome": analysis.outcome,
         "approach_pattern": analysis.approach_pattern,
         "airframe_class": frame_class,
@@ -875,7 +891,7 @@ def _build_comment(
                 f"閾値までのグライドスロープは理想より{direction}"
                 f"（平均 {abs(mean_signed_gs_err):.2f}°）"
             )
-    if max_cl_dev is not None and max_cl_dev > 5.0:
+    if max_cl_dev is not None and max_cl_dev > CENTERLINE_DEVIATION_FLAG_M:
         parts.append(f"センターラインから最大 {max_cl_dev * M_TO_FT:.0f} ft ずれた")
     parts.extend(_pattern_comment_parts(pattern))
     verdicts = {

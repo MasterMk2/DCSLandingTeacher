@@ -120,6 +120,11 @@ class ApproachAnalysis:
     #: ので、採点にはこれが要る。再採点でも同じ判断ができるよう、
     #: :meth:`as_dict` で approach_track に一緒に保存する。
     airframe: str | None = None
+    #: Crosswind crab angle (touchdown heading - the ground track actually
+    #: flown on the stabilized final) in degrees for land landings, or
+    #: ``None`` when it cannot be derived (Issue #26). Reported for the UI
+    #: as evidence only -- nothing scores it.
+    crosswind_crab_deg: float | None = None
 
     def window(self, seconds_before_touchdown: float) -> list[DeviationSample]:
         """Samples strictly before touchdown within the given lookback.
@@ -145,76 +150,188 @@ class ApproachAnalysis:
             "geometry": self.geometry,
             "approach_pattern": self.approach_pattern,
             "airframe": self.airframe,
+            "crosswind_crab_deg": self.crosswind_crab_deg,
             "samples": [s.as_dict() for s in self.samples],
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "ApproachAnalysis":
-        """Rebuild an analysis from :meth:`as_dict` output (re-grading)."""
-        samples = [
-            DeviationSample(
-                time=float(row["time"]),
-                distance_to_go=float(row["distance_to_go"]),
-                glideslope_deviation=(
-                    float(row["glideslope_deviation"])
-                    if row.get("glideslope_deviation") is not None
+        """Rebuild an analysis from :meth:`as_dict` output (re-grading).
+
+        Validates the stored JSON up front (Issue #44) so a corrupt
+        ``approach_track`` fails with a clear error instead of an opaque
+        ``TypeError`` deep in the grader.
+
+        Every field :class:`DeviationSample` stores has to be rebuilt here.
+        ``distance_to_threshold`` in particular is what tells the grader it
+        may score the glidepath against the runway aiming point; dropping it
+        silently demotes every re-grade to the touchdown-referenced
+        approximation, and the only symptom is slightly different scores.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("approach_track must be an object")
+        raw_samples = data.get("samples")
+        if not isinstance(raw_samples, list):
+            raise ValueError("approach_track.samples must be a list")
+        samples: list[DeviationSample] = []
+        for index, row in enumerate(raw_samples):
+            if not isinstance(row, dict):
+                raise ValueError(f"approach_track.samples[{index}] must be an object")
+            try:
+                samples.append(
+                    DeviationSample(
+                        time=float(row["time"]),
+                        distance_to_go=float(row["distance_to_go"]),
+                        glideslope_deviation=(
+                            float(row["glideslope_deviation"])
+                            if row.get("glideslope_deviation") is not None
+                            else None
+                        ),
+                        centerline_deviation=(
+                            float(row["centerline_deviation"])
+                            if row.get("centerline_deviation") is not None
+                            else None
+                        ),
+                        speed=row.get("speed"),
+                        aoa=row.get("aoa"),
+                        agl=row.get("agl"),
+                        distance_to_threshold=(
+                            float(row["distance_to_threshold"])
+                            if row.get("distance_to_threshold") is not None
+                            else None
+                        ),
+                        signed_distance_to_go=(
+                            float(row["signed_distance_to_go"])
+                            if row.get("signed_distance_to_go") is not None
+                            else None
+                        ),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"approach_track.samples[{index}] invalid: {exc}"
+                ) from exc
+        try:
+            return cls(
+                kind=data["kind"],
+                outcome=data["outcome"],
+                glideslope_deg=float(data["glideslope_deg"]),
+                course_deg=float(data.get("course_deg", 0.0)),
+                touchdown_time=float(data["touchdown_time"]),
+                touchdown_speed_ms=(
+                    float(data["touchdown_speed_ms"])
+                    if data.get("touchdown_speed_ms") is not None
                     else None
                 ),
-                centerline_deviation=(
-                    float(row["centerline_deviation"])
-                    if row.get("centerline_deviation") is not None
-                    else None
-                ),
-                speed=row.get("speed"),
-                aoa=row.get("aoa"),
-                agl=row.get("agl"),
-                distance_to_threshold=(
-                    float(row["distance_to_threshold"])
-                    if row.get("distance_to_threshold") is not None
-                    else None
-                ),
-                signed_distance_to_go=(
-                    float(row["signed_distance_to_go"])
-                    if row.get("signed_distance_to_go") is not None
-                    else None
-                ),
+                touchdown_descent_rate_ms=float(data.get("touchdown_descent_rate_ms", 0.0)),
+                geometry=data.get("geometry"),
+                approach_pattern=data.get("approach_pattern") or "unknown",
+                airframe=data.get("airframe"),
+                crosswind_crab_deg=data.get("crosswind_crab_deg"),
+                samples=samples,
             )
-            for row in data.get("samples", [])
-        ]
-        return cls(
-            kind=data["kind"],
-            outcome=data["outcome"],
-            glideslope_deg=float(data["glideslope_deg"]),
-            course_deg=float(data.get("course_deg", 0.0)),
-            touchdown_time=float(data["touchdown_time"]),
-            touchdown_speed_ms=(
-                float(data["touchdown_speed_ms"])
-                if data.get("touchdown_speed_ms") is not None
-                else None
-            ),
-            touchdown_descent_rate_ms=float(data.get("touchdown_descent_rate_ms", 0.0)),
-            geometry=data.get("geometry"),
-            approach_pattern=data.get("approach_pattern") or "unknown",
-            airframe=data.get("airframe"),
-            samples=samples,
-        )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"approach_track missing/invalid field: {exc}") from exc
 
 
-def estimate_course_deg(samples: list[TrackSample], touchdown_heading: float | None) -> float:
-    """Approach course, preferring the aircraft's own heading at touchdown.
+#: Final stabilized segment (seconds before touchdown) used to estimate the
+#: runway/landing course for land landings. A long two-point bearing across
+#: the whole captured approach picks up the turn onto final; the last ~12 s
+#: are assumed stabilized on a straight final whose ground track equals the
+#: runway heading.
+STABILIZED_FINAL_S = 12.0
 
-    Real DCS landings are frequently flown as a continuous turn onto short
-    final (an overhead break, a tactical initial) rather than a long
-    stabilized straight-in. A two-point position bearing taken across the
-    whole ~60s/2nm captured approach picks up that turn and can report a
-    course tens of degrees off the actual runway heading, which then shows
-    up as a large false centerline deviation for samples that were in fact
-    close to the centerline. The aircraft's own heading at the moment of
-    touchdown is the most direct read of the runway course a successful
-    landing implies, so it takes priority whenever ACMI supplied it; the
-    position-based bearing is only a fallback for the rare case heading
-    telemetry itself is missing.
+#: Largest heading-minus-track difference still explainable as a crosswind
+#: crab. A 30 deg crab on a 140 kt final already needs ~70 kt of direct
+#: crosswind; beyond this the stabilized-final window is far more likely to
+#: still be inside the turn onto final than to be a real crab, so the course
+#: estimate falls back to the touchdown heading.
+MAX_PLAUSIBLE_CRAB_DEG = 40.0
+
+
+def _position_bearing(
+    lat0: float, lon0: float, lat1: float, lon1: float
+) -> float | None:
+    if (lat0, lon0) == (lat1, lon1):
+        return None
+    dx = math.radians(lon1 - lon0) * math.cos(math.radians((lat0 + lat1) / 2))
+    dy = math.radians(lat1 - lat0)
+    return math.degrees(math.atan2(dx, dy)) % 360.0
+
+
+def _stabilized_track_course(
+    samples: list[TrackSample], window_s: float = STABILIZED_FINAL_S
+) -> float | None:
+    """Ground-track bearing over the final ``window_s`` of the approach.
+
+    The stabilized final is a straight line whose track equals the runway
+    course; using it avoids both the turn-onto-final curvature and the
+    crosswind crab angle that would contaminate a heading-based estimate.
     """
+    pts = [
+        (s.latitude, s.longitude, s.time)
+        for s in samples
+        if s.latitude is not None and s.longitude is not None
+    ]
+    if len(pts) < 2:
+        return None
+    t_last = pts[-1][2]
+    t_cut = t_last - window_s
+    seg = [p for p in pts if p[2] >= t_cut]
+    if len(seg) < 2:
+        # Not enough data inside the window; fall back to the whole segment.
+        seg = pts
+    lat0, lon0, _ = seg[0]
+    lat1, lon1, _ = seg[-1]
+    return _position_bearing(lat0, lon0, lat1, lon1)
+
+
+def _angular_diff(a: float, b: float) -> float:
+    """Signed smallest difference a - b in degrees, in (-180, 180]."""
+    return (a - b + 180.0) % 360.0 - 180.0
+
+
+def estimate_course_deg(
+    samples: list[TrackSample],
+    touchdown_heading: float | None,
+    kind: str = "carrier",
+) -> float:
+    """Estimate the landing course when nothing published one.
+
+    Only reached when neither per-carrier FLOLS geometry nor a resolved runway
+    supplied a course; with a resolved runway the runway heading is used
+    directly and nothing has to be estimated. Whatever this returns becomes
+    the axis of the runway frame, so an error here appears as lateral
+    deviation that grows with distance from the touchdown point.
+
+    Land: the ground track over the stabilized final
+    (:data:`STABILIZED_FINAL_S`), not the heading. On a final flown down the
+    centerline the track *is* the runway course, while the heading is offset
+    by the crosswind crab angle -- and using a crabbed heading as the axis
+    reports an aircraft that was tracking the centerline exactly as ~500 m off
+    it a kilometre out (Issue #26). The whole-approach two-point bearing this
+    replaces was abandoned because it picked up the turn onto final, but that
+    was measured over the entire captured approach, which has since grown from
+    60 s / 2 nm to 300 s / 8 nm; a 12 s window sits after rollout for any
+    normal pattern.
+
+    Carrier: the touchdown heading, because the aircraft de-crabs and aligns
+    with the angled deck at the ramp, so heading reads the deck course even
+    through a turn onto final.
+    """
+    if kind == "land":
+        track = _stabilized_track_course(samples)
+        if track is not None:
+            if (
+                touchdown_heading is None
+                or abs(_angular_diff(touchdown_heading, track))
+                <= MAX_PLAUSIBLE_CRAB_DEG
+            ):
+                return track
+            # Too far from the heading to be a crab: the window is probably
+            # still inside the turn onto final (a tight pattern, a helicopter
+            # circling to land). Fall through to the heading, which cannot be
+            # contaminated by the turn.
     if touchdown_heading is not None:
         return touchdown_heading
     points = [
@@ -293,13 +410,28 @@ def build_approach_analysis(
         # sample's distance-to-threshold is its distance-to-go minus that.
         threshold_along = aiming_point_m
     else:
-        course = estimate_course_deg(event.approach, touchdown.heading)
+        course = estimate_course_deg(
+            event.approach, touchdown.heading, kind=event.kind
+        )
         ref_lat, ref_lon = touchdown.latitude, touchdown.longitude
         deck_elevation = (
             ground_altitude_m if ground_altitude_m is not None else touchdown.ground_altitude_m
         )
         slope_deg = glideslope_deg
         geometry_payload = None
+
+    crosswind_crab_deg: float | None = None
+    if event.kind == "land" and touchdown.heading is not None:
+        # Measured against the ground track actually flown on the stabilized
+        # final rather than against ``course``: ``course`` is normally the
+        # published runway heading (or, with no runway, the touchdown heading
+        # itself, which would make this a hard 0.0), and heading-minus-track
+        # is the crab angle regardless of where the course came from. UI
+        # evidence only -- nothing scores it (Issue #26).
+        track = _stabilized_track_course(event.approach)
+        crosswind_crab_deg = _angular_diff(
+            touchdown.heading, track if track is not None else course
+        )
 
     analysis = ApproachAnalysis(
         kind=event.kind,
@@ -312,6 +444,7 @@ def build_approach_analysis(
         geometry=geometry_payload,
         approach_pattern=event.approach_pattern,
         airframe=airframe,
+        crosswind_crab_deg=crosswind_crab_deg,
     )
 
     tan_slope = math.tan(math.radians(slope_deg))

@@ -146,3 +146,34 @@ class Landing(Base):
     graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ImportJobRow(Base):
+    """Persisted ACMI import job (Issue #28).
+
+    Import jobs were previously tracked only in memory, so job metadata (status,
+    progress, errors) was lost on every server restart and
+    ``GET /api/imports/{id}`` returned 404 for completed jobs. This row makes
+    the job history durable across restarts; the in-memory ``ImportJob`` is
+    reconstructed from these rows on startup.
+    """
+
+    __tablename__ = "import_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    progress_percent: Mapped[int | None] = mapped_column(nullable=True)
+    frames_processed: Mapped[int] = mapped_column(default=0)
+    total_frames: Mapped[int] = mapped_column(default=0)
+    landings_detected: Mapped[int] = mapped_column(default=0)
+    duplicates_skipped: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+

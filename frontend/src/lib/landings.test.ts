@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyLandingMessage, isProvisional } from "./landings";
+import { applyLandingMessage, isProvisional, matchesFilters } from "./landings";
 import type { LandingListResponse, LandingSummary } from "../types/api";
 
 function summary(overrides: Partial<LandingSummary> = {}): LandingSummary {
@@ -92,6 +92,49 @@ describe("applyLandingMessage", () => {
     const res = response([summary()]);
     const next = applyLandingMessage(res, { type: "landing", landing: {} }, 0);
     expect(next).toBe(res);
+  });
+
+  it("only shows a new landing that matches the active filters (Issue #33)", () => {
+    const res = response([summary({ id: 2, venue_name: "CV-59" })]);
+    const next = applyLandingMessage(
+      res,
+      { type: "landing", landing: summary({ id: 3, venue_name: "Stennis" }) },
+      0,
+      { venue: "CV-59" },
+    );
+    // Filtered out: not inserted, but the unseen total still bumps.
+    expect(next.items.map((it) => it.id)).toEqual([2]);
+    expect(next.total).toBe(2);
+  });
+
+  it("inserts a new landing when it matches the active filters", () => {
+    const res = response([summary({ id: 2, venue_name: "CV-59" })]);
+    const next = applyLandingMessage(
+      res,
+      { type: "landing", landing: summary({ id: 3, venue_name: "CV-59" }) },
+      0,
+      { venue: "CV-59" },
+    );
+    expect(next.items.map((it) => it.id)).toEqual([3, 2]);
+    expect(next.total).toBe(2);
+  });
+});
+
+describe("matchesFilters", () => {
+  it("matches on a case-insensitive substring", () => {
+    const row = summary({ venue_name: "CV-59", kind: "carrier" });
+    expect(matchesFilters(row, { venue: "cv" })).toBe(true);
+    expect(matchesFilters(row, { venue: "Stennis" })).toBe(false);
+    expect(matchesFilters(row, { kind: "CARRIER" })).toBe(true);
+  });
+
+  it("treats an unfiltered dimension as a match", () => {
+    expect(matchesFilters(summary(), {})).toBe(true);
+    expect(matchesFilters(summary(), { player: "" })).toBe(true);
+  });
+
+  it("rejects a row missing the filtered field", () => {
+    expect(matchesFilters(summary({ venue_name: null }), { venue: "CV" })).toBe(false);
   });
 });
 

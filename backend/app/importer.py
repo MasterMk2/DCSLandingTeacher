@@ -21,6 +21,7 @@ are stable within it). Matches are skipped and reported in the job summary.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -33,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.file_reader import iter_acmi_lines
 from app.ingest import LandingContext, TrackIngestor
-from app.models.entities import DcsObject, Flight, Landing, Track
+from app.models.entities import DcsObject, Flight, ImportJobRow, Landing, Track
 from app.pipeline import LandingPipeline
 
 logger = getLogger(__name__)
@@ -44,6 +45,10 @@ TOUCHDOWN_EPSILON_S = 0.001
 #: Yield to the event loop every N parsed lines so a huge import does not
 #: starve the HTTP server / WebSocket broadcasts running on the same loop.
 YIELD_EVERY_LINES = 500
+
+#: Minimum wall-clock gap between two writes of an import job's progress
+#: row. Bounds how often the import competes for SQLite's write lock.
+JOB_PERSIST_INTERVAL_S = 2.0
 
 #: Imported recordings are scoped to their own source rather than joining the
 #: live servers' records: an upload is very often from an unrelated server (or
@@ -64,6 +69,20 @@ def is_import_source(source_id: str | None) -> bool:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    """Coerce a datastore value to a timezone-aware UTC ``datetime``.
+
+    SQLite drops timezone metadata when persisting ``DateTime(timezone=True)``
+    columns, so a ``row.created_at`` loaded back is naive; comparing it with
+    the aware ``_utcnow()`` cutoff would otherwise raise ``TypeError``.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 @dataclass
@@ -132,7 +151,10 @@ class _DuplicateGuard:
 
     async def handle_landing(self, context: LandingContext) -> int | None:
         if await self._is_duplicate(context):
-            key = (context.acmi_object_id, round(context.event.touchdown.time, 3))
+            # Full-precision timestamp: rounding to 1 ms could otherwise treat
+            # the same touchdown as two distinct skips (Issue #30). The actual
+            # duplicate decision is made in the database by an epsilon compare.
+            key = (context.acmi_object_id, context.event.touchdown.time)
             if key not in self._skipped_keys:
                 self._skipped_keys.add(key)
                 self._job.duplicates_skipped += 1
@@ -236,6 +258,66 @@ class ImportJobManager:
     def list_jobs(self) -> list[ImportJob]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
 
+    # -- persistence (Issue #28) ----------------------------------------
+
+    async def _persist_job(self, job: ImportJob) -> None:
+        """Upsert the job's current state to the ``import_jobs`` table."""
+        row = ImportJobRow(
+            id=job.id,
+            filename=job.filename,
+            status=job.status,
+            progress_percent=job.progress_percent,
+            frames_processed=job.frames_processed,
+            total_frames=job.total_frames,
+            landings_detected=job.landings_detected,
+            duplicates_skipped=job.duplicates_skipped,
+            error=job.error,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+        )
+        async with self._session_factory() as session:
+            await session.merge(row)
+            await session.commit()
+
+    async def load_persisted(self) -> None:
+        """Rebuild in-memory job state from the database after a restart.
+
+        Jobs that were still ``pending``/``processing`` when the server stopped
+        can never resume (their background task is gone), so they are marked
+        ``failed`` with an "interrupted by server restart" error and persisted
+        again, giving an honest status instead of a silent 404.
+        """
+        from sqlalchemy import select
+
+        async with self._session_factory() as session:
+            rows = (await session.execute(select(ImportJobRow))).scalars().all()
+
+        for row in rows:
+            job = self._row_to_job(row)
+            if job.status in ("pending", "processing"):
+                job.status = "failed"
+                job.error = "interrupted by server restart"
+                job.finished_at = job.finished_at or _utcnow()
+                await self._persist_job(job)
+            self._jobs[job.id] = job
+
+    @staticmethod
+    def _row_to_job(row: ImportJobRow) -> ImportJob:
+        return ImportJob(
+            id=row.id,
+            filename=row.filename,
+            status=row.status,
+            created_at=_as_aware(row.created_at),
+            started_at=_as_aware(row.started_at),
+            finished_at=_as_aware(row.finished_at),
+            frames_processed=row.frames_processed,
+            total_frames=row.total_frames,
+            landings_detected=row.landings_detected,
+            duplicates_skipped=row.duplicates_skipped,
+            error=row.error,
+        )
+
     # -- processing -----------------------------------------------------
 
     async def run(self, job: ImportJob, file_path: str | Path) -> None:
@@ -247,6 +329,7 @@ class ImportJobManager:
         async with self._run_lock:
             job.status = "processing"
             job.started_at = _utcnow()
+            await self._persist_job(job)
             try:
                 await self._process(job, Path(file_path))
                 job.status = "completed"
@@ -263,6 +346,7 @@ class ImportJobManager:
                 logger.exception("import %s failed", job.id)
             finally:
                 job.finished_at = _utcnow()
+                await self._persist_job(job)
                 _remove_quietly(file_path)
                 await self._notify(job)
 
@@ -299,6 +383,7 @@ class ImportJobManager:
 
         try:
             lines_since_yield = 0
+            last_persist = time.monotonic()
             for line in iter_acmi_lines(path):
                 if line.startswith("#"):
                     job.frames_processed += 1
@@ -307,6 +392,19 @@ class ImportJobManager:
                 if lines_since_yield >= YIELD_EVERY_LINES:
                     lines_since_yield = 0
                     await asyncio.sleep(0)
+                    # Persist progress so a restart mid-import still shows how
+                    # far the job got (Issue #28) -- but on a time budget, not
+                    # per YIELD_EVERY_LINES. A 4.8 M-line recording yields
+                    # ~9,600 times, and each persist is a separate SELECT +
+                    # UPDATE + COMMIT that takes SQLite's single write lock
+                    # away from the ingest batches running in the same loop.
+                    # Progress is a UI nicety; contending for the write lock
+                    # thousands of times to keep it fresher than a couple of
+                    # seconds works directly against Issue #21.
+                    now = time.monotonic()
+                    if now - last_persist >= JOB_PERSIST_INTERVAL_S:
+                        last_persist = now
+                        await self._persist_job(job)
         finally:
             await ingestor.close()
 
@@ -338,6 +436,15 @@ class ImportJobManager:
                     delete(Flight).where(Flight.source_id == source_id)
                 )
             ).rowcount or 0
+            # The durable job row goes too (Issue #28 added it). Without this,
+            # popping the in-memory entry below is only half a discard: the row
+            # survives, load_persisted() resurrects the job on the next
+            # restart, and the UI lists a completed import whose data is gone
+            # -- which purge_expired then "discards" again, every restart,
+            # forever.
+            await session.execute(
+                delete(ImportJobRow).where(ImportJobRow.id == job_id)
+            )
             await session.commit()
         existed = self._jobs.pop(job_id, None) is not None
         if flights or existed:

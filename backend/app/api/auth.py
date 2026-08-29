@@ -55,10 +55,41 @@ async def require_auth(request: Request) -> None:
         raise HTTPException(status_code=403, detail="invalid token")
 
 
-def ws_token_ok(websocket: WebSocket) -> bool:
-    """Check the ``?token=`` query parameter for the WebSocket endpoint."""
+def ws_extract_token(websocket: WebSocket) -> str | None:
+    """Return the ``?token=`` query parameter for the WebSocket endpoint."""
+    return websocket.query_params.get("token")
+
+
+def ws_connect_authorized(websocket: WebSocket, provided: str | None) -> bool:
+    """Authorization decision made at connection time.
+
+    Mirrors :func:`require_auth` for REST: when ``auth_token`` is empty the
+    endpoint is open (default deployment); otherwise the supplied token must
+    match in constant time.
+    """
     expected = websocket.app.state.settings.auth_token
     if not expected:
         return True
-    provided = websocket.query_params.get("token")
     return provided is not None and _tokens_match(provided, expected)
+
+
+def ws_still_authorized(websocket: WebSocket, accepted: str | None) -> bool:
+    """Re-check authorization against the *current* token policy.
+
+    A one-time check at connect is not enough (Issue #25): if the server token
+    is rotated, or authentication is enabled after a connection was already
+    established while auth was off, the stale connection must be rejected. We
+    capture the token that was accepted at connect time (``accepted``) and
+    compare it against the live ``settings.auth_token`` on every interaction.
+    """
+    expected = websocket.app.state.settings.auth_token
+    if not expected:
+        # Auth is disabled: there is nothing left to verify, so the connection
+        # stays. Rejecting a client that happens to carry a token (an earlier
+        # deployment enabled auth and the browser still has the value in
+        # localStorage, so ws.ts keeps appending ?token=) would drop it every
+        # WS_AUTH_RECHECK_SECONDS and put it in a permanent reconnect loop,
+        # while buying nothing: the same client can reconnect without the
+        # token and be accepted immediately.
+        return True
+    return accepted is not None and _tokens_match(accepted, expected)

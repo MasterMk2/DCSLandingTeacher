@@ -144,6 +144,51 @@ async def test_ground_speed_ignores_duplicate_position_from_partial_updates(
     assert last.speed == pytest.approx(expected, rel=1e-6)
 
 
+async def test_ground_speed_rejects_implausible_spike(session_factory) -> None:
+    """Issue #27: a single large position jump over a ~1 s baseline would
+    otherwise read as a supersonic spike (observed live: 1364 m/s). The
+    implausible estimate must be discarded, not emitted."""
+    ingestor = TrackIngestor(session_factory)
+    lines = [
+        "FileType=text/acmi/tacview",
+        "FileVersion=2.2",
+        "0,ReferenceTime=2011-06-02T05:00:00Z",
+        "#0.00",
+        "301,T=0|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
+        "#1.00",
+        "301,T=0.02|0|1000",  # ~2226 m jump in 1 s -> far above plausible
+    ]
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
+    # ~2226 m/s exceeds GROUND_SPEED_MAX_PLAUSIBLE_MS -> dropped, not a spike.
+    assert samples[-1].speed is None
+
+
+async def test_ground_speed_rejects_stale_baseline(session_factory) -> None:
+    """Issue #27: a baseline older than GROUND_SPEED_MAX_BASELINE_S is too
+    stale to trust; the estimate must be dropped rather than derived from
+    minutes-old positioning."""
+    ingestor = TrackIngestor(session_factory)
+    lines = [
+        "FileType=text/acmi/tacview",
+        "FileVersion=2.2",
+        "0,ReferenceTime=2011-06-02T05:00:00Z",
+        "#0.00",
+        "301,T=0|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
+        "#20.00",
+        "301,T=0.001|0|1000",  # only candidate baseline is 20 s old
+    ]
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
+    assert samples[-1].speed is None
+
+
 async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
     ingestor = TrackIngestor(session_factory)
     await ingestor.handle_line("#not-a-number")  # must not raise
@@ -194,8 +239,9 @@ async def test_ingest_batches_commits(tmp_path) -> None:
             ).scalars().all()
         assert len(tracks) == 3
         # Batching: fewer commits than writes.
+        # With session-per-batch: 2 commits (batch of 2 + final batch of 1 on close).
         assert commits_before_close == 2
-        assert commit_count["n"] == 3  # final flush on close
+        assert commit_count["n"] == 2
     finally:
         event.remove(Session, "after_commit", _count_commit)
         await engine.dispose()
