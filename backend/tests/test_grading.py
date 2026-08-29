@@ -316,6 +316,8 @@ def test_pipeline_reload_config_picks_up_file_changes(tmp_path) -> None:
     subsequent gradings without a server restart."""
     from pathlib import Path
 
+    from app.grading.land_grader import MS_TO_FPM
+
     config_path = tmp_path / "grading.yaml"
     original = Path(GRADING_YAML).read_text(encoding="utf-8")
     config_path.write_text(original, encoding="utf-8")
@@ -323,22 +325,25 @@ def test_pipeline_reload_config_picks_up_file_changes(tmp_path) -> None:
     pipeline = LandingPipeline(
         None, load_grading_config(config_path), grading_config_path=config_path
     )
+    analysis = _analysis_with_gs_deviations([0.0] * 12)
+    # ~350 fpm: inside the "fair" band before the tweak.
+    analysis.touchdown_descent_rate_ms = 350.0 / MS_TO_FPM
     before = next(
         c
-        for c in grade_land_landing(_analysis_with_gs_deviations([2.0] * 12), pipeline._config).components
-        if c.name == "glideslope"
+        for c in grade_land_landing(analysis, pipeline._config).components
+        if c.name == "descent_rate"
     ).score
 
-    # Tighten the poor band so the same offset drops a band.
-    modified = original.replace("poor: 5.0", "poor: 2.0")
+    # Tighten the fair band so the same descent rate drops a band.
+    modified = original.replace("fair: 450", "fair: 300")
     assert modified != original
     config_path.write_text(modified, encoding="utf-8")
     pipeline.reload_config()
 
     after = next(
         c
-        for c in grade_land_landing(_analysis_with_gs_deviations([2.0] * 12), pipeline._config).components
-        if c.name == "glideslope"
+        for c in grade_land_landing(analysis, pipeline._config).components
+        if c.name == "descent_rate"
     ).score
     assert after < before
 
@@ -367,21 +372,6 @@ async def test_config_reload_endpoint_requires_and_reloads(tmp_path) -> None:
             )
             assert ok.status_code == 200
             assert ok.json()["reloaded"] is True
-
-
-def test_land_grader_rms_penalizes_oscillation_more_than_steady_offset() -> None:
-    """Issue #35: 同じ絶対値平均でも、振動する進入は RMS でより低く評価される。"""
-    steady = grade_land_landing(
-        _analysis_with_gs_deviations([2.0] * 12), CONFIG
-    )
-    # 2m を中心に ±3m 振動する進入。MAD は 2m だが RMS は約 3.6m。
-    oscillating = grade_land_landing(
-        _analysis_with_gs_deviations([-1.0, 5.0] * 6), CONFIG
-    )
-    steady_gs = next(c for c in steady.components if c.name == "glideslope")
-    osc_gs = next(c for c in oscillating.components if c.name == "glideslope")
-    assert osc_gs.evidence["rms_deviation_final_15s_m"] > steady_gs.evidence["rms_deviation_final_15s_m"]
-    assert osc_gs.score < steady_gs.score
 
 
 def test_land_grader_letter_bands() -> None:

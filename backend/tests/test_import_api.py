@@ -395,6 +395,14 @@ async def test_importing_same_acmi_twice_deduplicates(tmp_path) -> None:
             assert job2["duplicates_skipped"] >= 1
             assert job2["landings_detected"] == 0
 
-            # Exactly one landing exists in total.
-            landings = await http.get("/api/landings")
-            assert landings.json()["total"] == 1
+            # Imports are intentionally kept out of the shared history
+            # (GET /api/landings excludes import-sourced rows), so verify the
+            # dedupe at the database level: re-importing added no second row.
+            import sqlite3
+
+            db = sqlite3.connect(str(tmp_path / "import.db"))
+            try:
+                count = db.execute("SELECT COUNT(*) FROM landings").fetchone()[0]
+            finally:
+                db.close()
+            assert count == 1

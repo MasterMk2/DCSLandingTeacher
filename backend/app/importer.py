@@ -66,6 +66,20 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_aware(value: datetime | None) -> datetime | None:
+    """Coerce a datastore value to a timezone-aware UTC ``datetime``.
+
+    SQLite drops timezone metadata when persisting ``DateTime(timezone=True)``
+    columns, so a ``row.created_at`` loaded back is naive; comparing it with
+    the aware ``_utcnow()`` cutoff would otherwise raise ``TypeError``.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 @dataclass
 class ImportJob:
     """State of one ACMI file import (in-memory, not persisted)."""
@@ -259,9 +273,9 @@ class ImportJobManager:
             id=row.id,
             filename=row.filename,
             status=row.status,
-            created_at=row.created_at,
-            started_at=row.started_at,
-            finished_at=row.finished_at,
+            created_at=_as_aware(row.created_at),
+            started_at=_as_aware(row.started_at),
+            finished_at=_as_aware(row.finished_at),
             frames_processed=row.frames_processed,
             total_frames=row.total_frames,
             landings_detected=row.landings_detected,

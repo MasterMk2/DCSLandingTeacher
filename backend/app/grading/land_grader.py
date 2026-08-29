@@ -389,6 +389,7 @@ def grade_land_landing(
         "centerline_overshoot_m": overshoot_m,
         "glideslope_reference": _reference_label(analysis),
         "glideslope_method": gs_method,
+        "crosswind_crab_deg": analysis.crosswind_crab_deg,
         "outcome": analysis.outcome,
     }
     return LandGradeResult(
