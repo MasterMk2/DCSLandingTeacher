@@ -8,6 +8,7 @@ the few-kilometer scale of a final approach segment.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 EARTH_RADIUS_M = 6371000.0
 
@@ -103,13 +104,16 @@ def offset_position(
 
 
 def interpolate_position(
-    track: list[tuple[float, float, float]],
+    track: Sequence[tuple[float, ...]],
     time: float,
 ) -> tuple[float, float] | None:
     """Linearly interpolate (lat, lon) from a time-sorted position track.
 
-    ``track`` items are ``(time, lat, lon)``. Returns ``None`` outside the
-    covered range or for an empty track.
+    ``track`` items *start with* ``(time, lat, lon)``; any further fields are
+    ignored. Callers therefore pass their own richer sample tuples directly
+    instead of projecting the whole series into 3-tuples on every call, which
+    is an O(n) copy on what is otherwise an O(log n) lookup. Returns ``None``
+    outside the covered range or for an empty track.
     """
     if not track:
         return None
@@ -124,8 +128,8 @@ def interpolate_position(
             lo = mid
         else:
             hi = mid
-    t0, lat0, lon0 = track[lo]
-    t1, lat1, lon1 = track[hi]
+    t0, lat0, lon0 = track[lo][0], track[lo][1], track[lo][2]
+    t1, lat1, lon1 = track[hi][0], track[hi][1], track[hi][2]
     if t1 == t0:
         return lat0, lon0
     frac = (time - t0) / (t1 - t0)

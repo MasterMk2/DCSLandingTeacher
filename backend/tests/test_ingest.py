@@ -414,3 +414,30 @@ async def test_a_failed_write_does_not_wedge_the_ingestor(tmp_path) -> None:
     assert len(flights) >= 1
     assert len(tracks) > 0
     await engine.dispose()
+
+
+async def test_live_ingestor_windows_carrier_history(session_factory) -> None:
+    """The retention window must actually be wired through from the ingestor.
+
+    Aircraft were already windowed by RollingTrackBuffer; carriers kept every
+    sample for the life of the process until this was passed down.
+    """
+    ingestor = TrackIngestor(session_factory, sample_buffer_s=30.0)
+    for line in (
+        "FileType=text/acmi/tacview",
+        "0,ReferenceTime=2011-06-02T05:00:00Z",
+    ):
+        await ingestor.handle_line(line)
+
+    for i in range(600):  # 300s at 2Hz, ten times the window
+        t = i / 2.0
+        await ingestor.handle_line(f"#{t:.2f}")
+        await ingestor.handle_line(
+            f"102,T=41.62|{41.58 + i * 1e-5:.5f}|0|0|0|85,"
+            "Type=Sea+Watercraft+AircraftCarrier,Name=Kuznetsov"
+        )
+    await ingestor.close()
+
+    samples = ingestor.carrier_states["102"].samples
+    assert samples, "the window must never empty the series"
+    assert samples[-1][0] - samples[0][0] <= 30.0

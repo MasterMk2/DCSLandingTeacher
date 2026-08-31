@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from app.detection.classify import ObjectClass, classify_object_type
-from app.detection.detector import DetectionConfig, analyze_track
+from app.detection.detector import CarrierState, DetectionConfig, analyze_track
 from tests.helpers import (
     DECK_ALTITUDE_M,
     LAT0,
@@ -387,3 +387,54 @@ def test_land_capture_stops_at_the_previous_touchdown() -> None:
     assert earliest > first_contact, (
         "the second circuit's capture reached back past the first touchdown"
     )
+
+
+def test_carrier_history_is_bounded_by_its_retention_window() -> None:
+    """Regression: unbounded carrier history wedged the live ingest loop.
+
+    Carriers stream at ~3Hz for the whole session, and position_at() is called
+    once per carrier per landing check *and* once per approach sample. With no
+    window each carrier held ~500k samples after two days, so one detection
+    pass walked millions of them and the event loop stopped returning.
+    """
+    carrier = CarrierState(obj_id="C1", name="CVN-73", max_age_s=600.0)
+    for i in range(10_000):  # ~55 minutes at 3Hz
+        t = i / 3.0
+        carrier.append((t, 36.0 + t * 1e-6, 140.0, 20.0, 90.0, 10.0))
+
+    assert carrier.samples, "the window must never empty the series"
+    span = carrier.samples[-1][0] - carrier.samples[0][0]
+    assert span <= 600.0, f"kept {span:.0f}s of history"
+    assert len(carrier.samples) < 2_000
+
+    # ...and lookups still work against what is left
+    latest = carrier.samples[-1][0]
+    assert carrier.position_at(latest) is not None
+    assert carrier.heading_at(latest) == 90.0
+
+
+def test_carrier_lookups_interpolate_and_clamp() -> None:
+    """position_at/heading_at read the sample tuples in place, not a copy."""
+    carrier = CarrierState(obj_id="C1")
+    carrier.append((0.0, 36.0, 140.0, 20.0, 10.0, 0.0))
+    carrier.append((10.0, 36.1, 140.2, 20.0, 20.0, 0.0))
+
+    lat, lon = carrier.position_at(5.0)
+    assert math.isclose(lat, 36.05, abs_tol=1e-9)
+    assert math.isclose(lon, 140.1, abs_tol=1e-9)
+    assert carrier.position_at(-5.0) == (36.0, 140.0)  # clamped to the first
+    assert carrier.position_at(50.0) == (36.1, 140.2)  # clamped to the last
+
+    # Step function: the most recent heading at or before the time.
+    assert carrier.heading_at(-1.0) == 10.0
+    assert carrier.heading_at(0.0) == 10.0
+    assert carrier.heading_at(9.9) == 10.0
+    assert carrier.heading_at(10.0) == 20.0
+    assert carrier.heading_at(99.0) == 20.0
+
+
+def test_carrier_append_ignores_a_repeated_timestamp() -> None:
+    carrier = CarrierState(obj_id="C1")
+    carrier.append((1.0, 36.0, 140.0, 20.0, 0.0, 0.0))
+    carrier.append((1.0, 37.0, 141.0, 20.0, 0.0, 0.0))
+    assert carrier.samples == [(1.0, 36.0, 140.0, 20.0, 0.0, 0.0)]

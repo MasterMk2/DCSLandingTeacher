@@ -34,6 +34,7 @@ post-touchdown tail for context.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -83,6 +84,10 @@ class TrackSample:
     on_ground: bool | None = None
 
 
+def _sample_time(sample: tuple[float, ...]) -> float:
+    return sample[0]
+
+
 @dataclass
 class CarrierState:
     """Position/attitude time series of one carrier."""
@@ -96,23 +101,44 @@ class CarrierState:
     samples: list[tuple[float, float, float, float, float, float]] = field(
         default_factory=list
     )
+    #: Retention window in seconds; ``None`` keeps everything (offline replay).
+    max_age_s: float | None = None
+
+    def append(
+        self, sample: tuple[float, float, float, float, float, float]
+    ) -> None:
+        """Record a sample, dropping history outside the retention window.
+
+        Letting this grow without bound used to wedge the whole ingest loop:
+        carriers stream at ~3Hz for the life of the session, and both
+        _nearest_carrier() and the carrier deviation track call position_at()
+        per landing and per approach sample. After two days each carrier held
+        ~500k samples, so a single detection pass walked millions of them and
+        the event loop stopped returning. Aircraft were already windowed by
+        RollingTrackBuffer; carriers were not.
+        """
+        if self.samples and self.samples[-1][0] == sample[0]:
+            return
+        self.samples.append(sample)
+        if self.max_age_s is None:
+            return
+        cutoff = sample[0] - self.max_age_s
+        if self.samples[0][0] >= cutoff:
+            return
+        keep_from = bisect_right(self.samples, cutoff, key=_sample_time)
+        if keep_from:
+            del self.samples[:keep_from]
 
     def position_at(self, time: float) -> tuple[float, float] | None:
-        return interpolate_position(
-            [(t, lat, lon) for t, lat, lon, *_ in self.samples], time
-        )
+        return interpolate_position(self.samples, time)
 
     def heading_at(self, time: float) -> float | None:
         if not self.samples:
             return None
-        # Step function: use the most recent known heading.
-        best = self.samples[0][4]
-        for sample in self.samples:
-            if sample[0] <= time:
-                best = sample[4]
-            else:
-                break
-        return best
+        # Step function: the most recent known heading at or before `time`,
+        # falling back to the oldest sample we still hold.
+        index = bisect_right(self.samples, time, key=_sample_time) - 1
+        return self.samples[max(index, 0)][4]
 
     def altitude_at(self, time: float) -> float | None:
         """Interpolated ship altitude (MSL) at ``time``."""

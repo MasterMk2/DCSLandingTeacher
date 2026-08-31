@@ -369,7 +369,13 @@ class TrackIngestor:
         obj_class = classify_object_type(source.type)
         if obj_class == ObjectClass.CARRIER:
             state = self._carrier_states.setdefault(
-                obj_id, CarrierState(obj_id, source.name, source.type)
+                obj_id,
+                CarrierState(
+                    obj_id,
+                    source.name,
+                    source.type,
+                    max_age_s=self._sample_buffer_s,
+                ),
             )
             state.name = source.name
             state.type = source.type
@@ -386,8 +392,7 @@ class TrackIngestor:
                     source.heading or 0.0,
                     source.speed or 0.0,
                 )
-                if not state.samples or state.samples[-1][0] != sample[0]:
-                    state.samples.append(sample)
+                state.append(sample)
         elif obj_class == ObjectClass.STATIC:
             if (
                 source.latitude is not None
