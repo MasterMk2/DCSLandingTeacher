@@ -33,7 +33,7 @@ from app.api.schemas import (
     SourceInfo,
     TouchdownState,
 )
-from app.models.entities import DcsObject, Flight, Landing
+from app.models.entities import DcsObject, Flight, ImportJobRow, Landing
 
 # No prefix here: the version prefix (/api/v1) and the legacy /api alias are
 # applied at include time in app.api.main (Issue #38).
@@ -234,15 +234,36 @@ async def list_landings(
         for landing, obj, flight in rows
     ]
 
-    # Fetch available sources for the filter dropdown (Issue #13)
+    # Fetch available sources for the filter dropdown (Issue #13). Import
+    # sources are listed too, labelled with the uploaded file's name: their
+    # landings stay out of the default listing (an upload is usually from an
+    # unrelated server or day), but the user has to be able to *select* one
+    # to see what an upload produced -- until now the dropdown could not
+    # produce an import:* value at all, so imported landings had no view.
     sources_result = await session.execute(
-        select(Flight.source_id.distinct())
-        .where(Flight.source_id.is_not(None))
-        .where(~Flight.source_id.like(f"{IMPORT_SOURCE_PREFIX}%"))
+        select(Flight.source_id.distinct()).where(Flight.source_id.is_not(None))
     )
-    sources = [
-        SourceInfo(id=row[0], name=row[0], connected=True)
-        for row in sources_result.all()
+    live_sources: list[str] = []
+    import_sources: list[str] = []
+    for (source_id,) in sources_result.all():
+        if source_id.startswith(IMPORT_SOURCE_PREFIX):
+            import_sources.append(source_id)
+        else:
+            live_sources.append(source_id)
+    import_names: dict[str, str] = {}
+    if import_sources:
+        job_ids = [s[len(IMPORT_SOURCE_PREFIX) :] for s in import_sources]
+        jobs = await session.execute(
+            select(ImportJobRow.id, ImportJobRow.filename).where(ImportJobRow.id.in_(job_ids))
+        )
+        import_names = {row[0]: row[1] for row in jobs.all()}
+    sources = [SourceInfo(id=s, name=s, connected=True) for s in live_sources] + [
+        SourceInfo(
+            id=s,
+            name=import_names.get(s[len(IMPORT_SOURCE_PREFIX) :]) or s,
+            connected=False,
+        )
+        for s in import_sources
     ]
 
     return LandingListResponse(

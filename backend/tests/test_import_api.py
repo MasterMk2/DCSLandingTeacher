@@ -68,13 +68,17 @@ async def test_import_acmi_end_to_end(tmp_path) -> None:
             assert job["landings_detected"] == 1
             assert job["duplicates_skipped"] == 0
 
-            # An upload is usually from an unrelated server, so it must not
-            # join the shared history that the default listing shows.
+            # An upload is usually from an unrelated server, so its landings
+            # must not join the shared history that the default listing shows.
+            # The source dropdown does list the import now (labelled with the
+            # upload's filename) -- otherwise there would be no way to select
+            # it and inspect what the upload produced.
             shared = (await http.get("/api/landings")).json()
             assert shared["total"] == 0
-            assert all(
-                not s["id"].startswith("import:") for s in (shared["sources"] or [])
-            )
+            import_entries = [s for s in (shared["sources"] or []) if s["id"].startswith("import:")]
+            assert len(import_entries) == 1
+            assert import_entries[0]["name"] == "session.acmi"
+            assert import_entries[0]["connected"] is False
 
             # It is reachable through its own source, which is what the import
             # result view uses.

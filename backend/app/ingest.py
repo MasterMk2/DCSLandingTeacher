@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from logging import getLogger
 from typing import Any
 
@@ -64,6 +64,15 @@ GROUND_REFERENCE_RADIUS_M = 5000.0
 
 #: Default maximum age of a buffered ACMI batch before it is flushed (Issue #43).
 DEFAULT_BATCH_AGE_S = 2.0
+
+#: A mission-time jump backwards by more than this many seconds means the
+#: exporter restarted its session: a DCS mission restart resets the ACMI
+#: frame clock to zero while this ingestor keeps running. Everything keyed
+#: on mission time (flight row, object rows, rolling buffers, dedup keys)
+#: describes the previous mission and has to be rotated (Issue #48 follow-up:
+#: duplicates like landings #280/#285/#288 and cross-mission finalize
+#: corruption). Small negative jitter from buffering stays well below this.
+SESSION_REGRESSION_S = 120.0
 
 
 @dataclass
@@ -158,6 +167,15 @@ class TrackIngestor:
         #: Newest sample's WOW estimate per aircraft; a transition to
         #: on-deck is what can create a new touchdown candidate.
         self._last_wow: dict[str, bool | None] = {}
+        #: Highest mission time seen in the current ACMI session.
+        self._session_time_high: float | None = None
+        #: (ReferenceTime, RecordingTime) of the current ACMI session.
+        #: The exporter re-sends both in a fresh global object line whenever
+        #: its session restarts. ReferenceTime alone is the .miz in-game date
+        #: and is identical across sessions of the same mission; RecordingTime
+        #: is when the recording session started and is what actually
+        #: distinguishes them.
+        self._session_signature: tuple[str, str] | None = None
 
     @property
     def parser(self) -> AcmiParser:
@@ -352,6 +370,7 @@ class TrackIngestor:
         return self._flight_id
 
     async def _handle_update(self, event: ObjectUpdateEvent) -> None:
+        await self._maybe_rotate_session(event)
         if event.obj_id == "0":
             # Global object carries mission metadata only; the flight row is
             # created lazily on the first real object update so that header
@@ -450,6 +469,83 @@ class TrackIngestor:
             classify_object_type(dcs_object.type) == ObjectClass.AIRCRAFT
         ):
             await self._maybe_detect_landing(event.obj_id, force_final=True)
+
+    # ------------------------------------------------------------------
+    # Session rotation (mission restart handling)
+    # ------------------------------------------------------------------
+
+    async def _maybe_rotate_session(self, event: ObjectUpdateEvent) -> None:
+        """Start a new ingest session when the ACMI timeline restarts.
+
+        Two signals, either of which is sufficient:
+
+        - The global object re-announces a different ``RecordingTime`` (or
+          ``ReferenceTime``): the exporter began a new recording session --
+          a DCS mission restart re-sends the header block. ReferenceTime is
+          NOT enough on its own: it is the mission file's in-game date and
+          stays identical across restarts of the same .miz (verified on a
+          live server: 50 flight rows, one ReferenceTime).
+        - Mission time regresses by more than ``SESSION_REGRESSION_S``:
+          catches exporters that restart the frame clock without re-sending
+          the header.
+
+        Without the rotation, the previous mission's state leaks into the
+        new one: frozen rolling buffers kept the old mission's landings
+        alive for hours (re-detected as duplicate rows whenever the object
+        id was recycled), stale provisional keys were popped by the new
+        mission's events (rows overwritten with a foreign touchdown), and
+        object rows changed pilot/type mid-life. Reported-landing keys are
+        deliberately kept across rotations: they are keyed by
+        (obj id, first contact time), so a stale entry can only ever
+        suppress a re-detection, never a new event.
+        """
+        header = self._parser.header
+        recording_time = header.get("RecordingTime")
+        rotated = False
+        if recording_time:
+            signature = (header.get("ReferenceTime") or "", recording_time)
+            if self._session_signature is not None and signature != self._session_signature:
+                await self._rotate_session(
+                    f"session signature changed {self._session_signature} -> {signature}"
+                )
+                rotated = True
+            self._session_signature = signature
+        if (
+            not rotated
+            and self._session_time_high is not None
+            and event.time < self._session_time_high - SESSION_REGRESSION_S
+        ):
+            await self._rotate_session(
+                f"mission time regressed from t={self._session_time_high:.2f} to t={event.time:.2f}"
+            )
+            rotated = True
+        if rotated:
+            # Re-seed from the next (new-session) update: this event's time
+            # still belongs to whichever side of the restart it arrived on.
+            self._session_time_high = None
+        elif self._session_time_high is None or event.time > self._session_time_high:
+            self._session_time_high = event.time
+
+    async def _rotate_session(self, reason: str) -> None:
+        """Flush the old session and drop every per-session detection state.
+
+        The pending batch belongs to the previous mission and is committed
+        first. Object rows are NOT reused across the rotation even for the
+        same ACMI id: ids are recycled by the next mission (a "503" can be
+        an F/A-18 in one mission and an Apache in the next), so the new
+        session gets fresh rows with correct identity and first_seen.
+        """
+        logger.warning("ACMI session restart detected (%s); rotating", reason)
+        await self._flush(force=True)
+        self._flight_id = None
+        self._object_row_ids.clear()
+        self._object_meta.clear()
+        self._dirty_last_seen.clear()
+        self._aircraft_buffers.clear()
+        self._carrier_states.clear()
+        self._static_positions.clear()
+        self._last_wow.clear()
+        self._provisional_aircraft.clear()
 
     # ------------------------------------------------------------------
     # Landing detection hooks (FR-2)
@@ -770,9 +866,50 @@ class TrackIngestor:
 
     def record_aircraft_sample(self, obj_id: str, sample: TrackSample) -> None:
         """Public hook so tests/hosts can feed detection buffers directly."""
-        self._aircraft_buffers.setdefault(
+        buffer = self._aircraft_buffers.setdefault(
             obj_id, RollingTrackBuffer(self._sample_buffer_s)
-        ).append(sample)
+        )
+        sample = self._reject_impossible_position(obj_id, buffer, sample)
+        buffer.append(sample)
+
+    #: Above this implied speed between consecutive position samples the new
+    #: position is physically impossible for a crewed aircraft and its
+    #: coordinates are discarded (alt/AGL/speed/heading are kept). A corrupted
+    #: recording (observed live: a TacView client capture whose lat/lon cycled
+    #: across the whole map while altitude stayed coherent) otherwise wrecks
+    #: every chart and grading built on the track. The rejected sample still
+    #: becomes the next baseline, so a legitimate teleport (respawn) costs one
+    #: rejected sample instead of poisoning the rest of the track.
+    POSITION_JUMP_SPEED_MS = 1000.0
+
+    def _reject_impossible_position(
+        self, obj_id: str, buffer: RollingTrackBuffer, sample: TrackSample
+    ) -> TrackSample:
+        last = buffer.last()
+        if (
+            last is None
+            or sample.latitude is None
+            or sample.longitude is None
+            or last.latitude is None
+            or last.longitude is None
+        ):
+            return sample
+        dt = sample.time - last.time
+        if dt <= 0:
+            return sample
+        speed = (
+            haversine_m(last.latitude, last.longitude, sample.latitude, sample.longitude)
+            / dt
+        )
+        if speed <= self.POSITION_JUMP_SPEED_MS:
+            return sample
+        logger.debug(
+            "position jump rejected: obj=%s %.0f m/s over %.2fs",
+            obj_id,
+            speed,
+            dt,
+        )
+        return replace(sample, latitude=None, longitude=None)
 
     def _build_track(
         self,
