@@ -42,10 +42,6 @@ export default function App() {
     location.hash = "#/";
   }, []);
 
-  const selectLanding = useCallback((id: number) => {
-    location.hash = `#/landings/${id}`;
-  }, []);
-
   const handleTokenSubmit = useCallback((token: string) => {
     saveToken(token);
     setPromptOpen(false);
@@ -68,7 +64,7 @@ export default function App() {
       {/* key remounts the views when the token changes (refetch + WS reconnect) */}
       <main key={authVersion}>
         {route.view === "dashboard" ? (
-          <Dashboard onSelectLanding={selectLanding} />
+          <Dashboard />
         ) : (
           <Detail id={route.id} onBack={goDashboard} />
         )}

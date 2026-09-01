@@ -9,11 +9,7 @@ import { LANDING_PAGE_SIZE, useLandings } from "../hooks/useLandings";
 import { downloadCsv, landingsToCsv } from "../lib/csv";
 import type { LandingFilters, LandingSortKey } from "../types/api";
 
-export interface DashboardProps {
-  onSelectLanding: (id: number) => void;
-}
-
-export function Dashboard({ onSelectLanding }: DashboardProps) {
+export function Dashboard() {
   // Sort lives in `filters` so it flows through the same query builder and
   // refetch key as everything else; a separate piece of state would need its
   // own plumbing into useLandings for no benefit.
@@ -81,7 +77,7 @@ export function Dashboard({ onSelectLanding }: DashboardProps) {
         sources={data?.sources}
       />
 
-      <ImportPanel onImported={refresh} onSelectLanding={onSelectLanding} />
+      <ImportPanel onImported={refresh} />
 
       {error && <p className="error-message">読み込みエラー: {error}</p>}
       {loading && <p className="loading-message">読み込み中...</p>}
@@ -90,7 +86,6 @@ export function Dashboard({ onSelectLanding }: DashboardProps) {
         <>
           <LandingTable
             items={data.items}
-            onSelect={onSelectLanding}
             sort={filters.sort}
             order={filters.order}
             onSort={handleSort}

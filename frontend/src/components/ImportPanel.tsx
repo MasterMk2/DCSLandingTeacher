@@ -21,13 +21,11 @@ import type { ImportJob, LandingSummary } from "../types/api";
 export interface ImportPanelProps {
   /** Called when a job reaches a terminal state so the list can refresh. */
   onImported?: () => void;
-  /** Opens a landing's detail sheet; enables the results table below. */
-  onSelectLanding?: (id: number) => void;
 }
 
 const POLL_INTERVAL_MS = 1000;
 
-export function ImportPanel({ onImported, onSelectLanding }: ImportPanelProps) {
+export function ImportPanel({ onImported }: ImportPanelProps) {
   const [open, setOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -219,7 +217,9 @@ export function ImportPanel({ onImported, onSelectLanding }: ImportPanelProps) {
               {!isActiveImportStatus(job.status) && (
                 <p className="import-note">
                   ※ 取り込んだ内容は一時データです。サーバの記録一覧には出ず、
-                  破棄するかタブを閉じた時点で削除されます。
+                  破棄するかこのタブを閉じた時点で削除されます。
+                  別タブで開いた詳細も参照できなくなるため、見比べている間は
+                  このタブを開いたままにしてください。
                 </p>
               )}
               {isActiveImportStatus(job.status) && job.total_frames > 0 && (
@@ -243,7 +243,7 @@ export function ImportPanel({ onImported, onSelectLanding }: ImportPanelProps) {
           )}
           {error && <p className="error-message">インポートエラー: {error}</p>}
 
-          {results !== null && onSelectLanding && (
+          {results !== null && (
             <div className="import-results">
               <h4>インポート結果（{results.length} 件・一時データ）</h4>
               {results.length === 0 ? (
@@ -251,7 +251,7 @@ export function ImportPanel({ onImported, onSelectLanding }: ImportPanelProps) {
                   このファイルから新しい着陸は取り込まれませんでした。
                 </p>
               ) : (
-                <LandingTable items={results} onSelect={onSelectLanding} />
+                <LandingTable items={results} />
               )}
             </div>
           )}
