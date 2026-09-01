@@ -74,6 +74,12 @@ def split_unescaped(text: str, separator: str) -> list[str]:
     Escape sequences are resolved in the returned parts (e.g. ``\\,``
     becomes ``,``), matching how Tacview escapes delimiters inside values.
     """
+    # Fast path (Issue #47): this runs for every property list and event
+    # value of every line. Without a backslash no escape can exist, so the
+    # plain split is exactly equivalent -- including resolving nothing.
+    # Only genuinely escaped text pays for the per-character scan.
+    if "\\" not in text:
+        return text.split(separator)
     parts: list[str] = []
     buffer: list[str] = []
     i = 0
@@ -215,19 +221,18 @@ class AcmiParser:
             self._continuation_buffer.append(line[:-1])
             return []
 
-        # If we have buffered continuation lines, prepend them
+        # If we have buffered continuation lines, prepend them; only then can
+        # the combined text have changed shape, so only that path re-strips
+        # and re-checks for special lines (Issue #47: one strip per line).
         if self._continuation_buffer:
             self._continuation_buffer.append(line)
             line = "".join(self._continuation_buffer)
             self._continuation_buffer.clear()
-
-        # After combining with buffer, check again for special lines
-        stripped = line.strip()
-        if not stripped or stripped.startswith("//"):
-            return []
-
-        if stripped.startswith("#"):
-            return [self._handle_time(stripped)]
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//"):
+                return []
+            if stripped.startswith("#"):
+                return [self._handle_time(stripped)]
 
         first, sep, rest = line.partition(",")
 
@@ -346,11 +351,15 @@ class AcmiParser:
         if obj is None:
             obj = AcmiObject(obj_id=obj_id, first_seen=self.time)
             self.objects[obj_id] = obj
-        obj.properties.update(properties)
+        obj.update_properties(properties)
         obj.last_seen = self.time
 
         events: list[AcmiEvent] = [
-            ObjectUpdateEvent(obj_id=obj_id, properties=dict(properties), time=self.time)
+            # No dict copy here (Issue #47): ``properties`` is freshly built
+            # per line and nothing else holds a reference after the merge
+            # above, so handing it to the event is safe and saves one dict
+            # allocation per update line.
+            ObjectUpdateEvent(obj_id=obj_id, properties=properties, time=self.time)
         ]
         for event_type, object_ids, text in mission_events:
             events.append(

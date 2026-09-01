@@ -33,6 +33,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.file_reader import iter_acmi_lines
+from app.detection.detector import DetectionConfig
 from app.ingest import LandingContext, TrackIngestor
 from app.models.entities import DcsObject, Flight, ImportJobRow, Landing, Track
 from app.pipeline import LandingPipeline
@@ -232,11 +233,13 @@ class ImportJobManager:
         pipeline: LandingPipeline,
         notifier: Any | None = None,
         sample_buffer_s: float = 600.0,
+        detection_config: DetectionConfig | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._pipeline = pipeline
         self._notifier = notifier
         self._sample_buffer_s = sample_buffer_s
+        self._detection_config = detection_config
         self._jobs: dict[str, ImportJob] = {}
         # SQLite only supports one writer at a time; running two imports (or
         # an import alongside the live stream) concurrently makes both sides
@@ -388,19 +391,26 @@ class ImportJobManager:
             landing_listener=guarded_listener,
             landing_finalize_listener=self._pipeline.finalize_landing,
             source_id=import_source_id(job.id),
+            detection_config=self._detection_config,
         )
         holder.append(
             _DuplicateGuard(job, self._session_factory, self._pipeline, ingestor)
         )
 
-        # Pre-count time-frame lines (#...) to estimate total frames for progress.
-        # This is a fast single pass; the second pass does the actual ingest.
+        # Pre-count time-frame lines (#...) to estimate total frames for
+        # progress. Plain text is re-read cheaply (buffered I/O, no parsing),
+        # but a zip archive would pay a second full decompression pass for a
+        # UI nicety, so skip the estimate for those (Issue #47): the job's
+        # progress stays unknown (None) until the pass itself finishes.
         try:
-            total = 0
-            for line in iter_acmi_lines(path):
-                if line.startswith("#"):
-                    total += 1
-            job.total_frames = total
+            if path.suffix.lower() == ".zip":
+                job.total_frames = 0
+            else:
+                total = 0
+                for line in iter_acmi_lines(path):
+                    if line.startswith("#"):
+                        total += 1
+                job.total_frames = total
         except Exception:
             # If pre-count fails, progress will stay unknown (None).
             job.total_frames = 0

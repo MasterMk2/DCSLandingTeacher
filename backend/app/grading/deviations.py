@@ -341,6 +341,7 @@ def estimate_course_deg(
     touchdown_heading: float | None,
     kind: str = "carrier",
     touchdown_time: float | None = None,
+    stabilized_track: float | None = None,
 ) -> float:
     """Estimate the landing course when nothing published one.
 
@@ -349,6 +350,9 @@ def estimate_course_deg(
     directly and nothing has to be estimated. Whatever this returns becomes
     the axis of the runway frame, so an error here appears as lateral
     deviation that grows with distance from the touchdown point.
+
+    ``stabilized_track`` lets a caller that already walked the stabilized-final
+    ground track hand it in instead of paying a second walk (Issue #47).
 
     Land: the ground track over the stabilized final
     (:data:`STABILIZED_FINAL_S`), not the heading. On a final flown down the
@@ -366,7 +370,11 @@ def estimate_course_deg(
     through a turn onto final.
     """
     if kind == "land":
-        track = _stabilized_track_course(samples, touchdown_time=touchdown_time)
+        track = (
+            stabilized_track
+            if stabilized_track is not None
+            else _stabilized_track_course(samples, touchdown_time=touchdown_time)
+        )
         if track is not None:
             if (
                 touchdown_heading is None
@@ -427,6 +435,14 @@ def build_approach_analysis(
     """
     touchdown = event.touchdown
     threshold_along: float | None = None
+    # Walk the stabilized-final ground track once for land landings (Issue
+    # #47): the course estimate below and the crosswind-crab readout both
+    # need it, and it used to be computed twice per landing.
+    stabilized_track: float | None = None
+    if event.kind == "land":
+        stabilized_track = _stabilized_track_course(
+            event.approach, touchdown_time=touchdown.time
+        )
 
     if geometry is not None and event.carrier_latitude is not None:
         course = (
@@ -461,6 +477,7 @@ def build_approach_analysis(
             touchdown.heading,
             kind=event.kind,
             touchdown_time=touchdown.time,
+            stabilized_track=stabilized_track,
         )
         ref_lat, ref_lon = touchdown.latitude, touchdown.longitude
         deck_elevation = (
@@ -480,11 +497,8 @@ def build_approach_analysis(
         # Stays None when the track is unavailable. Falling back to ``course``
         # would report a measured 0.0 deg for a hovering helicopter, because
         # with no runway ``course`` is the touchdown heading itself.
-        track = _stabilized_track_course(
-            event.approach, touchdown_time=touchdown.time
-        )
-        if track is not None:
-            crosswind_crab_deg = _angular_diff(touchdown.heading, track)
+        if stabilized_track is not None:
+            crosswind_crab_deg = _angular_diff(touchdown.heading, stabilized_track)
 
     analysis = ApproachAnalysis(
         kind=event.kind,

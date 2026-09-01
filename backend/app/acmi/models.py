@@ -37,6 +37,28 @@ class AcmiObject:
     properties: dict[str, str] = field(default_factory=dict)
     first_seen: float = 0.0
     last_seen: float = 0.0
+    #: Memoized numeric parses of ``properties``. Real recordings re-read the
+    #: same numeric properties on every update line (ingest + detection +
+    #: track persistence), and re-parsing the raw strings each time dominated
+    #: the parse budget (Issue #47). Invalidated wholesale whenever properties
+    #: are merged; direct ``properties`` mutation is parser-internal only.
+    _float_cache: dict[str, float | None] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+
+    def update_properties(self, values: dict[str, str]) -> None:
+        """Merge new properties and drop the numeric parse cache."""
+        self.properties.update(values)
+        self._float_cache.clear()
+
+    def _cached_float(self, key: str) -> float | None:
+        cache = self._float_cache
+        try:
+            return cache[key]
+        except KeyError:
+            value = to_float(self.properties.get(key))
+            cache[key] = value
+            return value
 
     # --- identity -----------------------------------------------------------
     @property
@@ -66,37 +88,37 @@ class AcmiObject:
     # --- spherical-world coordinates ------------------------------------------
     @property
     def latitude(self) -> float | None:
-        return to_float(self.properties.get("Latitude"))
+        return self._cached_float("Latitude")
 
     @property
     def longitude(self) -> float | None:
-        return to_float(self.properties.get("Longitude"))
+        return self._cached_float("Longitude")
 
     @property
     def altitude(self) -> float | None:
-        return to_float(self.properties.get("Altitude"))
+        return self._cached_float("Altitude")
 
     # --- flat-world coordinates -------------------------------------------------
     @property
     def u(self) -> float | None:
-        return to_float(self.properties.get("U"))
+        return self._cached_float("U")
 
     @property
     def v(self) -> float | None:
-        return to_float(self.properties.get("V"))
+        return self._cached_float("V")
 
     # --- attitude -----------------------------------------------------------------
     @property
     def roll(self) -> float | None:
-        return to_float(self.properties.get("Roll"))
+        return self._cached_float("Roll")
 
     @property
     def pitch(self) -> float | None:
-        return to_float(self.properties.get("Pitch"))
+        return self._cached_float("Pitch")
 
     @property
     def yaw(self) -> float | None:
-        return to_float(self.properties.get("Yaw"))
+        return self._cached_float("Yaw")
 
     @property
     def grid_heading(self) -> float | None:
@@ -112,8 +134,8 @@ class AcmiObject:
         Only meaningful together with :attr:`u` / :attr:`v`, which live in the
         same projected frame. Never mix it with latitude/longitude.
         """
-        value = self.properties.get("Heading") or self.properties.get("HDG")
-        return to_float(value)
+        key = "Heading" if "Heading" in self.properties else "HDG"
+        return self._cached_float(key)
 
     @property
     def heading(self) -> float | None:
@@ -135,15 +157,15 @@ class AcmiObject:
     # --- motion / flight data -------------------------------------------------------
     @property
     def tas(self) -> float | None:
-        return to_float(self.properties.get("TAS"))
+        return self._cached_float("TAS")
 
     @property
     def cas(self) -> float | None:
-        return to_float(self.properties.get("CAS"))
+        return self._cached_float("CAS")
 
     @property
     def ias(self) -> float | None:
-        return to_float(self.properties.get("IAS"))
+        return self._cached_float("IAS")
 
     @property
     def speed(self) -> float | None:
@@ -154,30 +176,30 @@ class AcmiObject:
 
     @property
     def aoa(self) -> float | None:
-        return to_float(self.properties.get("AOA"))
+        return self._cached_float("AOA")
 
     @property
     def aos(self) -> float | None:
-        return to_float(self.properties.get("AOS"))
+        return self._cached_float("AOS")
 
     @property
     def agl(self) -> float | None:
-        return to_float(self.properties.get("AGL"))
+        return self._cached_float("AGL")
 
     @property
     def on_ground(self) -> bool | None:
-        value = self.properties.get("OnGround")
+        value = self._cached_float("OnGround")
         if value is None:
             return None
-        return to_float(value) not in (None, 0.0)
+        return value != 0.0
 
     @property
     def landing_gear(self) -> float | None:
-        return to_float(self.properties.get("LandingGear"))
+        return self._cached_float("LandingGear")
 
     @property
     def tailhook(self) -> float | None:
-        return to_float(self.properties.get("Tailhook"))
+        return self._cached_float("Tailhook")
 
 
 # ---------------------------------------------------------------------------
