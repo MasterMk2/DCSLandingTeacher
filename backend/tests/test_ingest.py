@@ -441,3 +441,75 @@ async def test_live_ingestor_windows_carrier_history(session_factory) -> None:
     samples = ingestor.carrier_states["102"].samples
     assert samples, "the window must never empty the series"
     assert samples[-1][0] - samples[0][0] <= 30.0
+
+
+async def test_position_jump_guard_rejects_garbage_coordinates(session_factory) -> None:
+    """Samples separated by impossible implied speed have lat/lon nulled."""
+    ingestor = TrackIngestor(session_factory)
+    from app.detection.detector import TrackSample
+
+    base = dict(altitude=20.0, agl=0.0, speed=0.0, heading=0.0, on_ground=True)
+    # Two positions ~780 km apart in 0.14 s = ~5 600 000 m/s >> 1000
+    await ingestor.handle_line("FileType=text/acmi/tacview")
+    await ingestor.handle_line("#0.00")
+    ingestor.record_aircraft_sample(
+        "T1", TrackSample(time=100.0, latitude=42.99, longitude=44.77, **base)
+    )
+    ingestor.record_aircraft_sample(
+        "T1", TrackSample(time=100.14, latitude=46.57, longitude=36.57, **base)
+    )
+    samples = ingestor._aircraft_buffers["T1"].snapshot()
+    assert samples[0].latitude == pytest.approx(42.99)
+    assert samples[1].latitude is None and samples[1].longitude is None
+    assert samples[1].altitude == 20.0  # non-position data preserved
+    await ingestor.close()
+
+
+async def test_position_jump_guard_allows_normal_movement(session_factory) -> None:
+    """Normal aircraft speed passes through the guard untouched."""
+    ingestor = TrackIngestor(session_factory)
+    from app.detection.detector import TrackSample
+
+    base = dict(altitude=1000.0, agl=900.0, speed=80.0, heading=90.0, on_ground=False)
+    await ingestor.handle_line("FileType=text/acmi/tacview")
+    await ingestor.handle_line("#0.00")
+    # ~14 m in 0.2 s = 70 m/s — within guard
+    ingestor.record_aircraft_sample(
+        "T2", TrackSample(time=100.0, latitude=42.24000, longitude=42.04000, **base)
+    )
+    ingestor.record_aircraft_sample(
+        "T2", TrackSample(time=100.2, latitude=42.24010, longitude=42.04010, **base)
+    )
+    samples = ingestor._aircraft_buffers["T2"].snapshot()
+    assert samples[0].latitude == pytest.approx(42.24000)
+    assert samples[1].latitude == pytest.approx(42.24010)
+    assert samples[1].longitude == pytest.approx(42.04010)
+    await ingestor.close()
+
+
+async def test_position_jump_guard_accepts_respawn_after_one_rejection(
+    session_factory,
+) -> None:
+    """A respawn teleport costs one rejected sample then resumes normally."""
+    ingestor = TrackIngestor(session_factory)
+    from app.detection.detector import TrackSample
+
+    base = dict(altitude=100.0, agl=0.0, speed=0.0, heading=0.0, on_ground=True)
+    await ingestor.handle_line("FileType=text/acmi/tacview")
+    await ingestor.handle_line("#0.00")
+    ingestor.record_aircraft_sample(
+        "T3", TrackSample(time=100.0, latitude=42.24, longitude=42.04, **base)
+    )
+    # teleport ~500 km in 0.1 s
+    ingestor.record_aircraft_sample(
+        "T3", TrackSample(time=100.1, latitude=46.0, longitude=37.0, **base)
+    )
+    # normal movement from respawned position
+    ingestor.record_aircraft_sample(
+        "T3", TrackSample(time=100.3, latitude=46.01, longitude=37.01, **base)
+    )
+    samples = ingestor._aircraft_buffers["T3"].snapshot()
+    assert samples[0].latitude == pytest.approx(42.24)
+    assert samples[1].latitude is None  # rejected
+    assert samples[2].latitude == pytest.approx(46.01)  # baseline updated
+    await ingestor.close()

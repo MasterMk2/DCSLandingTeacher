@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from logging import getLogger
 from typing import Any
 
@@ -866,9 +866,50 @@ class TrackIngestor:
 
     def record_aircraft_sample(self, obj_id: str, sample: TrackSample) -> None:
         """Public hook so tests/hosts can feed detection buffers directly."""
-        self._aircraft_buffers.setdefault(
+        buffer = self._aircraft_buffers.setdefault(
             obj_id, RollingTrackBuffer(self._sample_buffer_s)
-        ).append(sample)
+        )
+        sample = self._reject_impossible_position(obj_id, buffer, sample)
+        buffer.append(sample)
+
+    #: Above this implied speed between consecutive position samples the new
+    #: position is physically impossible for a crewed aircraft and its
+    #: coordinates are discarded (alt/AGL/speed/heading are kept). A corrupted
+    #: recording (observed live: a TacView client capture whose lat/lon cycled
+    #: across the whole map while altitude stayed coherent) otherwise wrecks
+    #: every chart and grading built on the track. The rejected sample still
+    #: becomes the next baseline, so a legitimate teleport (respawn) costs one
+    #: rejected sample instead of poisoning the rest of the track.
+    POSITION_JUMP_SPEED_MS = 1000.0
+
+    def _reject_impossible_position(
+        self, obj_id: str, buffer: RollingTrackBuffer, sample: TrackSample
+    ) -> TrackSample:
+        last = buffer.last()
+        if (
+            last is None
+            or sample.latitude is None
+            or sample.longitude is None
+            or last.latitude is None
+            or last.longitude is None
+        ):
+            return sample
+        dt = sample.time - last.time
+        if dt <= 0:
+            return sample
+        speed = (
+            haversine_m(last.latitude, last.longitude, sample.latitude, sample.longitude)
+            / dt
+        )
+        if speed <= self.POSITION_JUMP_SPEED_MS:
+            return sample
+        logger.debug(
+            "position jump rejected: obj=%s %.0f m/s over %.2fs",
+            obj_id,
+            speed,
+            dt,
+        )
+        return replace(sample, latitude=None, longitude=None)
 
     def _build_track(
         self,
