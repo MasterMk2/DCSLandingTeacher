@@ -269,11 +269,18 @@ async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> No
     session_factory = create_session_factory(engine)
 
     # max_batch_size is high enough that only the age trigger can fire.
-    ingestor = TrackIngestor(session_factory, max_batch_size=1000, max_batch_age_s=0.05)
+    # The threshold starts beyond anything a test batch can reach and is
+    # lowered to 0.05s only after the first write: on a loaded CI runner the
+    # first handle_line's DB round trips alone can exceed 50 ms, which would
+    # age-flush the opening batch (flight + first sample) before the second
+    # write arrives and turn this into a 1-track assertion (seen 3x on
+    # ubuntu-latest).
+    ingestor = TrackIngestor(session_factory, max_batch_size=1000, max_batch_age_s=3600.0)
     try:
         await ingestor.handle_line("FileType=text/acmi/tacview")
         await ingestor.handle_line("#0.00")
         await ingestor.handle_line("101,T=41.60|41.50|100")
+        ingestor._max_batch_age_s = 0.05
         await asyncio.sleep(0.1)  # exceed max_batch_age_s
         # Any subsequent write re-checks the batch age and flushes it.
         await ingestor.handle_line("#1.00")
