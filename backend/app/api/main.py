@@ -186,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session_factory,
                 landing_listener=pipeline.handle_landing,
                 landing_finalize_listener=pipeline.finalize_landing,
+                detection_config=grading_config.to_detection_config(),
             )
             await multi_source_manager.start()
             # Legacy compatibility: expose first source's client as acmi_client
@@ -203,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sample_buffer_s=float(
                 grading_config.detection.get("sample_buffer_s", 600.0)
             ),
+            detection_config=grading_config.to_detection_config(),
         )
 
         app.state.settings = settings

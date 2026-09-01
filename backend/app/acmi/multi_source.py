@@ -13,6 +13,7 @@ from typing import Any
 
 from app.acmi.stream import AcmiStreamClient
 from app.config import TacviewSource, get_settings
+from app.detection.detector import DetectionConfig
 from app.ingest import (
     LandingFinalizeListener,
     LandingListener,
@@ -41,10 +42,12 @@ class MultiSourceAcmiManager:
         session_factory,
         landing_listener: LandingListener | None = None,
         landing_finalize_listener: LandingFinalizeListener | None = None,
+        detection_config: DetectionConfig | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._landing_listener = landing_listener
         self._landing_finalize_listener = landing_finalize_listener
+        self._detection_config = detection_config
         self._sources: dict[str, SourceContext] = {}
         self._running = False
 
@@ -68,6 +71,7 @@ class MultiSourceAcmiManager:
             landing_listener=self._landing_listener,
             landing_finalize_listener=self._landing_finalize_listener,
             source_id=source.id,
+            detection_config=self._detection_config,
         )
 
         # Line handler that tags events with source_id

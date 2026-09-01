@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from app.detection.geometry import haversine_m, interpolate_position, transform_to_frame
@@ -647,6 +648,16 @@ class RollingTrackBuffer:
 
     def snapshot(self) -> list[TrackSample]:
         return list(self._samples)
+
+    def iter_reverse(self) -> Iterator[TrackSample]:
+        """Iterate newest-first without copying the buffer (Issue #47).
+
+        ``snapshot`` allocates a full O(n) list; callers that only walk back a
+        few samples (e.g. the ground-speed baseline search) pay that per
+        update line. ``reversed`` over the deque is O(1) to start and stops
+        as soon as the caller is done.
+        """
+        return reversed(self._samples)
 
     def last(self) -> TrackSample | None:
         return self._samples[-1] if self._samples else None

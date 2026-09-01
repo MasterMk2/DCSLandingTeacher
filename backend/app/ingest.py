@@ -15,9 +15,14 @@ takes several seconds to reach 200 pending writes).
 
 Landing detection (FR-2) hooks in here: aircraft samples are mirrored into
 rolling buffers, carrier/static objects into lightweight state holders, and
-:class:`app.detection.detector.analyze_track` runs after every update. New
-landing events are forwarded to the optional ``landing_listener`` callback
-(the grading pipeline).
+:class:`app.detection.detector.analyze_track` runs when the detection state
+can actually have changed (Issue #47): a fresh airborne -> on-deck contact,
+a still-unfinalized landing, or a forced final pass. Running the full
+buffer scan on *every* update line made long recordings quadratic -- a
+cruising aircraft contributed a full O(n log n) re-analysis per update for
+nothing, since no new touchdown is possible while the newest sample is
+airborne. New landing events are forwarded to the optional
+``landing_listener`` callback (the grading pipeline).
 """
 
 from __future__ import annotations
@@ -26,8 +31,9 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from logging import getLogger
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import bindparam, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.models import (
@@ -40,10 +46,12 @@ from app.acmi.parser import AcmiParseError, AcmiParser
 from app.detection.classify import ObjectClass, classify_object_type
 from app.detection.detector import (
     CarrierState,
+    DetectionConfig,
     LandingEvent,
     RollingTrackBuffer,
     TrackSample,
     analyze_track,
+    is_on_deck,
 )
 from app.detection.geometry import haversine_m
 from app.models.entities import DcsObject, Flight, Track
@@ -101,6 +109,7 @@ class TrackIngestor:
         landing_finalize_listener: LandingFinalizeListener | None = None,
         sample_buffer_s: float = 600.0,
         source_id: str = "default",
+        detection_config: DetectionConfig | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._max_batch_size = max(1, max_batch_size)
@@ -110,8 +119,22 @@ class TrackIngestor:
         self._flight_id: int | None = None
         #: acmi object id -> ``objects.id`` row
         self._object_row_ids: dict[str, int] = {}
+        #: acmi object id -> identity fields already persisted for that row.
+        #: Updating type/name/pilot/... on every update line made each line a
+        #: SELECT + ORM UPDATE; tracking the last persisted tuple means the
+        #: row is only touched when identity actually changes (Issue #47).
+        self._object_meta: dict[str, tuple[str | None, ...]] = {}
+        #: ``objects.id`` -> last seen time to be stamped at the next flush.
+        #: ``last_seen`` changes on every line, but per-batch accuracy is
+        #: plenty for a "when was this seen last" column; deferring turns one
+        #: UPDATE per line into one per touched object per batch (Issue #47).
+        self._dirty_last_seen: dict[int, float] = {}
         self._session: AsyncSession | None = None
         self._pending = 0
+        #: Track samples of the open batch, as plain column dicts. They go to
+        #: the DB as a single executemany INSERT at flush time (Issue #47)
+        #: instead of one ORM instance per line.
+        self._pending_tracks: list[dict[str, Any]] = []
         #: monotonic timestamp of the current batch's first pending write.
         self._batch_opened_at: float | None = None
 
@@ -119,6 +142,7 @@ class TrackIngestor:
         self._landing_listener = landing_listener
         self._landing_finalize_listener = landing_finalize_listener
         self._sample_buffer_s = sample_buffer_s
+        self._detection_config = detection_config or DetectionConfig()
         self._aircraft_buffers: dict[str, RollingTrackBuffer] = {}
         self._carrier_states: dict[str, CarrierState] = {}
         #: static object id -> (lat, lon, altitude)
@@ -128,6 +152,12 @@ class TrackIngestor:
         #: (acmi id, touchdown time) -> landing row id reported provisionally
         #: and still awaiting its final outcome (Issue #5).
         self._provisional_ids: dict[tuple[str, float], int] = {}
+        #: Aircraft with provisional events outstanding: the detection pass
+        #: keeps running for these until they finalize (Issue #47 gate).
+        self._provisional_aircraft: set[str] = set()
+        #: Newest sample's WOW estimate per aircraft; a transition to
+        #: on-deck is what can create a new touchdown candidate.
+        self._last_wow: dict[str, bool | None] = {}
 
     @property
     def parser(self) -> AcmiParser:
@@ -225,6 +255,10 @@ class TrackIngestor:
         session, self._session = self._session, None
         self._pending = 0
         self._batch_opened_at = None
+        # The batch's samples were never committed; dropping them matches the
+        # pre-#47 ORM behaviour where the discarded session took its pending
+        # objects with it.
+        self._pending_tracks.clear()
         if session is None:
             return
         try:
@@ -260,11 +294,39 @@ class TrackIngestor:
         session, self._session = self._session, None
         self._pending = 0
         self._batch_opened_at = None
+        dirty_last_seen = self._dirty_last_seen
+        pending_tracks = self._pending_tracks
         try:
+            # Track samples as one executemany INSERT instead of one ORM
+            # object per line (Issue #47): the ORM unit-of-work state per
+            # row cost ~0.5 ms per sample on a 275k-line recording, which
+            # dominated everything else once the detection gate removed the
+            # quadratic scan.
+            if pending_tracks:
+                self._pending_tracks = []
+                await session.execute(insert(Track), pending_tracks)
+            # Deferred object last_seen stamps (Issue #47): one executemany
+            # UPDATE for every touched object of the batch instead of one
+            # statement per update line. Built on the Core table object: the
+            # ORM-enabled update() would route executemany into its bulk
+            # semantics, which demand per-row primary keys in the params.
+            if dirty_last_seen:
+                objects_table = DcsObject.__table__
+                await session.execute(
+                    objects_table.update()
+                    .where(objects_table.c.id == bindparam("b_row_id"))
+                    .values(last_seen=bindparam("last_seen")),
+                    [
+                        {"b_row_id": row_id, "last_seen": seen_at}
+                        for row_id, seen_at in dirty_last_seen.items()
+                    ],
+                )
             await session.commit()
         except Exception:
             await session.rollback()
             raise
+        else:
+            dirty_last_seen.clear()
         finally:
             await session.close()
 
@@ -301,6 +363,11 @@ class TrackIngestor:
 
         session = self._get_session()
         object_row_id = self._object_row_ids.get(event.obj_id)
+        meta = (
+            (source.type, source.name, source.pilot, source.group, source.country)
+            if source is not None
+            else None
+        )
         if object_row_id is None:
             result = await session.execute(
                 select(DcsObject).where(
@@ -315,25 +382,48 @@ class TrackIngestor:
                     acmi_id=event.obj_id,
                     first_seen=source.first_seen if source else event.time,
                     last_seen=source.last_seen if source else event.time,
+                    type=meta[0] if meta else None,
+                    name=meta[1] if meta else None,
+                    pilot=meta[2] if meta else None,
+                    group_name=meta[3] if meta else None,
+                    country=meta[4] if meta else None,
                 )
                 session.add(dcs_object)
                 await session.flush()
+            elif source is not None:
+                # Row left over from an earlier ingestor for this flight:
+                # refresh its identity once, like the pre-#47 code did.
+                dcs_object.type = meta[0]
+                dcs_object.name = meta[1]
+                dcs_object.pilot = meta[2]
+                dcs_object.group_name = meta[3]
+                dcs_object.country = meta[4]
+                dcs_object.last_seen = source.last_seen
             object_row_id = dcs_object.id
             self._object_row_ids[event.obj_id] = object_row_id
-        else:
+            self._object_meta[event.obj_id] = meta
+        elif source is not None and meta != self._object_meta.get(event.obj_id):
+            # Identity changed (renamed unit, slot handover, ...): rare, so a
+            # SELECT + ORM update is affordable here. The old per-line
+            # session.get() was the steady-state path and dominated the
+            # ingest's DB round trips (Issue #47).
             dcs_object = await session.get(DcsObject, object_row_id)
-
-        if dcs_object is not None and source is not None:
-            dcs_object.type = source.type
-            dcs_object.name = source.name
-            dcs_object.pilot = source.pilot
-            dcs_object.group_name = source.group
-            dcs_object.country = source.country
-            dcs_object.last_seen = source.last_seen
+            if dcs_object is not None:
+                dcs_object.type = meta[0]
+                dcs_object.name = meta[1]
+                dcs_object.pilot = meta[2]
+                dcs_object.group_name = meta[3]
+                dcs_object.country = meta[4]
+                dcs_object.last_seen = source.last_seen
+            self._object_meta[event.obj_id] = meta
+        elif source is not None:
+            # Unchanged identity: defer the last_seen stamp to the batch
+            # flush (Issue #47).
+            self._dirty_last_seen[object_row_id] = source.last_seen
 
         track = self._build_track(flight_id, object_row_id, source, event.time)
         if track is not None:
-            session.add(track)
+            self._pending_tracks.append(track)
             self._pending += 1
         await self._flush()
 
@@ -465,7 +555,7 @@ class TrackIngestor:
         buffer = self._aircraft_buffers.get(obj_id)
         if buffer is None:
             return None
-        for previous in reversed(buffer.snapshot()):
+        for previous in buffer.iter_reverse():
             if previous.latitude is None or previous.longitude is None:
                 continue
             dt = source.last_seen - previous.time
@@ -516,23 +606,56 @@ class TrackIngestor:
     ) -> None:
         buffer = self._aircraft_buffers.get(obj_id)
         if buffer is None:
-            buffer = RollingTrackBuffer(self._sample_buffer_s)
-            self._aircraft_buffers[obj_id] = buffer
-
-        source = self._parser.objects.get(obj_id)
-        samples = buffer.snapshot()
-        if not samples:
             return
-        last = samples[-1]
+        last = buffer.last()
+        if last is None:
+            return
+
+        # --- detection gate (Issue #47) ------------------------------------
+        # analyze_track re-scans and re-sorts the whole rolling buffer, so
+        # running it on every update line made long recordings quadratic:
+        # an aircraft cruising at altitude contributed a full O(n log n)
+        # pass per update that could never find anything, because a
+        # candidate touchdown requires an airborne -> on-deck transition.
+        # Estimate WOW for the newest sample -- O(1), without copying the
+        # buffer -- and only run the full pass when it just became on-deck
+        # (fresh contact), when the aircraft still has provisional events to
+        # finalize (bounce merging / two-phase confirmation, Issue #5), or
+        # when forced. The ground reference is only needed when the sample
+        # itself cannot answer the WOW question, so skip the haversine walk
+        # otherwise.
+        if last.on_ground is None and last.agl is None:
+            gate_ground_altitude = self._ground_altitude_for(
+                last.latitude, last.longitude
+            )
+        else:
+            gate_ground_altitude = None
+        wow_now = is_on_deck(last, gate_ground_altitude, self._detection_config)
+        wow_before = self._last_wow.get(obj_id)
+        self._last_wow[obj_id] = wow_now
+        new_contact = wow_before is not True and wow_now is True
+        if (
+            not force_final
+            and not new_contact
+            and obj_id not in self._provisional_aircraft
+        ):
+            return
+
+        # Full pass: snapshot only now, after the gate admitted this update.
+        samples = buffer.snapshot()
+        # The whole buffer is re-analysed with the current ground reference,
+        # so always recompute it here even if the gate skipped it.
         ground_altitude = self._ground_altitude_for(last.latitude, last.longitude)
 
         events = analyze_track(
             samples,
             ground_altitude,
             self._carrier_states,
+            config=self._detection_config,
             current_time=None if force_final else last.time,
         )
         if not events:
+            self._settle_provisional_state(obj_id)
             return
 
         # Landing events are rare; commit pending ingest writes first so the
@@ -542,6 +665,7 @@ class TrackIngestor:
         # dozens of times a second with several AI aircraft in the mission)
         # from forcing a synchronous disk commit each time.
         await self._flush(force=True)
+        source = self._parser.objects.get(obj_id)
         for landing in events:
             # Key on the first ground contact, not the touchdown: the
             # touchdown is the *last* contact of a merged bounce sequence and
@@ -580,6 +704,7 @@ class TrackIngestor:
                 landing_id = await self._dispatch(context, provisional=True)
                 if landing_id is not None:
                     self._provisional_ids[key] = landing_id
+                    self._provisional_aircraft.add(obj_id)
                 continue
 
             pending_id = self._provisional_ids.pop(key, None)
@@ -591,6 +716,22 @@ class TrackIngestor:
                 continue
             self._reported_landings.add(key)
             await self._dispatch(context, provisional=False)
+
+        self._settle_provisional_state(obj_id)
+
+    def _settle_provisional_state(self, obj_id: str) -> None:
+        """Stop re-running detection for ``obj_id`` once nothing is pending.
+
+        The detection gate keeps the full pass alive for aircraft with
+        provisional events; once every pending key has been finalized (or
+        vanished), there is nothing left to re-classify until the next
+        on-deck transition, so the aircraft can leave the gate again.
+        """
+        if obj_id not in self._provisional_aircraft:
+            return
+        if any(key[0] == obj_id for key in self._provisional_ids):
+            return
+        self._provisional_aircraft.discard(obj_id)
 
     async def _dispatch(self, context: LandingContext, *, provisional: bool) -> int | None:
         event = context.event
@@ -639,7 +780,13 @@ class TrackIngestor:
         object_row_id: int,
         source: AcmiObject | None,
         mission_time: float,
-    ) -> Track | None:
+    ) -> dict[str, Any] | None:
+        """One track sample as a plain column dict for executemany INSERT.
+
+        The ORM ``Track`` instance was dropped for the bulk write path
+        (Issue #47): samples arrive at tens of lines per second and the ORM
+        unit-of-work bookkeeping per instance outweighed the SQL itself.
+        """
         if not isinstance(source, AcmiObject):
             return None
         has_position = any(
@@ -654,21 +801,21 @@ class TrackIngestor:
         )
         if not has_position:
             return None
-        return Track(
-            flight_id=flight_id,
-            object_id=object_row_id,
-            mission_time=mission_time,
-            latitude=source.latitude,
-            longitude=source.longitude,
-            altitude=source.altitude,
-            u=source.u,
-            v=source.v,
-            roll=source.roll,
-            pitch=source.pitch,
-            yaw=source.yaw,
-            heading=source.heading,
-            speed=source.speed,
-            on_ground=source.on_ground,
-            agl=source.agl,
-            aoa=source.aoa,
-        )
+        return {
+            "flight_id": flight_id,
+            "object_id": object_row_id,
+            "mission_time": mission_time,
+            "latitude": source.latitude,
+            "longitude": source.longitude,
+            "altitude": source.altitude,
+            "u": source.u,
+            "v": source.v,
+            "roll": source.roll,
+            "pitch": source.pitch,
+            "yaw": source.yaw,
+            "heading": source.heading,
+            "speed": source.speed,
+            "on_ground": source.on_ground,
+            "agl": source.agl,
+            "aoa": source.aoa,
+        }
