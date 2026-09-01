@@ -34,11 +34,22 @@ function row(overrides: Partial<LandingSummary> = {}): LandingSummary {
 }
 
 describe("LandingTable", () => {
+  it("links each row to its detail sheet in a new tab", () => {
+    // Navigating this tab away would throw away what is on screen (e.g. an
+    // import's temporary results), so the detail must open in a new tab.
+    const { container } = render(<LandingTable items={[row({ id: 7 })]} />);
+    const link = container.querySelector("tbody .col-id a.row-link");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("#/landings/7");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toContain("noopener");
+  });
+
   it("renders a row whose score never arrived", () => {
     const partial = row();
     delete (partial as { score?: number | null }).score;
     const { container } = render(
-      <LandingTable items={[partial]} onSelect={() => {}} />,
+      <LandingTable items={[partial]} />,
     );
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
@@ -47,7 +58,7 @@ describe("LandingTable", () => {
     // `pattern-badge ${value}` produced "overhead", which matches no rule and
     // renders an unstyled badge -- the detail page shipped that way.
     const { container } = render(
-      <LandingTable items={[row({ approach_pattern: "overhead" })]} onSelect={() => {}} />,
+      <LandingTable items={[row({ approach_pattern: "overhead" })]} />,
     );
     const badge = container.querySelector(".pattern-badge");
     expect(badge?.className).toContain("pattern-overhead");
@@ -59,7 +70,6 @@ describe("LandingTable", () => {
     const { container, rerender } = render(
       <LandingTable
         items={[row()]}
-        onSelect={() => {}}
         sort="time"
         order="desc"
         onSort={(k) => seen.push(k)}
@@ -74,7 +84,6 @@ describe("LandingTable", () => {
     rerender(
       <LandingTable
         items={[row()]}
-        onSelect={() => {}}
         sort="time"
         order="asc"
         onSort={() => {}}
@@ -86,7 +95,7 @@ describe("LandingTable", () => {
   });
 
   it("leaves headers inert when no sort handler is given", () => {
-    const { container } = render(<LandingTable items={[row()]} onSelect={() => {}} />);
+    const { container } = render(<LandingTable items={[row()]} />);
     expect(container.querySelector("th.sortable")).toBeNull();
   });
 
@@ -94,7 +103,7 @@ describe("LandingTable", () => {
     // created_at is naive UTC; the mission is set in June 2026 inside the
     // .miz, so showing touchdown_epoch here reads as a wrong date.
     const { container } = render(
-      <LandingTable items={[row()]} onSelect={() => {}} />,
+      <LandingTable items={[row()]} />,
     );
     const cell = container.querySelectorAll("tbody td")[1];
     expect(cell.textContent).toContain("2026/08/2");
@@ -108,7 +117,7 @@ describe("LandingTable columns", () => {
     // they would hide whatever happened to sit in that position after the
     // next column is added.
     const { container } = render(
-      <LandingTable items={[row()]} onSelect={() => {}} />,
+      <LandingTable items={[row()]} />,
     );
     for (const key of ["id", "time", "pilot", "grade", "score", "source", "kind"]) {
       expect(
@@ -123,7 +132,7 @@ describe("LandingTable columns", () => {
     // `display: block` on a <table> drops table layout and the body columns
     // stop lining up with the header.
     const { container } = render(
-      <LandingTable items={[row()]} onSelect={() => {}} />,
+      <LandingTable items={[row()]} />,
     );
     expect(container.querySelector(".table-scroll > table.landing-table")).not.toBeNull();
   });

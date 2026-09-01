@@ -74,7 +74,7 @@ describe("ImportPanel results", () => {
       offset: 0,
     });
 
-    const { container } = render(<ImportPanel onSelectLanding={() => {}} />);
+    const { container } = render(<ImportPanel />);
     // fireEvent, not .click(): a raw DOM click does not flush React state,
     // so the collapsed panel never opens and the dropzone is not rendered.
     fireEvent.click(screen.getByRole("button", { name: /インポート/ }));

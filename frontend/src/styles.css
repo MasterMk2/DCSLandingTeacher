@@ -161,6 +161,16 @@ main {
 
 .landing-row {
   cursor: pointer;
+  position: relative;
+}
+
+/* Stretch the # cell's anchor over the whole row so the row stays one big
+   click target after moving to target="_blank" links (middle-click and
+   ctrl-click also work anywhere on the row). */
+.landing-row .row-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
 }
 
 .landing-row:hover,

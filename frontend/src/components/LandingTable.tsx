@@ -14,7 +14,6 @@ import type { LandingSortKey, LandingSummary } from "../types/api";
 
 export interface LandingTableProps {
   items: LandingSummary[];
-  onSelect: (id: number) => void;
   sort?: LandingSortKey;
   order?: "asc" | "desc";
   /** Omit to render plain, non-clickable headers. */
@@ -37,7 +36,6 @@ const COLUMNS: { key: LandingSortKey | null; label: string }[] = [
 
 export function LandingTable({
   items,
-  onSelect,
   sort,
   order,
   onSort,
@@ -78,16 +76,21 @@ export function LandingTable({
       </thead>
       <tbody>
         {items.map((it) => (
-          <tr
-            key={it.id}
-            className="landing-row"
-            onClick={() => onSelect(it.id)}
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onSelect(it.id);
-            }}
-          >
-            <td className="col-id">{it.id}</td>
+          <tr key={it.id} className="landing-row">
+            {/* The whole row is one link (stretched via CSS) so any click,
+                middle-click or ctrl-click opens the detail sheet in a new
+                tab: navigating this tab away would throw away whatever is
+                on screen here, e.g. a just-finished import's results. */}
+            <td className="col-id">
+              <a
+                className="row-link"
+                href={`#/landings/${it.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {it.id}
+              </a>
+            </td>
             {/* Real recording time. The mission clock goes in the tooltip:
                 it is the date inside the .miz (June 2026 for the Caucasus
                 mission), which reads as wrong to whoever just flew it. */}
