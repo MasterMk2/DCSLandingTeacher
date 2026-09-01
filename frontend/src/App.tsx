@@ -70,14 +70,16 @@ export default function App() {
           DCS Landing Teacher
         </a>
         <span className="app-subtitle">着陸・着艦レビューシステム</span>
-        <button
-          type="button"
-          className="btn btn-auth"
-          onClick={openTokenSettings}
-          title="保存済みアクセストークンを消去し、再入力する"
-        >
-          認証設定
-        </button>
+        {getToken() && (
+          <button
+            type="button"
+            className="btn btn-auth"
+            onClick={openTokenSettings}
+            title="保存済みアクセストークンを消去し、再入力する"
+          >
+            認証設定
+          </button>
+        )}
       </nav>
       {/* key remounts the views when the token changes (refetch + WS reconnect) */}
       <main key={authVersion}>
