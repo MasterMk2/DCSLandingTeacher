@@ -14,6 +14,7 @@ import { TimeSeriesChart } from "../components/TimeSeriesChart";
 import { GlideslopeProfileChart } from "../components/GlideslopeProfileChart";
 import {
   factorDescription,
+  factorLabel,
   formatEpoch,
   formatIso,
   formatMetric,
@@ -27,7 +28,40 @@ import {
   patternLabel,
 } from "../lib/format";
 import { downloadCsv, samplesToCsv } from "../lib/csv";
-import type { LandingDetail } from "../types/api";
+import type { Factor, LandingDetail } from "../types/api";
+
+/** 採点しなかった理由 (backend: land_grader.UNSCORED_*) の日本語。 */
+const UNSCORED_REASON_JA: Record<string, string> = {
+  "not-measured": "この記録からは測れませんでした",
+  "not-applicable-to-airframe-class": "この機体クラスには基準が無く採点対象外です",
+};
+
+/** 素点を持たない陸上コンポーネントの表示。
+ *
+ * 素点が無いのは「測ったうえで 0 点」ではなく「採点していない」で、
+ * 重みごと合成から外れている。空欄や "-" だと最低点と読まれるので、
+ * 理由と、本来なら占めていた重みを出す。 */
+function unscoredText(f: Factor): string | null {
+  const reason = f.evidence?.["unscored_reason"];
+  if (typeof reason !== "string") return null;
+  const weight =
+    typeof f.weight === "number" ? `（本来の重み ${f.weight.toFixed(2)}）` : "";
+  return `未評価${weight}: ${UNSCORED_REASON_JA[reason] ?? reason}`;
+}
+
+/** 「この点数が何割の項目から出ているか」の一行。全項目を採点できた
+ *  着陸では出さない (常に 100% と書いてあると読み飛ばされる)。 */
+function coverageText(metrics?: Record<string, unknown> | null): string | null {
+  if (!metrics) return null;
+  const weight = metrics["measured_weight"];
+  const unmeasured = metrics["unmeasured_components"];
+  if (typeof weight !== "number" || !Array.isArray(unmeasured) || unmeasured.length === 0) {
+    return null;
+  }
+  const names = unmeasured.map((n) => factorLabel(String(n))).join("・");
+  const scored = metrics["graded"] === false ? "採点に使えた項目" : "評価できた項目";
+  return `${scored}は全体の ${Math.round(weight * 100)}%（未評価: ${names}）`;
+}
 
 export interface DetailProps {
   id: number;
@@ -70,6 +104,7 @@ export function Detail({ id, onBack }: DetailProps) {
   }
 
   const track = detail.approach_track ?? null;
+  const coverage = coverageText(detail.metrics);
   // A plan view only earns its space when there is a circuit to look at.
   // "overhead" is the classifier's answer; the lateral test catches the
   // approaches it left as "unknown" that were in fact flown as patterns.
@@ -181,7 +216,11 @@ export function Detail({ id, onBack }: DetailProps) {
             <div className="grade-panel">
               <div className="grade-headline">
                 <span className={`grade-badge grade-large ${gradeClass(detail.grade)}`}>
-                  {detail.kind === "carrier" ? (detail.grade ?? "-") : detail.score !== null ? `評点 ${detail.score.toFixed(1)}` : "-"}
+                  {detail.kind === "carrier"
+                    ? (detail.grade ?? "-")
+                    : detail.score !== null
+                      ? `評点 ${detail.score.toFixed(1)}`
+                      : "記録不足"}
                 </span>
                 <span className="grade-sub">
                   {detail.kind === "carrier" ? "LSO グレード" : "陸上簡易評価"}
@@ -190,6 +229,11 @@ export function Detail({ id, onBack }: DetailProps) {
                   {detail.grading_version ? ` ／ 評価 v${detail.grading_version}` : ""}
                 </span>
               </div>
+
+              {/* 点数の射程。測れなかった項目は重みごと合成から外れるので、
+                  半分しか見られていない着陸の点数が「全項目を見たうえでの
+                  点数」と読まれないよう、評点のすぐ下に必ず出す。 */}
+              {coverage && <p className="grade-coverage">{coverage}</p>}
 
               {detail.comment && <p className="grade-comment">{detail.comment}</p>}
 
@@ -235,7 +279,9 @@ export function Detail({ id, onBack }: DetailProps) {
                           <tr key={`${f.name}-${i}`}>
                             <td className="factor-name">{f.name}</td>
                             <td className={`factor-severity ${f.severity ?? ""}`}>
-                              {scored ? `${(f.score as number).toFixed(0)} 点${weight}` : (f.severity ?? "-")}
+                              {scored
+                                ? `${(f.score as number).toFixed(0)} 点${weight}`
+                                : (unscoredText(f) ?? f.severity ?? "-")}
                             </td>
                             <td className="factor-description">
                               {description}
