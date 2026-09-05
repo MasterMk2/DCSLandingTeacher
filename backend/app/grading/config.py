@@ -45,6 +45,8 @@ _DEFAULTS: dict[str, Any] = {
             "glideslope": 0.25,
             "centerline": 0.25,
         },
+        # 採点できた重みがこれ未満なら成績を出さない (grade/score は None)。
+        "min_measured_weight": 0.5,
         "overhead_weights": {
             "descent_rate": 0.25,
             "touchdown_speed": 0.15,
@@ -53,9 +55,12 @@ _DEFAULTS: dict[str, Any] = {
             "pattern": 0.20,
         },
         "airframe_classes": {
+            # 部分一致は大文字小文字を無視するが、ハイフンの有無までは
+            # 吸収しない。"OH-58" だけでは DCS の "OH58D" に当たらず、
+            # カイオワが輸送機バンド (default) で採点されていた。
             "helicopter": [
                 "UH-1", "AH-64", "AH-1", "UH-60", "CH-47", "KA-50", "Mi-8",
-                "Mi-24", "SA342", "OH-58",
+                "Mi-24", "SA342", "OH-58", "OH58",
             ],
             "fighter": [
                 "F-16", "FA-18", "F/A-18", "F-15", "F-14", "F-5", "F-4",
@@ -76,6 +81,10 @@ _DEFAULTS: dict[str, Any] = {
             "fast_fair": 1.10,
         },
         "speed_flare_exclude_s": 4.0,
+        "speed_reference_window_s": 10.0,
+        # 機体クラス別に「測るが採点しない」項目 (rotary-wing の接地速度比と
+        # グライドスロープ)。根拠の実測値は grading.yaml 側に書いてある。
+        "unscored_by_class": {"helicopter": ["touchdown_speed", "glideslope"]},
         "glideslope_error_deg": {"good": 0.35, "fair": 0.70, "poor": 1.50},
         "glideslope_window_s": 30.0,
         "glideslope_min_agl_m": 15.0,
@@ -92,6 +101,8 @@ _DEFAULTS: dict[str, Any] = {
         "pattern": {
             "min_downwind_s": 5.0,
             "min_break_s": 6.0,
+            # ダウンウィンド脚が実際に見つかったときだけオーバーヘッド扱い。
+            "require_downwind": True,
             "break_altitude_spread_m": {"good": 30.0, "fair": 75.0, "poor": 180.0},
             "alignment_error_m": {"good": 100.0, "fair": 250.0, "poor": 600.0},
             "downwind_course_error_deg": {"good": 8.0, "fair": 18.0, "poor": 35.0},

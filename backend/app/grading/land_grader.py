@@ -32,7 +32,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.grading.deviations import ApproachAnalysis, DeviationSample
-from app.grading.pattern import ApproachSegments, pattern_metrics, segment_approach
+from app.grading.pattern import (
+    ApproachSegments,
+    effective_approach_pattern,
+    pattern_metrics,
+    segment_approach,
+)
 
 MS_TO_FPM = 60.0 / 0.3048  # ~196.85
 M_TO_FT = 1.0 / 0.3048     # ~3.281
@@ -44,21 +49,39 @@ M_TO_FT = 1.0 / 0.3048     # ~3.281
 # ---------------------------------------------------------------------------
 CENTERLINE_DEVIATION_FLAG_M = 5.0  # centerline deviation that raises a flag (m)
 DESCENT_RATE_EXTREME_SCORE = 5.0   # floor score for an extremely hard landing
-SPEED_UNKNOWN_SCORE = 50.0         # score when touchdown-speed ratio is unknown
+
+#: ``unscored_reason`` values. Machine-readable (English, like ``verdict``);
+#: the UI maps them to Japanese for display.
+UNSCORED_NOT_MEASURED = "not-measured"
+UNSCORED_BY_AIRFRAME_CLASS = "not-applicable-to-airframe-class"
 
 
 @dataclass
 class ComponentScore:
     name: str
-    score: float          # 0..100
+    #: 0..100, or ``None`` when the component could not be measured (or does
+    #: not apply to this airframe class). ``None`` is NOT "zero" and not
+    #: "average": the component is left out of the weighted mean entirely,
+    #: and ``evidence["unscored_reason"]`` says why. Substituting a neutral
+    #: 50 here -- which this did until 2026-09-05 -- states a verdict on
+    #: something nobody measured, and did so on more than half of this
+    #: server's landings.
+    score: float | None
     weight: float
     evidence: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def measured(self) -> bool:
+        return self.score is not None
 
 
 @dataclass
 class LandGradeResult:
-    grade: str            # "A".."E"
-    score: float          # weighted total 0..100
+    #: "A".."E"、または ``None`` = 記録が足りず採点していない
+    #: (``min_measured_weight`` を参照)。
+    grade: str | None
+    #: 加重平均 0..100。``grade`` が ``None`` のときは同じく ``None``。
+    score: float | None
     comment: str
     components: list[ComponentScore]
     metrics: dict[str, Any]
@@ -67,7 +90,9 @@ class LandGradeResult:
         return [
             {
                 "name": c.name,
-                "score": round(c.score, 1),
+                "score": round(c.score, 1) if c.score is not None else None,
+                # 採点対象外の項目も重みは載せる: 「本来この比重で見る項目が
+                # 測れなかった」ことが読み手に伝わるのはこの数字だけ。
                 "weight": c.weight,
                 "evidence": c.evidence,
             }
@@ -171,7 +196,9 @@ def _descent_rate_score(fpm: float, bands: dict[str, Any]) -> tuple[float, str]:
     return score, label
 
 
-def _speed_ratio_score(ratio: float | None, bands: dict[str, Any]) -> tuple[float, str]:
+def _speed_ratio_score(
+    ratio: float | None, bands: dict[str, Any]
+) -> tuple[float | None, str]:
     """接地速度スコア。基準はファイナル区間 (フレア直前まで) の平均速度。
 
     バンドは **非対称**。フレアで数 % 減速して接地するのは正常な操作で、
@@ -180,7 +207,7 @@ def _speed_ratio_score(ratio: float | None, bands: dict[str, Any]) -> tuple[floa
     接地はフロート・オーバーランに直結するので狭くする。
     """
     if ratio is None:
-        return SPEED_UNKNOWN_SCORE, "unknown"
+        return None, "unknown"
     slow_good = float(bands.get("slow_good", 0.88))
     slow_fair = float(bands.get("slow_fair", 0.80))
     fast_good = float(bands.get("fast_good", 1.03))
@@ -410,8 +437,20 @@ def _approach_speed_reference(
     The last seconds before touchdown are excluded as well: that is the
     flare, where losing speed is the point. Including it would make the
     reference chase the very number being judged.
+
+    And the mean is taken over the LAST ``speed_reference_window_s`` of that
+    final, not all of it. The bands are a tolerance around a speed that was
+    *held*; the final now starts at the roll-out or the 1000 ft gate, which
+    on a straight-in is a minute and several kilometres out, and an approach
+    that decelerates from base-turn exit speed to threshold speed averages
+    well above what it settled on. Measured over 165 fixed-wing landings
+    here the whole-final mean put the median ratio at 0.87 -- under the 0.88
+    "on speed" floor, so the majority of correctly flown landings read as
+    slow -- against 0.91 over the last 10 s. Falls back to the whole final,
+    then the whole approach, when the window is too thin to mean anything.
     """
     flare_s = float(settings.get("speed_flare_exclude_s", 4.0))
+    window_s = float(settings.get("speed_reference_window_s", 10.0))
     cutoff = analysis.touchdown_time - flare_s
 
     def mean_of(samples: list[DeviationSample]) -> float | None:
@@ -420,14 +459,23 @@ def _approach_speed_reference(
 
     if segments.has_final_cut:
         stabilized = [s for s in segments.final if s.time <= cutoff]
+        held = [s for s in stabilized if s.time >= cutoff - window_s]
+        mean = mean_of(held)
+        if mean is not None and len(held) >= 3:
+            return mean, "final"
         mean = mean_of(stabilized)
         if mean is not None and len(stabilized) >= 3:
-            return mean, "final"
+            return mean, "final-whole"
     windowed = [s for s in analysis.samples if s.time <= cutoff]
     mean = mean_of(windowed)
-    if mean is not None:
+    if mean is not None and len(windowed) >= 3:
         return mean, "approach"
-    return mean_of(analysis.samples), "all"
+    # 以前はここで「全サンプルの平均」に落ちていたが、その集合には接地
+    # サンプル自身が入っている。approach_track が接地の 1 点しか残って
+    # いない着陸 (この鯖に 37 件) では基準速度 = 接地速度になり、比は
+    # 必ず 1.00、つまり自分で自分を採点して満点が出ていた (#7 など)。
+    # 基準になる進入区間が無いなら、接地速度は測れていない。
+    return None, "none"
 
 
 def _centerline_overshoot_m(analysis: ApproachAnalysis) -> float | None:
@@ -486,10 +534,15 @@ def _pattern_component(
     Returns ``(None, metrics)`` when the recording does not actually hold a
     pattern to judge -- e.g. a landing detected from a track that starts on
     final. Scoring an absent downwind would invent an error.
+
+    Note what is NOT enough on its own: the roll-out alignment. Every
+    approach ever flown ends in a roll-out onto the centerline, so its
+    offset says nothing about whether a pattern was flown -- the caller
+    only reaches this function once :func:`is_overhead_pattern` has found
+    the downwind leg that makes an overhead an overhead.
     """
-    metrics = pattern_metrics(analysis, segments)
+    metrics = pattern_metrics(analysis, segments, settings)
     bands = settings.get("pattern", {})
-    min_downwind_s = float(bands.get("min_downwind_s", 6.0))
 
     parts: list[tuple[str, float]] = []
 
@@ -508,15 +561,8 @@ def _pattern_component(
             )
         )
 
-    break_duration = metrics.get("break_duration_s")
     break_spread = metrics.get("break_altitude_spread_m")
-    break_usable = (
-        break_duration is not None
-        and break_duration >= float(bands.get("min_break_s", 6.0))
-        and break_spread is not None
-    )
-    metrics["break_judged"] = break_usable
-    if break_usable:
+    if metrics.get("break_judged"):
         band = bands.get("break_altitude_spread_m", {})
         parts.append(
             (
@@ -530,12 +576,9 @@ def _pattern_component(
             )
         )
 
-    duration = metrics.get("downwind_duration_s")
     # 脚として短すぎるダウンウィンドで取った平均には意味がないので、
-    # 値は残しつつ採点からは外す。
-    downwind_usable = duration is not None and duration >= min_downwind_s
-    metrics["downwind_judged"] = downwind_usable
-    if downwind_usable:
+    # 値は残しつつ採点からは外す (判定は pattern.mark_judged)。
+    if metrics.get("downwind_judged"):
         course_error = metrics.get("downwind_course_error_deg")
         if course_error is not None:
             band = bands.get("downwind_course_error_deg", {})
@@ -581,7 +624,16 @@ def grade_land_landing(
     """Grade a land landing; ``config`` is a :class:`GradingConfig`."""
     settings = config.land_grading
     segments = segment_approach(analysis, settings)
-    is_overhead = analysis.approach_pattern == "overhead"
+    # パターン判定は軌跡から決める。検出器のラベル (取り込み時にヘディング
+    # 変化率だけで付けた見込み値) を信じると、長いファイナルへの旋回進入や
+    # ヘリの進入まで overhead になり、存在しないパターンを採点することに
+    # なる (Landing #513 / #516)。ここが重み配分と pattern コンポーネントの
+    # 有無を同時に決める唯一の判断点。
+    pattern_values = pattern_metrics(analysis, segments, settings)
+    effective_pattern = effective_approach_pattern(
+        analysis, settings, metrics=pattern_values, segments=segments
+    )
+    is_overhead = effective_pattern == "overhead"
     weights = dict(settings["weights"])
     if is_overhead and settings.get("overhead_weights"):
         weights = dict(settings["overhead_weights"])
@@ -590,6 +642,11 @@ def grade_land_landing(
     frame_class = airframe_class(analysis.airframe, settings.get("airframe_classes", {}))
     rate_bands = descent_rate_bands(settings["descent_rate_fpm"], frame_class)
     rate_score, rate_label = _descent_rate_score(descent_fpm, rate_bands)
+    # このクラスでは「測るが採点しない」項目 (ヘリの接地速度比など)。
+    unscored = {
+        str(name)
+        for name in (settings.get("unscored_by_class", {}) or {}).get(frame_class, ())
+    }
 
     mean_speed, speed_reference = _approach_speed_reference(analysis, settings, segments)
     speed_ratio = (
@@ -619,7 +676,7 @@ def grade_land_landing(
     gs_score = (
         _band_score(mean_gs_err, gs_bands["good"], gs_bands["fair"], gs_bands["poor"])
         if mean_gs_err is not None
-        else 50.0
+        else None
     )
 
     # センターラインは接地直前の短い窓で採る。長い窓の max だと、窓の先頭
@@ -636,9 +693,13 @@ def grade_land_landing(
     cl_score = (
         _band_score(max_cl_dev, cl_bands["good"], cl_bands["fair"], cl_bands["poor"])
         if max_cl_dev is not None
-        else 50.0
+        else None
     )
     overshoot_m = _centerline_overshoot_m(analysis)
+
+    def scored(name: str, score: float | None) -> float | None:
+        """このクラスで採点対象外の項目は、測れていても点を付けない。"""
+        return None if name in unscored else score
 
     components = [
         ComponentScore(
@@ -657,7 +718,7 @@ def grade_land_landing(
         ),
         ComponentScore(
             "touchdown_speed",
-            speed_score,
+            scored("touchdown_speed", speed_score),
             weights["touchdown_speed"],
             {
                 "touchdown_speed_ms": analysis.touchdown_speed_ms,
@@ -673,7 +734,7 @@ def grade_land_landing(
         ),
         ComponentScore(
             "glideslope",
-            gs_score,
+            scored("glideslope", gs_score),
             weights["glideslope"],
             {
                 # 採点はこの角度誤差で行う (メートルは距離依存で比較不能)。
@@ -720,7 +781,7 @@ def grade_land_landing(
         ),
         ComponentScore(
             "centerline",
-            cl_score,
+            scored("centerline", cl_score),
             weights["centerline"],
             {
                 "max_abs_deviation_m": (
@@ -733,7 +794,7 @@ def grade_land_landing(
         ),
     ]
 
-    pattern_component, pattern_values = (None, {})
+    pattern_component = None
     if is_overhead:
         pattern_component, pattern_values = _pattern_component(
             analysis, settings, segments, weights.get("pattern", 0.0)
@@ -741,29 +802,66 @@ def grade_land_landing(
     if pattern_component is not None:
         components.append(pattern_component)
 
-    # 重みは正規化してから合成する。pattern を出せなかった着陸で
-    # 合計重みが 1.0 未満のまま加重和を取ると、点数だけが目減りして
-    # 「パターンが記録に入っていなかった」ことが減点に化ける。
-    weight_sum = sum(c.weight for c in components) or 1.0
-    total = sum(c.score * c.weight for c in components) / weight_sum
-    letters = settings["letters"]
-    grade = "E"
-    for letter in ("A", "B", "C", "D"):
-        if total >= letters[letter]:
-            grade = letter
-            break
+    # 測れなかった / このクラスでは採点しない項目には理由を残す。UI は
+    # これを見て「未評価」と出す。値そのものは evidence に入ったまま。
+    for component in components:
+        if component.score is None:
+            component.evidence["unscored_reason"] = (
+                UNSCORED_BY_AIRFRAME_CLASS
+                if component.name in unscored
+                else UNSCORED_NOT_MEASURED
+            )
+
+    # 重みは正規化してから合成する。測れなかった項目・このクラスでは採点
+    # しない項目は合成から外し、残りの重みだけで割る。1.0 のまま加重和を
+    # 取ると、点数だけが目減りして「記録に入っていなかった」ことが減点に
+    # 化ける。逆に中立点 50 を置くのは、誰も測っていないものについて
+    # 「並だった」と判定を下すことになる。
+    measured = [c for c in components if c.score is not None]
+    weight_sum = sum(c.weight for c in measured)
+    total: float | None = (
+        sum(c.score * c.weight for c in measured) / weight_sum
+        if weight_sum > 0
+        else None
+    )
+    # ...ただし正規化には限界がある。接地の瞬間しか記録に残っていない
+    # 着陸では降下率しか測れず、滑らかに接地していれば「進入を誰も見て
+    # いない着陸に A」が出てしまう。測れた重みが規定に届かない場合は、
+    # 成績を出さない (根拠データと測定値は残す)。
+    min_weight = float(settings.get("min_measured_weight", 0.5))
+    graded = total is not None and weight_sum >= min_weight
+    grade: str | None = None
+    if graded:
+        letters = settings["letters"]
+        grade = "E"
+        for letter in ("A", "B", "C", "D"):
+            if total >= letters[letter]:
+                grade = letter
+                break
+    else:
+        total = None
+
+    by_name = {c.name: c for c in components}
+
+    def judged(name: str) -> bool:
+        component = by_name.get(name)
+        return component is not None and component.score is not None
 
     comment = _build_comment(
         grade,
         rate_label,
-        speed_label,
-        mean_gs_err,
-        mean_signed_gs_err,
-        max_cl_dev,
+
+        speed_label if judged("touchdown_speed") else None,
+        mean_gs_err if judged("glideslope") else None,
+        mean_signed_gs_err if judged("glideslope") else None,
+        max_cl_dev if judged("centerline") else None,
         pattern_values if pattern_component is not None else None,
         float(gs_bands["good"]),
-        gs_error,
+        gs_error if judged("glideslope") else None,
         descent_fpm,
+        unscored_note=_unscored_note(
+            components, unscored, frame_class, gs_error, graded=graded
+        ),
     )
     metrics = {
         "touchdown_descent_rate_fpm": round(descent_fpm, 1),
@@ -796,9 +894,20 @@ def grade_land_landing(
         "glideslope_method": gs_method,
         "crosswind_crab_deg": analysis.crosswind_crab_deg,
         "outcome": analysis.outcome,
-        "approach_pattern": analysis.approach_pattern,
+        # 軌跡から決めたパターン。検出器のラベル (取り込み時の見込み) が
+        # 違っていた場合はこちらが正で、呼び出し側が landings 行にも書き戻す。
+        "approach_pattern": effective_pattern,
+        "approach_pattern_detected": analysis.approach_pattern,
         "airframe_class": frame_class,
         "speed_reference": speed_reference,
+        # 何を採点できたか。合計重みが 1.0 に満たない着陸は、その分だけ
+        # 「見えていない」ことを意味する --- 点数だけ見て読み違えないよう、
+        # 内訳を必ず出す。
+        "measured_components": [c.name for c in components if c.score is not None],
+        "unmeasured_components": [c.name for c in components if c.score is None],
+        "measured_weight": round(weight_sum, 3),
+        "min_measured_weight": min_weight,
+        "graded": graded,
         # 旋回明けの時刻 (接地からの秒数)。None = 旋回を検出していない。
         "rollout_before_touchdown_s": (
             round(analysis.touchdown_time - segments.rollout_time, 1)
@@ -827,17 +936,74 @@ def grade_land_landing(
         )
     return LandGradeResult(
         grade=grade,
-        score=round(total, 1),
+        score=round(total, 1) if total is not None else None,
         comment=comment,
         components=components,
         metrics=metrics,
     )
 
 
+#: 講評文で項目名を出すときの日本語。
+_COMPONENT_JA = {
+    "descent_rate": "接地降下率",
+    "touchdown_speed": "接地速度",
+    "glideslope": "グライドスロープ",
+    "centerline": "センターライン保持",
+    "pattern": "オーバーヘッドパターン",
+}
+_AIRFRAME_CLASS_JA = {"helicopter": "ヘリコプター", "fighter": "戦闘機"}
+
+
+def _unscored_note(
+    components: list[ComponentScore],
+    unscored: set[str],
+    frame_class: str,
+    gs_error: "GlideslopeError | None",
+    graded: bool = True,
+) -> str:
+    """採点しなかった項目について、点数の後ろに付ける一文。
+
+    黙って項目を落とすと、残った項目だけで出た点数が「全項目を見た上での
+    点数」と読まれる。逆に「測れなかったので 50 点」と置くのは、誰も
+    測っていないものに判定を下すことになる --- どちらも読み手を誤らせる
+    ので、外したことを本文に書く。
+    """
+    missing = [
+        c.name
+        for c in components
+        if c.score is None and c.name not in unscored
+    ]
+    excluded = [c.name for c in components if c.score is None and c.name in unscored]
+    notes: list[str] = []
+    if excluded:
+        names = "・".join(_COMPONENT_JA.get(n, n) for n in excluded)
+        klass = _AIRFRAME_CLASS_JA.get(frame_class, "この機体クラス")
+        detail = ""
+        if "glideslope" in excluded and gs_error is not None:
+            angle = gs_error.mean_angle_deg
+            if angle is not None:
+                detail = f"（実測の進入経路角は {angle:.1f}°）"
+        notes.append(
+            f"{klass}に当てはめられる基準が無いため、{names}は測定のみで"
+            f"採点していません{detail}。"
+        )
+    if missing:
+        names = "・".join(_COMPONENT_JA.get(n, n) for n in missing)
+        notes.append(f"今回の記録では{names}を測れなかったため、評価から除いています。")
+    if not graded:
+        measured = [c.name for c in components if c.score is not None]
+        names = "・".join(_COMPONENT_JA.get(n, n) for n in measured) or "なし"
+        notes.append(
+            f"測定できた項目（{names}）だけでは進入の良し悪しを判断できないため、"
+            "この着陸には成績を付けていません。"
+        )
+    return "".join(notes)
+
+
 def _build_comment(
-    grade: str,
+    grade: str | None,
     rate_label: str,
-    speed_label: str,
+    speed_label: str | None,
     mean_gs_err: float | None,
     mean_signed_gs_err: float | None,
     max_cl_dev: float | None,
@@ -845,6 +1011,7 @@ def _build_comment(
     gs_good_deg: float = 0.35,
     gs_error: "GlideslopeError | None" = None,
     descent_fpm: float | None = None,
+    unscored_note: str = "",
 ) -> str:
     # 横ずれは ft で述べる (Issue D-4)。グライドスロープは角度で述べる:
     # ft だと同じ操縦精度でも遠いほど大きな数字になり、比較にならない。
@@ -855,7 +1022,11 @@ def _build_comment(
         parts.append(f"接地は{descent}（{descent_fpm:.0f} fpm）")
     else:
         parts.append(f"接地は{descent}")
-    parts.append(f"速度は{_SPEED_JA.get(speed_label, speed_label)}")
+    # 採点しなかった項目については何も言わない。「測れなかった」を講評の
+    # 本文に混ぜると、操縦の指摘と記録の不足が同じ列に並んでしまう
+    # (末尾の一文でまとめて述べる)。
+    if speed_label is not None:
+        parts.append(f"速度は{_SPEED_JA.get(speed_label, speed_label)}")
     gs_method = gs_error.method if gs_error is not None else "none"
     if mean_gs_err is not None and mean_signed_gs_err is not None:
         if mean_gs_err <= gs_good_deg:
@@ -901,7 +1072,17 @@ def _build_comment(
         "D": "着陸に難があります。進入の安定性を意識しましょう。",
         "E": "着陸は危ういものでした。基本の手順を見直しましょう。",
     }
-    return "、".join(parts) + "。" + verdicts[grade]
+    body = ("、".join(parts) + "。") if parts else ""
+    if grade is None:
+        # 採点していない着陸に講評の総括を付けると、成績が付いているように
+        # 読める。何を見られたかだけ述べて、判定はしない。
+        return body + unscored_note
+    # 一部しか見られていない着陸を「見事な着陸です」と言い切ると、測れた
+    # 範囲の話が全体の評価として読まれる。留保は点数の隣に置く。
+    verdict = verdicts[grade]
+    if unscored_note:
+        verdict = "評価できた範囲では、" + verdict
+    return body + verdict + unscored_note
 
 
 def _pattern_comment_parts(pattern: dict[str, Any] | None) -> list[str]:

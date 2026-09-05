@@ -25,6 +25,7 @@ from app.grading.config import GradingConfig
 from app.grading.deviations import ApproachAnalysis, build_approach_analysis
 from app.grading.land_grader import LandGradeResult, grade_land_landing
 from app.grading.lso_grader import LsoGradeResult, grade_carrier_approach
+from app.grading.pattern import effective_approach_pattern
 from app.ingest import LandingContext
 from app.models.entities import DcsObject, Landing
 
@@ -47,7 +48,26 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
         if sample.agl is not None:
             sample.glideslope_deviation = sample.agl - sample.distance_to_go * tan_slope
 
-GRADING_VERSION = "1"
+# 2 (2026-09-05): 測れなかった採点項目は中立点 50 ではなく重みごと外す /
+# 進入パターンを軌跡から決め直す / ヘリの接地速度比・進入角は採点しない /
+# 基準速度をファイナル末尾の保持速度で取る / 記録が足りない着陸には成績を
+# 付けない。既存の着陸は再採点しないと v1 の点数のまま残る。
+GRADING_VERSION = "2"
+
+
+def _row_approach_pattern(
+    event: LandingEvent, result: LandGradeResult | LsoGradeResult
+) -> str | None:
+    """``landings`` 行に書く進入パターン。
+
+    陸上では採点側が軌跡から決め直した値が正で、検出器のラベル
+    (``event.approach_pattern``) は取り込み時の見込みでしかない。書き戻さ
+    ないと、詳細画面が「オーバーヘッド」と表示したまま採点だけが別の
+    判断で動く、という食い違いが残る。
+    """
+    if isinstance(result, LandGradeResult):
+        return result.metrics.get("approach_pattern") or event.approach_pattern
+    return event.approach_pattern
 
 
 def _touchdown_epoch(
@@ -168,7 +188,7 @@ class LandingPipeline:
             landing.factors = result.factors_payload()
             landing.metrics = dict(result.metrics)
             landing.approach_track = analysis.as_dict()
-            landing.approach_pattern = event.approach_pattern
+            landing.approach_pattern = _row_approach_pattern(event, result)
             landing.grading_version = GRADING_VERSION
             landing.graded_at = _utcnow()
             await session.commit()
@@ -219,6 +239,18 @@ class LandingPipeline:
         )
         if event.kind == "carrier":
             return analysis, grade_carrier_approach(analysis, self._config), None
+        # 進入パターンは軌跡から決め直す。検出器のラベル (取り込み時に
+        # ヘディング変化率だけで付けた見込み値) は ``analysis`` にヒントと
+        # して残したまま、基準スロープの選択と採点にはこちらを使う。
+        # 確定値は result.metrics["approach_pattern"] に載り、行にはそれを
+        # 書く (:meth:`_persist` / :meth:`finalize_landing`)。
+        _reapply_reference_slope(
+            analysis,
+            self._config.glideslope_for(
+                "land",
+                effective_approach_pattern(analysis, self._config.land_grading),
+            ),
+        )
         result = grade_land_landing(analysis, self._config)
         return analysis, result, result.score
 
@@ -248,7 +280,7 @@ class LandingPipeline:
             "created_at": _utcnow().isoformat(),
             "grade": result.grade,
             "score": score,
-            "approach_pattern": event.approach_pattern,
+            "approach_pattern": _row_approach_pattern(event, result),
             "pilot": context.pilot,
             "airframe": context.airframe,
             "venue_name": event.carrier_name if event.kind == "carrier" else None,
@@ -301,15 +333,28 @@ class LandingPipeline:
         # 入れるようにしたのは後からなので、それ以前に記録された着陸では
         # 空のままになる。ここで補わないと、既存データの再採点だけ
         # 「パターン不明・機体不明」で採点されて結果が食い違う。
-        analysis.approach_pattern = landing.approach_pattern or analysis.approach_pattern
+        #
+        # 補うのはあくまで **ヒント** としてのラベル。行の値が過去の再採点で
+        # 確定させた値であっても、オーバーヘッドかどうかは毎回軌跡から
+        # 決め直すので、古い誤ラベルが再採点のたびに勝ち続けることはない。
+        if analysis.approach_pattern in (None, "", "unknown"):
+            analysis.approach_pattern = landing.approach_pattern or "unknown"
         if analysis.airframe is None:
             analysis.airframe = await self._airframe_of(landing)
         if landing.kind != "carrier":
             # 基準スロープは設定から引き直す。保存済みの値を使い続けると
             # `overhead_glideslope_deg` を変えても既存の着陸に反映されず、
             # 「設定を変えて再採点」が効かない。
+            #
+            # パターンは軌跡から決め直したものを使う: 行に入っている値
+            # (検出器のラベル) で基準スロープを選ぶと、採点が使うパターン
+            # と食い違ったままスロープだけ別物になる。
             _reapply_reference_slope(
-                analysis, config.glideslope_for("land", analysis.approach_pattern)
+                analysis,
+                config.glideslope_for(
+                    "land",
+                    effective_approach_pattern(analysis, config.land_grading),
+                ),
             )
         if landing.kind == "carrier":
             result = grade_carrier_approach(analysis, config)
@@ -327,9 +372,17 @@ class LandingPipeline:
             landing.comment = result.comment
             landing.factors = result.factors_payload()
             landing.metrics = dict(result.metrics)
+            # 陸上は採点側が軌跡から決め直したパターンを行にも反映する。
+            # ここを書かないと、詳細画面のラベルだけ検出器の見込み値のまま
+            # 残り、採点は別の判断で動く。
+            if landing.kind != "carrier":
+                landing.approach_pattern = (
+                    result.metrics.get("approach_pattern") or landing.approach_pattern
+                )
             landing.grading_version = GRADING_VERSION
             landing.graded_at = _utcnow()
             await session.commit()
+            approach_pattern = landing.approach_pattern
         return {
             "id": landing.id,
             "grade": result.grade,
@@ -337,6 +390,7 @@ class LandingPipeline:
             "comment": result.comment,
             "factors": result.factors_payload(),
             "metrics": dict(result.metrics),
+            "approach_pattern": approach_pattern,
         }
 
     # ------------------------------------------------------------------
@@ -397,7 +451,7 @@ class LandingPipeline:
                 factors=result.factors_payload(),
                 metrics=dict(result.metrics),
                 approach_track=analysis.as_dict(),
-                approach_pattern=event.approach_pattern,
+                approach_pattern=_row_approach_pattern(event, result),
                 grading_version=GRADING_VERSION,
                 graded_at=_utcnow(),
             )

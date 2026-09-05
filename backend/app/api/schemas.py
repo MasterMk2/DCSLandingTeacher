@@ -111,6 +111,9 @@ class RegradeResponse(BaseModel):
     comment: str | None = None
     factors: list[FactorOut] = []
     metrics: dict[str, Any] | None = None
+    #: 再採点で確定した進入パターン。陸上では軌跡から決め直すので、
+    #: 呼び出し元が持っている値と変わることがある。
+    approach_pattern: str | None = None
 
 
 class LandingDetail(LandingSummary):

@@ -216,7 +216,9 @@ def test_glidepath_is_not_judged_when_there_is_no_approach_to_judge() -> None:
     ~17 m from touchdown and ~8 m up (an aircraft creeping onto the spot)
     produced a reported mean glidepath error of 37.9 degrees, because the
     angle was being computed from a handful of metres of distance. The
-    component has to report "unknown" and score neutrally instead.
+    component has to report "unknown" and carry no score at all: a neutral
+    50 is still a verdict, and it was landing on 54% of this server's land
+    landings at a quarter of the weight.
     """
     from app.grading.config import GradingConfig
     from app.grading.deviations import ApproachAnalysis
@@ -248,7 +250,11 @@ def test_glidepath_is_not_judged_when_there_is_no_approach_to_judge() -> None:
     glideslope = next(c for c in result.components if c.name == "glideslope")
     assert glideslope.evidence["mean_abs_error_deg"] is None
     assert glideslope.evidence["samples"] == 0
-    assert glideslope.score == pytest.approx(50.0)
+    assert glideslope.score is None
+    assert glideslope.evidence["unscored_reason"] == "not-measured"
+    # そして重みからも外れる: 測れなかったことが減点にも加点にもならない。
+    assert "glideslope" in result.metrics["unmeasured_components"]
+    assert result.metrics["measured_weight"] < 1.0
 
 
 def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> None:

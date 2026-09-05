@@ -788,16 +788,40 @@ def test_descent_rate_score_is_continuous_across_bands() -> None:
     assert abs(just_under - just_over) < 1.0
 
 
-def test_overhead_pattern_is_scored_and_straight_in_is_not() -> None:
-    overhead = grade_land_landing(_pattern_analysis(), CONFIG)
-    straight_in = grade_land_landing(
+def test_the_downwind_leg_decides_whether_a_pattern_was_flown() -> None:
+    """The pattern is scored when the track HOLDS a pattern, not when the
+    detector said so.
+
+    The label on the landing row is a heading-rate heuristic computed at
+    ingest, and it is wrong often enough to matter: it called 207 of 403
+    production land landings "overhead", 63 of them with no downwind leg in
+    the recording at all -- every sweeping turn onto a long final and every
+    helicopter arrival. Those were then scored on the roll-out alignment
+    alone, which every approach ever flown has. So the geometry decides,
+    both ways round: a circuit is judged as one even when the label says
+    straight-in, and a track with no downwind gets no pattern component
+    even when the label says overhead.
+    """
+    circuit_labelled_straight_in = grade_land_landing(
         _pattern_analysis(approach_pattern="straight_in"), CONFIG
     )
+    no_downwind_labelled_overhead = grade_land_landing(
+        _pattern_analysis(with_downwind=False, approach_pattern="overhead"), CONFIG
+    )
 
-    pattern = next(c for c in overhead.components if c.name == "pattern")
+    pattern = next(
+        c for c in circuit_labelled_straight_in.components if c.name == "pattern"
+    )
     assert pattern.evidence["downwind_judged"] is True
     assert pattern.score > 90
-    assert all(c.name != "pattern" for c in straight_in.components)
+    assert circuit_labelled_straight_in.metrics["approach_pattern"] == "overhead"
+
+    assert all(c.name != "pattern" for c in no_downwind_labelled_overhead.components)
+    assert no_downwind_labelled_overhead.metrics["approach_pattern"] != "overhead"
+    # 検出器のラベルは捨てずに残す (どちらが変わったのか追えるように)。
+    assert (
+        no_downwind_labelled_overhead.metrics["approach_pattern_detected"] == "overhead"
+    )
 
 
 def test_pattern_component_catches_an_overshot_rollout() -> None:
@@ -1385,3 +1409,234 @@ def test_carrier_course_prefers_the_touchdown_heading_over_the_track() -> None:
         TrackSample(time=20.0, latitude=35.000, longitude=140.0),
     ]
     assert estimate_course_deg(samples, 9.0, kind="carrier") == pytest.approx(9.0)
+
+
+# ---------------------------------------------------------------------------
+# What the grader is allowed to have an opinion about
+# ---------------------------------------------------------------------------
+
+
+def test_a_component_that_could_not_be_measured_carries_no_score() -> None:
+    """Unmeasurable is not "average".
+
+    A neutral 50 reads as a verdict -- "we looked, it was middling" -- on
+    something nobody measured, and it lands at a fifth to a quarter of the
+    weight. Across 403 production land landings it was doing that to 216
+    glideslope components, 82 centerline and 39 speed. The component has to
+    drop out of the weighted mean instead, saying why.
+    """
+    from app.grading.deviations import DeviationSample
+
+    # A hover-on: no distance to derive an approach angle from, and no
+    # approach segment to take a reference speed over.
+    touchdown_time = 100.0
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=2.0,
+        touchdown_descent_rate_ms=0.5,
+        airframe="TF-51D",  # not rotary: the drop-out must not need a class
+        samples=[
+            DeviationSample(
+                time=touchdown_time - 8.0 + i * 0.25,
+                distance_to_go=12.0,
+                glideslope_deviation=1.0,
+                centerline_deviation=0.4,
+                speed=2.0,
+                agl=6.0,
+            )
+            for i in range(32)
+        ],
+    )
+    result = grade_land_landing(analysis, CONFIG)
+
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert glideslope.score is None
+    assert glideslope.evidence["unscored_reason"] == "not-measured"
+    assert result.metrics["unmeasured_components"] == ["glideslope"]
+    # 残った項目だけで正規化する: 測れなかったことが減点になっていない。
+    assert result.metrics["measured_weight"] == pytest.approx(0.75)
+    measured = [c for c in result.components if c.score is not None]
+    expected = sum(c.score * c.weight for c in measured) / 0.75
+    assert result.score == pytest.approx(expected, abs=0.05)
+
+
+def test_the_touchdown_speed_reference_is_never_the_touchdown_itself() -> None:
+    """A recording that caught only the touchdown cannot judge its speed.
+
+    The old fallback averaged "all samples", which includes the touchdown
+    sample -- so with a single-sample track the reference WAS the number
+    being judged, the ratio came out 1.00, and the component scored 100 for
+    a landing whose approach was never recorded. 37 of 403 production
+    landings hold exactly one approach sample.
+    """
+    from app.grading.deviations import DeviationSample
+
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=100.0,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=1.0,
+        airframe="F-16C_50",
+        samples=[
+            DeviationSample(
+                time=100.0,
+                distance_to_go=0.0,
+                glideslope_deviation=0.0,
+                centerline_deviation=0.0,
+                speed=70.0,
+                agl=0.5,
+            )
+        ],
+    )
+    result = grade_land_landing(analysis, CONFIG)
+
+    speed = next(c for c in result.components if c.name == "touchdown_speed")
+    assert speed.score is None
+    assert speed.evidence["speed_ratio"] is None
+    assert speed.evidence["speed_reference"] == "none"
+
+
+def test_a_landing_nobody_recorded_the_approach_of_gets_no_grade() -> None:
+    """Renormalising the weights is right up to a point, and past it the
+    number stops being a grade: with only the descent rate left, a smooth
+    touchdown scored 100/A for an approach that was never recorded."""
+    from app.grading.deviations import DeviationSample
+
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=100.0,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=0.3,  # very smooth -> descent_rate 100
+        airframe="F-16C_50",
+        samples=[
+            DeviationSample(
+                time=100.0,
+                distance_to_go=0.0,
+                glideslope_deviation=0.0,
+                centerline_deviation=None,
+                speed=70.0,
+                agl=0.5,
+            )
+        ],
+    )
+    result = grade_land_landing(analysis, CONFIG)
+
+    assert result.metrics["measured_components"] == ["descent_rate"]
+    assert result.metrics["measured_weight"] == pytest.approx(0.30)
+    assert result.metrics["graded"] is False
+    assert result.grade is None
+    assert result.score is None
+    assert "成績を付けていません" in result.comment
+
+
+def test_rotary_wing_speed_and_glidepath_are_measured_but_not_scored() -> None:
+    """The touchdown/approach speed ratio and the 3 deg reference slope are
+    fixed-wing quantities. A helicopter decelerates to the hover, so the
+    ratio is undefined by construction -- production rotary landings ran
+    0.17-1.39 with a median of 0.57 and 84 of 130 scored <= 30 -- and its
+    approach angle has no published reference to judge against. Both are
+    reported and left out of the score."""
+    helicopter = grade_land_landing(
+        _pattern_analysis(
+            airframe="UH-1H",
+            downwind_speed_ms=40.0,
+            final_speed_ms=25.0,
+            touchdown_speed_ms=3.0,
+            touchdown_descent_ms=0.4,
+        ),
+        CONFIG,
+    )
+
+    speed = next(c for c in helicopter.components if c.name == "touchdown_speed")
+    glideslope = next(c for c in helicopter.components if c.name == "glideslope")
+    assert speed.score is None and glideslope.score is None
+    for component in (speed, glideslope):
+        assert (
+            component.evidence["unscored_reason"] == "not-applicable-to-airframe-class"
+        )
+    # 測定値そのものは根拠として残す (採点しないだけ)。
+    assert speed.evidence["speed_ratio"] is not None
+    assert "採点していません" in helicopter.comment
+
+    # 同じ軌跡を戦闘機で飛べば、どちらも採点される。
+    fighter = grade_land_landing(_pattern_analysis(airframe="F-16C_50"), CONFIG)
+    assert all(c.score is not None for c in fighter.components)
+
+
+def test_the_speed_reference_is_the_speed_held_on_final_not_the_whole_final() -> None:
+    """The bands are a tolerance around a speed that was HELD.
+
+    The final now starts at the roll-out or the 1000 ft gate, which on a
+    straight-in is a minute and several km out, so averaging all of it
+    includes the deceleration onto approach speed and reads high. Measured
+    over 165 production fixed-wing landings, the whole-final mean put the
+    median ratio at 0.87 -- under the 0.88 "on speed" floor -- against 0.91
+    over the last 10 s.
+    """
+    from app.grading.config import apply_config_overrides
+    from app.grading.deviations import DeviationSample
+
+    # A straight-in from above the 1000 ft gate (so the final is cut at the
+    # gate, as on a real one), decelerating 120 -> 80 m/s and touching down
+    # at 78: on speed against what it settled on, slow against the average
+    # of a final that still holds the deceleration.
+    touchdown_time = 200.0
+    import math
+
+    tan_slope = math.tan(math.radians(3.0))
+    samples = []
+    for step in range(121):
+        fraction = step / 120.0
+        dtg = 8000.0 * (1.0 - fraction)
+        # 120 kt-ish inbound, slowed onto approach speed in the middle third,
+        # then held at 80 for the last ~20 s.
+        speed = 120.0 - 40.0 * min(1.0, max(0.0, (fraction - 0.5) / 0.35))
+        samples.append(
+            DeviationSample(
+                time=touchdown_time - 120.0 + step,
+                distance_to_go=dtg,
+                glideslope_deviation=0.0,
+                centerline_deviation=0.0,
+                speed=speed,
+                agl=dtg * tan_slope,
+                signed_distance_to_go=dtg,
+            )
+        )
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=78.0,
+        touchdown_descent_rate_ms=1.5,
+        airframe="F-16C_50",
+        samples=samples,
+    )
+
+    held = grade_land_landing(analysis, CONFIG)
+    speed = next(c for c in held.components if c.name == "touchdown_speed")
+    assert speed.evidence["mean_approach_speed_ms"] == pytest.approx(80.0, abs=1.0)
+    assert speed.score == pytest.approx(100.0)
+
+    # 窓を長く取れば減速区間が混ざり、同じ着陸が「遅い」に転ぶ。
+    whole = grade_land_landing(
+        analysis,
+        apply_config_overrides(
+            CONFIG, {"land_grading": {"speed_reference_window_s": 300.0}}
+        ),
+    )
+    whole_speed = next(c for c in whole.components if c.name == "touchdown_speed")
+    assert whole_speed.evidence["mean_approach_speed_ms"] > 95.0
+    assert whole_speed.evidence["verdict"] == "slow"
+    assert whole_speed.score < 50.0

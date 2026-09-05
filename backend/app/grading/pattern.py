@@ -371,10 +371,61 @@ def approach_side(analysis: ApproachAnalysis) -> float | None:
     return 1.0 if extreme > 0 else -1.0
 
 
+def mark_judged(metrics: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    """Fill in ``break_judged`` / ``downwind_judged`` on pattern metrics.
+
+    Which legs are long enough to mean anything is asked in two places --
+    when deciding whether this was an overhead pattern at all, and when
+    scoring one -- so the rule lives here rather than in either caller. A
+    leg too short to read a heading off is reported (so it is visible why)
+    but never judged: the mean of 2 seconds of a turn is not a downwind
+    course.
+    """
+    bands = settings.get("pattern", {}) or {}
+    break_duration = metrics.get("break_duration_s")
+    metrics["break_judged"] = bool(
+        break_duration is not None
+        and break_duration >= float(bands.get("min_break_s", 6.0))
+        and metrics.get("break_altitude_spread_m") is not None
+    )
+    downwind_duration = metrics.get("downwind_duration_s")
+    metrics["downwind_judged"] = bool(
+        downwind_duration is not None
+        and downwind_duration >= float(bands.get("min_downwind_s", 5.0))
+    )
+    return metrics
+
+
+def is_overhead_pattern(metrics: dict[str, Any], settings: dict[str, Any]) -> bool:
+    """Did the recording actually hold an overhead pattern?
+
+    An overhead is initial -> break -> **downwind** -> base -> final, and
+    the downwind is the leg that makes it one: it is where the pattern is
+    set up, and it is what a curving straight-in join does not have. So the
+    downwind leg being present in the track IS the test.
+
+    The alternative -- believing the detector's heading-rate heuristic --
+    labels every sweeping turn onto a long final, and every helicopter
+    arrival, an overhead pattern. See ``pattern.require_downwind`` in
+    ``config/grading.yaml`` for the measured effect of that on this
+    server's landings.
+    """
+    bands = settings.get("pattern", {}) or {}
+    if not bands.get("require_downwind", True):
+        return True
+    return bool(metrics.get("downwind_judged"))
+
+
 def pattern_metrics(
-    analysis: ApproachAnalysis, segments: ApproachSegments
+    analysis: ApproachAnalysis,
+    segments: ApproachSegments,
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """オーバーヘッドパターンの幾何を数値化する (採点は別関数)。"""
+    """オーバーヘッドパターンの幾何を数値化する (採点は別関数)。
+
+    ``settings`` を渡すと脚の採否 (``break_judged`` / ``downwind_judged``)
+    をその閾値で決める。省略時は :data:`app.grading.config` の既定値。
+    """
     metrics: dict[str, Any] = {
         "rollout_offset_m": None,
         "overshoot_m": None,
@@ -474,4 +525,38 @@ def pattern_metrics(
         agls = [s.agl for s in segments.break_leg if s.agl is not None]
         if len(agls) >= 2:
             metrics["break_altitude_spread_m"] = round(max(agls) - min(agls), 2)
-    return metrics
+    return mark_judged(metrics, settings or {})
+
+
+def effective_approach_pattern(
+    analysis: ApproachAnalysis,
+    settings: dict[str, Any],
+    metrics: dict[str, Any] | None = None,
+    segments: ApproachSegments | None = None,
+) -> str:
+    """進入パターンを **軌跡から** 決める ("overhead" / "straight_in" / "unknown")。
+
+    検出器 (``detection.detector._classify_approach_pattern``) のラベルは
+    取り込み時にヘディング変化率だけで付けた見込み値なので、ここでは
+    ヒントとしてしか使わない。実際に飛んだ幾何を持っているのは採点側で、
+
+    - ダウンウィンド脚が取れていれば **オーバーヘッド**
+    - 一度もコースを外れていなければ (ロールアウトが無い) **ストレートイン**
+    - どちらでもない (旋回して入ったがパターンは無い = 長いファイナルへの
+      旋回進入など) 場合は、検出器がストレートインと言っていればそれを、
+      でなければ **unknown**
+
+    と読む。これは表示ラベルであると同時に、オーバーヘッド用の重み配分と
+    pattern コンポーネントを出すかどうかの判断そのものでもある。
+    """
+    if segments is None:
+        segments = segment_approach(analysis, settings)
+    if metrics is None:
+        metrics = pattern_metrics(analysis, segments, settings)
+    mark_judged(metrics, settings)
+    if is_overhead_pattern(metrics, settings):
+        return "overhead"
+    if segments.rollout_time is None:
+        return "straight_in"
+    hint = analysis.approach_pattern
+    return "straight_in" if hint == "straight_in" else "unknown"

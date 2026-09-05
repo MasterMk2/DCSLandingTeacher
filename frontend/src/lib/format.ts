@@ -38,6 +38,13 @@ export function mToNm(meters: number): number {
  */
 export function formatMetric(key: string, value: unknown): { label: string; text: string } {
   if (typeof value !== "number" || !Number.isFinite(value)) {
+    // 採点項目名の配列 (measured_components など) は JSON のまま出すと
+    // 読めないので、日本語名を並べる。
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      const stem = key.replace(/_(ms|fpm|m|deg|s)$/, "");
+      const names = (value as string[]).map(factorLabel).join("・");
+      return { label: metricLabel(key, stem), text: names || "なし" };
+    }
     const text =
       value === null || value === undefined
         ? "-"
@@ -250,6 +257,13 @@ const METRIC_LABELS: Record<string, string> = {
   glideslope_method: "測定方法",
   outcome: "結果",
   approach_pattern: "進入パターン",
+  approach_pattern_detected: "進入パターン（検出時の暫定判定）",
+  unscored_reason: "採点しなかった理由",
+  measured_components: "採点した項目",
+  unmeasured_components: "未評価の項目",
+  measured_weight: "採点できた重み",
+  min_measured_weight: "成績を出す最低ライン",
+  graded: "成績を付けたか",
   rollout_before_touchdown: "旋回明け（接地前）",
   // オーバーヘッドパターン
   rollout_offset: "旋回明けの軸ずれ（+ = 手前 / - = 突き抜け）",
@@ -319,6 +333,19 @@ function metricLabel(key: string, stem: string): string {
 
 export function factorDescription(name: string): string {
   return FACTOR_DESCRIPTIONS[name] ?? "";
+}
+
+/** 採点コンポーネントの短い日本語名（一覧に並べる用）。 */
+const FACTOR_LABELS: Record<string, string> = {
+  descent_rate: "接地降下率",
+  touchdown_speed: "接地速度",
+  glideslope: "グライドスロープ",
+  centerline: "センターライン保持",
+  pattern: "オーバーヘッドパターン",
+};
+
+export function factorLabel(name: string): string {
+  return FACTOR_LABELS[name] ?? name;
 }
 
 /** Short label shown in the summary header. */

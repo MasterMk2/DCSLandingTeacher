@@ -615,6 +615,14 @@ main {
   margin: 8px 0;
 }
 
+/* 「この点数が何割の項目から出ているか」。講評より弱く、しかし点数の
+   すぐ下で必ず目に入る位置に置く。 */
+.grade-coverage {
+  color: var(--text-dim);
+  font-size: 0.9em;
+  margin: 4px 0 0;
+}
+
 .factor-table {
   width: 100%;
   border-collapse: collapse;
