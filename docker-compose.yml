@@ -44,14 +44,28 @@ services:
       # Linux equivalent of host.docker.internal (no-op elsewhere).
       - "host.docker.internal:host-gateway"
 
+  reverse-proxy:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports:
+      - "${DLT_HOST:-0.0.0.0}:${DLT_PORT:-8080}:8080"
+    volumes:
+      - ./docker/reverse-proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - web_internal
 
   frontend:
     build:
       context: .
       dockerfile: docker/frontend/Dockerfile
-    ports:
-      - "${FRONTEND_PORT:-8080}:80"
     restart: unless-stopped
+    expose:
+      - "8001"
+    networks:
+      - web_internal
 
   api:
     build:
@@ -59,32 +73,30 @@ services:
       dockerfile: docker/backend/Dockerfile
     image: dcs-landing-teacher-api:latest
     restart: unless-stopped
-
-    ports:
-      - "9000:8000"
-
+    expose:
+      - "9001"
     env_file:
       - path: .env
         required: false
-
     environment:
+      # TODO: Dockerfile直書き
+      DLT_HOST: 0.0.0.0
+      DLT_PORT: "9001"
       DLT_DATABASE_URL: sqlite+aiosqlite:////data/dlt.db
-
       DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
       DLT_CARRIERS_CONFIG_PATH: /app/config/carriers.yaml
-
       DLT_MIGRATIONS_ON_STARTUP: ${DLT_MIGRATIONS_ON_STARTUP:-true}
       DLT_MIGRATIONS_DIR: /app/migrations
-
       DLT_TACVIEW_HOST: ${DLT_TACVIEW_HOST:-host.docker.internal}
       DLT_TACVIEW_PORT: ${DLT_TACVIEW_PORT:-42674}
-
     volumes:
       - dlt-data:/data
       - ./config:/app/config:ro
-
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - web_internal
+      - provider_outbound
 
   db:
     image: postgres:18
@@ -130,6 +142,7 @@ volumes:
   api_run:
 
 networks:
+  web_internal:
   backend_internal:
     internal: true
   provider_outbound:
