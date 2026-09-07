@@ -27,8 +27,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0008_landing_identity"
-down_revision = "0007_import_jobs"
+revision = '0008_landing_identity'
+down_revision = '0007_import_jobs'
 branch_labels = None
 depends_on = None
 
@@ -40,17 +40,18 @@ def upgrade() -> None:
     # does not, and a re-run would die on "duplicate column name". Adding only
     # what is missing makes the migration safe to repeat from that state.
     bind = op.get_bind()
-    existing = {row[1] for row in bind.execute(sa.text("PRAGMA table_info(landings)"))}
-    if "pilot" not in existing:
-        op.add_column("landings", sa.Column("pilot", sa.String(128), nullable=True))
-    if "airframe" not in existing:
-        op.add_column("landings", sa.Column("airframe", sa.String(128), nullable=True))
+    inspector = sa.inspect(bind)
+    existing = {column['name'] for column in inspector.get_columns('landings')}
+    if 'pilot' not in existing:
+        op.add_column('landings', sa.Column('pilot', sa.String(128), nullable=True))
+    if 'airframe' not in existing:
+        op.add_column('landings', sa.Column('airframe', sa.String(128), nullable=True))
 
     # Backfill from the approach track, which recorded the airframe at
     # detection time. json_extract is SQLite-specific; this project ships on
     # SQLite only (see docs/architecture.md), and the guard keeps the
     # migration from failing anywhere else rather than pretending to work.
-    if bind.dialect.name == "sqlite":
+    if bind.dialect.name == 'sqlite':
         bind.execute(
             sa.text(
                 """
@@ -64,5 +65,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("landings", "airframe")
-    op.drop_column("landings", "pilot")
+    op.drop_column('landings', 'airframe')
+    op.drop_column('landings', 'pilot')
