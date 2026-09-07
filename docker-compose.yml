@@ -47,9 +47,9 @@ services:
   db:
     image: postgres:18
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      DLT_POSTGRES_DB: ${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
+      DLT_POSTGRES_USER: ${DLT_POSTGRES_USER:?DLT_POSTGRES_USER must be set}
+      DLT_POSTGRES_PASSWORD: ${DLT_POSTGRES_PASSWORD:?DLT_POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql
     networks:
@@ -58,12 +58,36 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+          "pg_isready -U \"$${DLT_POSTGRES_USER}\" -d \"$${DLT_POSTGRES_DB}\"",
         ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+  migration-job:
+    build:
+      context: .
+      dockerfile: docker/migration-job/Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
+      DB_USER: ${DLT_POSTGRES_USER:?DLT_POSTGRES_USER must be set}
+      DB_PASSWORD: ${DLT_POSTGRES_PASSWORD:?DLT_POSTGRES_PASSWORD must be set}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend_internal
+    restart: "no"
+
 volumes:
   dlt-data:
+  postgres_data:
+  api_run:
+
+networks:
+  backend_internal:
+    internal: true
+  provider_outbound:
