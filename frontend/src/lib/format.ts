@@ -234,6 +234,10 @@ const METRIC_VALUE_JA: Record<string, string> = {
   // 同梱の carriers.yaml は全 entry が validated:false なので、この枝は
   // 現状どの艦でも出ない。検証済みの値を入れたときに初めて出る。
   "geometry_confidence:validated": "艦の幾何は実測データで検証済み",
+  "ungraded_reason:insufficient-flight":
+    "進入らしい飛行が無かった（ホップ程度の浮上）ため成績なし",
+  "ungraded_reason:insufficient-coverage":
+    "測れた項目だけでは判断できないため成績なし",
 };
 
 /** 評価メトリクスの日本語ラベル。無いキーは従来どおりキー名を出す。 */
@@ -281,6 +285,9 @@ const METRIC_LABELS: Record<string, string> = {
   measured_weight: "採点できた重み",
   min_measured_weight: "成績を出す最低ライン",
   graded: "成績を付けたか",
+  ungraded_reason: "成績を付けなかった理由",
+  max_agl: "進入区間の最大高度",
+  min_flight_agl: "成績を出す最低飛行高度",
   rollout_before_touchdown: "旋回明け（接地前）",
   // オーバーヘッドパターン
   rollout_offset: "旋回明けの軸ずれ（+ = 手前 / - = 突き抜け）",

@@ -47,6 +47,8 @@ _DEFAULTS: dict[str, Any] = {
         },
         # 採点できた重みがこれ未満なら成績を出さない (grade/score は None)。
         "min_measured_weight": 0.5,
+        # 進入区間の最大高度がこれ未満なら成績を出さない (ホップの満点防止)。
+        "min_flight_agl_m": 30.48,
         "overhead_weights": {
             "descent_rate": 0.25,
             "touchdown_speed": 0.15,

@@ -106,6 +106,19 @@ land_grading:
   # still gets a grade; a fixed-wing landing judged on descent rate alone
   # (0.30) does not.
   min_measured_weight: 0.5
+  # Minimum height that has to have been FLOWN for a grade to be issued.
+  # A helicopter that lifts a few metres and sets straight back down
+  # touches gently and on the centerline, so descent rate + centerline
+  # keeping alone score 100 -- an A for a "landing" whose approach nobody
+  # flew. 100 ft is well below any real pattern (the 1000 ft stabilization
+  # gate above) but well above a hop, so it separates the two. This is a
+  # gate, not a deduction: below it the landing keeps its components,
+  # evidence and metrics (including max_agl_m below) but gets no grade and
+  # no score, exactly like min_measured_weight. Applies to every land
+  # landing, not just rotary -- a fixed-wing hop is the same non-approach.
+  # AGL samples missing entirely do NOT trip it (absence of the measurement
+  # is not evidence of a hop). Set to 0 to disable.
+  min_flight_agl_m: 30.48   # 100 ft
 
   # Used instead of `weights` when the approach was classified "overhead".
   # The pattern is half the exercise in an overhead break, so it gets a

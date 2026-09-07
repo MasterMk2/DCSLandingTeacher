@@ -48,11 +48,11 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
         if sample.agl is not None:
             sample.glideslope_deviation = sample.agl - sample.distance_to_go * tan_slope
 
-# 2 (2026-09-05): 測れなかった採点項目は中立点 50 ではなく重みごと外す /
-# 進入パターンを軌跡から決め直す / ヘリの接地速度比・進入角は採点しない /
-# 基準速度をファイナル末尾の保持速度で取る / 記録が足りない着陸には成績を
-# 付けない。既存の着陸は再採点しないと v1 の点数のまま残る。
-GRADING_VERSION = "2"
+# 3 (2026-09-08): v2 に加え、進入区間の最大高度が 100 ft 未満のホップには
+# 成績を付けない (min_flight_agl_m)。数 m 浮いて降りただけのヘリが
+# 降下率＋センターラインだけで 100/A になっていた。既存の着陸は再採点で
+# 反映される。
+GRADING_VERSION = "3"
 
 
 def _row_approach_pattern(

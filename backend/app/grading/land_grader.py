@@ -55,6 +55,11 @@ DESCENT_RATE_EXTREME_SCORE = 5.0   # floor score for an extremely hard landing
 UNSCORED_NOT_MEASURED = "not-measured"
 UNSCORED_BY_AIRFRAME_CLASS = "not-applicable-to-airframe-class"
 
+#: ``ungraded_reason`` values (metrics): why no grade was issued at all.
+#: ``None`` when graded. Machine-readable English; the UI maps to Japanese.
+UNGRADED_INSUFFICIENT_COVERAGE = "insufficient-coverage"
+UNGRADED_INSUFFICIENT_FLIGHT = "insufficient-flight"
+
 
 @dataclass
 class ComponentScore:
@@ -500,6 +505,24 @@ def _centerline_overshoot_m(analysis: ApproachAnalysis) -> float | None:
     return round(max(0.0, excursion), 2)
 
 
+def _max_inbound_agl_m(analysis: ApproachAnalysis) -> float | None:
+    """Highest AGL reached on the inbound segment (before touchdown).
+
+    The separate flight axis: how much flying preceded the touchdown. A
+    helicopter that lifts a few metres and sets back down touches gently
+    and on the centerline, so descent-rate + centerline alone score 100 --
+    for a "landing" whose approach nobody flew. Returns ``None`` when no
+    sample carries an AGL, in which case the caller must not judge: absence
+    of the measurement is not evidence of a hop.
+    """
+    values = [
+        s.agl
+        for s in analysis.samples
+        if s.time < analysis.touchdown_time and s.agl is not None
+    ]
+    return max(values) if values else None
+
+
 def _pattern_component(
     analysis: ApproachAnalysis,
     settings: dict[str, Any],
@@ -829,7 +852,30 @@ def grade_land_landing(
     # いない着陸に A」が出てしまう。測れた重みが規定に届かない場合は、
     # 成績を出さない (根拠データと測定値は残す)。
     min_weight = float(settings.get("min_measured_weight", 0.5))
-    graded = total is not None and weight_sum >= min_weight
+    coverage_ok = total is not None and weight_sum >= min_weight
+    # ...そして正規化の外にもう一つ限界がある。数 m 浮いてすぐ降りた
+    # ホップは、降下率とセンターラインだけが測れてヘリなら重み 0.55 で
+    # 規定を通り、滑らかに降りれば 100/A が出てしまう。進入を飛んで
+    # いない着陸に付く A なので、進入区間の最大高度でゲートする。高度が
+    # 測れていない記録は疑わしきは測らず、ここでは落とさない。
+    min_flight_agl_m = float(settings.get("min_flight_agl_m", 30.48))
+    max_agl_m = _max_inbound_agl_m(analysis)
+    flight_ok = (
+        True
+        if min_flight_agl_m <= 0 or max_agl_m is None
+        else max_agl_m >= min_flight_agl_m
+    )
+    graded = coverage_ok and flight_ok
+    ungraded_reason: str | None
+    if not graded:
+        if not flight_ok:
+            ungraded_reason = UNGRADED_INSUFFICIENT_FLIGHT
+        elif total is None or not coverage_ok:
+            ungraded_reason = UNGRADED_INSUFFICIENT_COVERAGE
+        else:
+            ungraded_reason = None
+    else:
+        ungraded_reason = None
     grade: str | None = None
     if graded:
         letters = settings["letters"]
@@ -860,7 +906,14 @@ def grade_land_landing(
         gs_error if judged("glideslope") else None,
         descent_fpm,
         unscored_note=_unscored_note(
-            components, unscored, frame_class, gs_error, graded=graded
+            components,
+            unscored,
+            frame_class,
+            gs_error,
+            graded=graded,
+            ungraded_reason=ungraded_reason,
+            max_agl_m=max_agl_m,
+            min_flight_agl_m=min_flight_agl_m,
         ),
     )
     metrics = {
@@ -908,6 +961,11 @@ def grade_land_landing(
         "measured_weight": round(weight_sum, 3),
         "min_measured_weight": min_weight,
         "graded": graded,
+        # 進入を飛ばずに接地したホップを成績から外すゲート (別軸の飛行量)。
+        # 点数の内訳ではなく「どれだけ飛んでから降りたか」の証拠として残す。
+        "ungraded_reason": ungraded_reason,
+        "max_agl_m": round(max_agl_m, 2) if max_agl_m is not None else None,
+        "min_flight_agl_m": round(min_flight_agl_m, 2),
         # 旋回明けの時刻 (接地からの秒数)。None = 旋回を検出していない。
         "rollout_before_touchdown_s": (
             round(analysis.touchdown_time - segments.rollout_time, 1)
@@ -960,6 +1018,9 @@ def _unscored_note(
     frame_class: str,
     gs_error: "GlideslopeError | None",
     graded: bool = True,
+    ungraded_reason: str | None = None,
+    max_agl_m: float | None = None,
+    min_flight_agl_m: float | None = None,
 ) -> str:
     """採点しなかった項目について、点数の後ろに付ける一文。
 
@@ -991,12 +1052,32 @@ def _unscored_note(
         names = "・".join(_COMPONENT_JA.get(n, n) for n in missing)
         notes.append(f"今回の記録では{names}を測れなかったため、評価から除いています。")
     if not graded:
-        measured = [c.name for c in components if c.score is not None]
-        names = "・".join(_COMPONENT_JA.get(n, n) for n in measured) or "なし"
-        notes.append(
-            f"測定できた項目（{names}）だけでは進入の良し悪しを判断できないため、"
-            "この着陸には成績を付けていません。"
-        )
+        if ungraded_reason == UNGRADED_INSUFFICIENT_FLIGHT:
+            # 進入を飛んでいない着陸に付く A を止めるためのゲート。点数の
+            # 内訳ではなく飛行そのものの量が足りないので、別文で述べる。
+            if min_flight_agl_m and min_flight_agl_m > 0:
+                need_ft = min_flight_agl_m / 0.3048
+                if max_agl_m is not None:
+                    got_ft = max_agl_m / 0.3048
+                    notes.append(
+                        f"進入区間の最大高度が {got_ft:.0f} ft で"
+                        f" {need_ft:.0f} ft に届かず、ホップ程度の浮上とみなすため、"
+                        "この着陸には成績を付けていません。"
+                    )
+                else:
+                    notes.append(
+                        f"進入区間で {need_ft:.0f} ft 以上の飛行を確認できなかったため、"
+                        "この着陸には成績を付けていません。"
+                    )
+            else:
+                notes.append("この着陸には成績を付けていません。")
+        else:
+            measured = [c.name for c in components if c.score is not None]
+            names = "・".join(_COMPONENT_JA.get(n, n) for n in measured) or "なし"
+            notes.append(
+                f"測定できた項目（{names}）だけでは進入の良し悪しを判断できないため、"
+                "この着陸には成績を付けていません。"
+            )
     return "".join(notes)
 
 

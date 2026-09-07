@@ -1527,8 +1527,10 @@ def test_a_component_that_could_not_be_measured_carries_no_score() -> None:
     """
     from app.grading.deviations import DeviationSample
 
-    # A hover-on: no distance to derive an approach angle from, and no
-    # approach segment to take a reference speed over.
+    # Short final inside the 200 m distance floor: no approach angle to
+    # derive, but a real approach segment exists (40 m AGL, above the
+    # 100 ft minimum-flight gate) and a reference speed to judge. The
+    # drop-out must not need an airframe class to trigger.
     touchdown_time = 100.0
     analysis = ApproachAnalysis(
         kind="land",
@@ -1542,11 +1544,11 @@ def test_a_component_that_could_not_be_measured_carries_no_score() -> None:
         samples=[
             DeviationSample(
                 time=touchdown_time - 8.0 + i * 0.25,
-                distance_to_go=12.0,
+                distance_to_go=150.0,
                 glideslope_deviation=1.0,
                 centerline_deviation=0.4,
                 speed=2.0,
-                agl=6.0,
+                agl=40.0,
             )
             for i in range(32)
         ],
@@ -1794,3 +1796,127 @@ def test_no_shipped_carrier_entry_claims_to_be_validated() -> None:
             f"{geometry.key} now claims validated geometry -- update the "
             "geometry_confidence comment in lso_grader.py"
         )
+
+
+# ---------------------------------------------------------------------------
+# Minimum-flight gate: a hop is not an approach
+# ---------------------------------------------------------------------------
+
+
+def _hop_analysis(*, agl_m: float, airframe: str = "UH-1H") -> "ApproachAnalysis":
+    """A helicopter that lifts to ``agl_m`` for a few seconds and sets down.
+
+    Gentle and on the centerline, so descent-rate + centerline alone would
+    score 100 -- the exact case that used to come out an A.
+    """
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    touchdown_time = 100.0
+    return ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=3.0,
+        touchdown_descent_rate_ms=0.4,
+        airframe=airframe,
+        samples=[
+            DeviationSample(
+                time=touchdown_time - 5.0 + i * 0.25,
+                distance_to_go=10.0,
+                glideslope_deviation=1.0,
+                centerline_deviation=0.3,
+                speed=3.0,
+                agl=agl_m,
+            )
+            for i in range(20)
+        ],
+    )
+
+
+def test_a_hop_that_never_reaches_100ft_gets_no_grade() -> None:
+    """A few metres up and straight back down is not an approach.
+
+    Before the minimum-flight gate this scored 100/A on descent rate +
+    centerline keeping (rotary weight 0.55 clears the 0.5 coverage floor).
+    The components and evidence stay; the grade must not.
+    """
+    result = grade_land_landing(_hop_analysis(agl_m=5.0), CONFIG)
+
+    assert result.metrics["max_agl_m"] == pytest.approx(5.0)
+    assert result.metrics["graded"] is False
+    assert result.metrics["ungraded_reason"] == "insufficient-flight"
+    assert result.grade is None
+    assert result.score is None
+    # The touchdown itself is still described; only the verdict is withheld.
+    assert "成績を付けていません" in result.comment
+    assert "100 ft" in result.comment
+    # Components are kept for evidence, not zeroed.
+    by_name = {c.name: c for c in result.components}
+    assert by_name["descent_rate"].score == pytest.approx(100.0)
+    assert by_name["centerline"].score == pytest.approx(100.0)
+
+
+def test_the_same_hop_above_100ft_is_graded() -> None:
+    """Control: the gate is about the amount of flying, not the airframe."""
+    result = grade_land_landing(_hop_analysis(agl_m=40.0), CONFIG)
+
+    assert result.metrics["max_agl_m"] == pytest.approx(40.0)
+    assert result.metrics["graded"] is True
+    assert result.metrics["ungraded_reason"] is None
+    assert result.grade is not None
+    assert result.score is not None
+
+
+def test_the_minimum_flight_gate_can_be_disabled() -> None:
+    """Setting ``min_flight_agl_m`` to 0 restores the old behaviour."""
+    from app.grading.config import apply_config_overrides
+
+    config = apply_config_overrides(CONFIG, {"land_grading": {"min_flight_agl_m": 0}})
+    result = grade_land_landing(_hop_analysis(agl_m=5.0), config)
+
+    assert result.metrics["graded"] is True
+    assert result.grade == "A"
+    assert result.score == pytest.approx(100.0)
+
+
+def test_a_hop_reports_insufficient_flight_even_when_coverage_is_also_short() -> None:
+    """The flight gate is the more fundamental reason: with a single sample
+    the coverage floor would already withhold the grade, but a hop that
+    never flew must say so rather than blame the recording."""
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    touchdown_time = 100.0
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=0.3,
+        airframe="F-16C_50",
+        samples=[
+            DeviationSample(
+                time=touchdown_time - 2.0,
+                distance_to_go=10.0,
+                glideslope_deviation=0.0,
+                centerline_deviation=None,
+                speed=70.0,
+                agl=4.0,
+            ),
+            DeviationSample(
+                time=touchdown_time,
+                distance_to_go=0.0,
+                glideslope_deviation=0.0,
+                centerline_deviation=None,
+                speed=70.0,
+                agl=0.5,
+            ),
+        ],
+    )
+    result = grade_land_landing(analysis, CONFIG)
+
+    assert result.metrics["ungraded_reason"] == "insufficient-flight"
+    assert result.grade is None
