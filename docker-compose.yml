@@ -44,6 +44,15 @@ services:
       # Linux equivalent of host.docker.internal (no-op elsewhere).
       - "host.docker.internal:host-gateway"
 
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped
+
   db:
     image: postgres:18
     environment:
