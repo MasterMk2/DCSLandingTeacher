@@ -1,14 +1,5 @@
-# Standalone frontend image
-# Builds the frontend with Node.js and serves it with nginx.
-#
-# Build:
-#   docker build -f docker/frontend.Dockerfile -t dlt-frontend .
-#
-# Run:
-#   docker run -p 8080:80 dlt-frontend
-#
-# The nginx configuration proxies /api requests to the "backend" service
-# on port 8000, so both containers must be on the same Docker network.
+# Frontend image.
+# Builds the SPA with Node.js and serves the generated static files with nginx.
 
 FROM node:20-alpine AS builder
 WORKDIR /src/frontend
@@ -20,6 +11,7 @@ RUN npm run build
 
 FROM nginx:stable-alpine AS runner
 
-COPY docker/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+RUN rm -f /etc/nginx/conf.d/*.conf
 
+COPY docker/frontend/nginx.conf /etc/nginx/conf.d/frontend.conf
 COPY --from=builder /src/frontend/dist /usr/share/nginx/html
