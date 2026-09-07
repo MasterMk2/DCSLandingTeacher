@@ -79,9 +79,6 @@ services:
       - path: .env
         required: false
     environment:
-      # TODO: Dockerfile直書き
-      DLT_HOST: 0.0.0.0
-      DLT_PORT: "9001"
       DLT_DATABASE_URL: sqlite+aiosqlite:////data/dlt.db
       DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
       DLT_CARRIERS_CONFIG_PATH: /app/config/carriers.yaml
@@ -101,9 +98,9 @@ services:
   db:
     image: postgres:18
     environment:
-      DLT_POSTGRES_DB: ${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
-      DLT_POSTGRES_USER: ${DLT_POSTGRES_USER:?DLT_POSTGRES_USER must be set}
-      DLT_POSTGRES_PASSWORD: ${DLT_POSTGRES_PASSWORD:?DLT_POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
+      POSTGRES_USER: ${DLT_POSTGRES_USER:?DLT_POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${DLT_POSTGRES_PASSWORD:?DLT_POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql
     networks:
@@ -112,7 +109,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U \"$${DLT_POSTGRES_USER}\" -d \"$${DLT_POSTGRES_DB}\"",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
         ]
       interval: 10s
       timeout: 5s
