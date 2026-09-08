@@ -231,7 +231,11 @@ async def test_the_ingest_gate_lets_a_deck_touchdown_through(session_factory) ->
         deck_altitude_for=lambda _c: DECK_ALTITUDE_M,
     )
 
-    lines = ["FileType=text/acmi/tacview", "FileVersion=2.2", "0,ReferenceTime=2024-01-01T00:00:00Z"]
+    lines = [
+        "FileType=text/acmi/tacview",
+        "FileVersion=2.2",
+        "0,ReferenceTime=2024-01-01T00:00:00Z",
+    ]
     lines.append("#0")
     lines.append(f"C1,T={LON0}|{LAT0}|0.0|||0.0,Type=Sea+Watercraft+AircraftCarrier,Name=CVN_73")
     for sample in approach(final_altitude_m=DECK_ALTITUDE_M):
@@ -276,8 +280,7 @@ def test_the_proximity_prefilter_does_not_change_the_answer() -> None:
     distant = carrier()
     state = distant["C1"]
     state.samples = [
-        (t, lat + 2.0, lon + 2.0, alt, hdg, spd)
-        for (t, lat, lon, alt, hdg, spd) in state.samples
+        (t, lat + 2.0, lon + 2.0, alt, hdg, spd) for (t, lat, lon, alt, hdg, spd) in state.samples
     ]
     far = _reference_surfaces(samples, distant, config, deck_altitude_for, None)
     assert not any(is_deck for _, is_deck in far)
@@ -298,9 +301,7 @@ def test_the_proximity_prefilter_does_not_change_the_answer() -> None:
         br = math.radians(bearing_deg)
         p1 = math.radians(lat)
         l1 = math.radians(lon)
-        p2 = math.asin(
-            math.sin(p1) * math.cos(ang) + math.cos(p1) * math.sin(ang) * math.cos(br)
-        )
+        p2 = math.asin(math.sin(p1) * math.cos(ang) + math.cos(p1) * math.sin(ang) * math.cos(br))
         l2 = l1 + math.atan2(
             math.sin(br) * math.sin(ang) * math.cos(p1),
             math.cos(ang) - math.sin(p1) * math.sin(p2),
@@ -315,12 +316,17 @@ def test_the_proximity_prefilter_does_not_change_the_answer() -> None:
                 assert haversine_m(lat, 0.0, ship_lat, ship_lon) <= radius
                 one = [
                     TrackSample(
-                        time=0.0, latitude=lat, longitude=0.0, altitude=50.0,
-                        agl=50.0, on_ground=None,
+                        time=0.0,
+                        latitude=lat,
+                        longitude=0.0,
+                        altitude=50.0,
+                        agl=50.0,
+                        on_ground=None,
                     )
                 ]
                 state = CarrierState(
-                    obj_id="C1", name="CVN_73",
+                    obj_id="C1",
+                    name="CVN_73",
                     type="Sea+Watercraft+AircraftCarrier",
                     samples=[(t, ship_lat, ship_lon, 0.0, 0.0, 0.0) for t in (-9.0, 9.0)],
                 )
@@ -336,15 +342,21 @@ def test_the_proximity_prefilter_does_not_change_the_answer() -> None:
     # 360 degrees away.
     near_dateline = [
         TrackSample(
-            time=0.0, latitude=0.0, longitude=-179.9995, altitude=50.0,
-            agl=50.0, on_ground=None,
+            time=0.0,
+            latitude=0.0,
+            longitude=-179.9995,
+            altitude=50.0,
+            agl=50.0,
+            on_ground=None,
         )
     ]
     across = CarrierState(
-        obj_id="C1", name="CVN_73", type="Sea+Watercraft+AircraftCarrier",
+        obj_id="C1",
+        name="CVN_73",
+        type="Sea+Watercraft+AircraftCarrier",
         samples=[(t, 0.0, 179.9995, 0.0, 0.0, 0.0) for t in (-9.0, 9.0)],
     )
     assert haversine_m(0.0, -179.9995, 0.0, 179.9995) < config.carrier_proximity_m
-    assert _reference_surfaces(
-        near_dateline, {"C1": across}, config, deck_altitude_for, None
-    )[0][1], "the box must wrap longitude the way haversine_m does"
+    assert _reference_surfaces(near_dateline, {"C1": across}, config, deck_altitude_for, None)[0][
+        1
+    ], "the box must wrap longitude the way haversine_m does"

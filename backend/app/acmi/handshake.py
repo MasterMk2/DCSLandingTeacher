@@ -97,9 +97,7 @@ def parse_host_handshake(payload: bytes) -> str:
 
     lines = text.rstrip("\0").split("\n")
     if len(lines) != 4:
-        raise HandshakeError(
-            f"host handshake must contain 4 entries, got {len(lines)}"
-        )
+        raise HandshakeError(f"host handshake must contain 4 entries, got {len(lines)}")
     if lines[0] != LOW_LEVEL_PROTOCOL:
         raise HandshakeError(f"unsupported low-level protocol: {lines[0]!r}")
     if lines[1] != HIGH_LEVEL_PROTOCOL:
@@ -120,9 +118,7 @@ async def perform_client_handshake(
     with backoff.
     """
     try:
-        payload = await asyncio.wait_for(
-            reader.readuntil(b"\0"), timeout=HANDSHAKE_TIMEOUT_SECONDS
-        )
+        payload = await asyncio.wait_for(reader.readuntil(b"\0"), timeout=HANDSHAKE_TIMEOUT_SECONDS)
     except asyncio.TimeoutError as exc:
         raise HandshakeError("host handshake timed out") from exc
     except asyncio.IncompleteReadError as exc:

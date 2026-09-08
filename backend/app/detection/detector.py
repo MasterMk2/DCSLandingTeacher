@@ -121,15 +121,11 @@ class CarrierState:
     #: FLOLS geometry (Issue #3).
     type: str | None = None
     #: (time, lat, lon, altitude, heading_deg, speed) tuples, time-sorted.
-    samples: list[tuple[float, float, float, float, float, float]] = field(
-        default_factory=list
-    )
+    samples: list[tuple[float, float, float, float, float, float]] = field(default_factory=list)
     #: Retention window in seconds; ``None`` keeps everything (offline replay).
     max_age_s: float | None = None
 
-    def append(
-        self, sample: tuple[float, float, float, float, float, float]
-    ) -> None:
+    def append(self, sample: tuple[float, float, float, float, float, float]) -> None:
         """Record a sample, dropping history outside the retention window.
 
         Letting this grow without bound used to wedge the whole ingest loop:
@@ -231,8 +227,8 @@ class LandingEvent:
     """A detected landing / arrestment attempt with its approach segment."""
 
     touchdown: Touchdown
-    kind: str                      # "carrier" | "land"
-    outcome: str                   # "full_stop" | "touch_and_go" | "bolter"
+    kind: str  # "carrier" | "land"
+    outcome: str  # "full_stop" | "touch_and_go" | "bolter"
     carrier_obj_id: str | None
     carrier_name: str | None
     approach: list[TrackSample]
@@ -308,9 +304,7 @@ def is_on_deck(
     """Three-state WOW estimate: True / False / None (unknown)."""
     if sample.on_ground is not None:
         return sample.on_ground
-    agl = compute_agl(
-        sample, ground_altitude_m, config, trust_sample_agl=trust_sample_agl
-    )
+    agl = compute_agl(sample, ground_altitude_m, config, trust_sample_agl=trust_sample_agl)
     if agl is None:
         return None
     if not trust_sample_agl:
@@ -386,9 +380,7 @@ def _reference_surfaces(
     # room for floating-point error, so the margin is a stated quantity
     # instead of a side effect of rounding.
     SLACK = 1.001
-    window_lat_deg = (
-        config.carrier_proximity_m / meters_per_degree_latitude(0.0)
-    ) * SLACK
+    window_lat_deg = (config.carrier_proximity_m / meters_per_degree_latitude(0.0)) * SLACK
 
     surfaces: list[tuple[float | None, bool]] = []
     for sample in samples:
@@ -418,14 +410,9 @@ def _reference_surfaces(
                     # accepted them.
                     d_lon = abs(pos[1] - sample.longitude)
                     d_lon = min(d_lon, 360.0 - d_lon)
-                    if (
-                        abs(pos[0] - sample.latitude) > window_lat_deg
-                        or d_lon > window_lon_deg
-                    ):
+                    if abs(pos[0] - sample.latitude) > window_lat_deg or d_lon > window_lon_deg:
                         continue
-                distance = haversine_m(
-                    sample.latitude, sample.longitude, pos[0], pos[1]
-                )
+                distance = haversine_m(sample.latitude, sample.longitude, pos[0], pos[1])
                 if distance <= best_distance:
                     ship_altitude = carrier.altitude_at(sample.time) or 0.0
                     best = ship_altitude + deck
@@ -434,18 +421,16 @@ def _reference_surfaces(
     return surfaces
 
 
-def _descent_rate_before(samples: list[TrackSample], index: int, span_s: float = 3.0) -> float | None:
+def _descent_rate_before(
+    samples: list[TrackSample], index: int, span_s: float = 3.0
+) -> float | None:
     """Mean descent rate (m/s, positive down) over ``span_s`` before index."""
     ref = samples[index]
     for j in range(index - 1, -1, -1):
         prev = samples[j]
         dt = ref.time - prev.time
         if dt >= span_s:
-            if (
-                prev.altitude is None
-                or ref.altitude is None
-                or dt <= 0
-            ):
+            if prev.altitude is None or ref.altitude is None or dt <= 0:
                 return None
             return (prev.altitude - ref.altitude) / dt
     return None
@@ -521,8 +506,7 @@ def _classify_approach_pattern(approach: list[TrackSample]) -> str:
     # If >70% of airborne samples are within 20 deg of final heading,
     # it's a straight-in approach (no break turn).
     aligned_count = sum(
-        1 for _, h in headed_samples
-        if abs((h - final_heading + 180) % 360 - 180) < 20.0
+        1 for _, h in headed_samples if abs((h - final_heading + 180) % 360 - 180) < 20.0
     )
     if aligned_count / len(headed_samples) > 0.7:
         return "straight_in"
@@ -548,8 +532,7 @@ def _classify_approach_pattern(approach: list[TrackSample]) -> str:
 
     # --- Middle portion: between initial (first 10s) and final segment ---
     initial_cutoff = times[0] + 10.0
-    middle_samples = [(t, h) for t, h in headed_samples
-                      if initial_cutoff <= t < final_segment_time]
+    middle_samples = [(t, h) for t, h in headed_samples if initial_cutoff <= t < final_segment_time]
     if len(middle_samples) < 5:
         return "unknown"
 
@@ -656,9 +639,7 @@ def analyze_track(
     # The surface under each sample, which over a carrier is the deck and
     # not the sea (see _reference_surfaces). Without this the WOW test can
     # never fire for an aircraft that traps.
-    surfaces = _reference_surfaces(
-        samples, carriers, config, deck_altitude_for, ground_altitude_m
-    )
+    surfaces = _reference_surfaces(samples, carriers, config, deck_altitude_for, ground_altitude_m)
     wow = [
         is_on_deck(s, surface, config, trust_sample_agl=not on_deck)
         for s, (surface, on_deck) in zip(samples, surfaces)
@@ -705,9 +686,7 @@ def analyze_track(
         peak_agl = 0.0
         for j in range(index + 1, len(samples)):
             surface_j, on_deck_j = surfaces[j]
-            agl = compute_agl(
-                samples[j], surface_j, config, trust_sample_agl=not on_deck_j
-            )
+            agl = compute_agl(samples[j], surface_j, config, trust_sample_agl=not on_deck_j)
             if wow[j] is False:
                 airborne_since_contact = True
                 peak_agl = max(peak_agl, agl or 0.0)

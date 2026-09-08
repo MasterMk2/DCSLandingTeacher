@@ -1,7 +1,7 @@
 """Database models package."""
 
 from app.models.base import Base
-from app.models.database import create_engine, create_session_factory, init_db
+from app.models.database import create_engine, create_session_factory
 from app.models.entities import DcsObject, Flight, Landing, Track
 
 __all__ = [
@@ -12,5 +12,4 @@ __all__ = [
     "Track",
     "create_engine",
     "create_session_factory",
-    "init_db",
 ]

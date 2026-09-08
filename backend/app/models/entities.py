@@ -96,9 +96,7 @@ class DcsObject(Base):
     last_seen: Mapped[float] = mapped_column(Float)
     removed: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    __table_args__ = (
-        Index("ix_objects_flight_acmi_id", "flight_id", "acmi_id", unique=True),
-    )
+    __table_args__ = (Index("ix_objects_flight_acmi_id", "flight_id", "acmi_id", unique=True),)
 
 
 class Track(Base):
@@ -264,10 +262,5 @@ class ImportJobRow(Base):
     duplicates_skipped: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    finished_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

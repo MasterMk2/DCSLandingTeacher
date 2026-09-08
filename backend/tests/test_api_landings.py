@@ -59,9 +59,7 @@ async def seed_landing(
             )
         await session.commit()
 
-    carriers = (
-        {"102": make_carrier_state(obj_id="102", name=venue)} if kind == "carrier" else {}
-    )
+    carriers = {"102": make_carrier_state(obj_id="102", name=venue)} if kind == "carrier" else {}
     samples = make_approach_samples(outcome=outcome)
     events = analyze_track(samples, DECK_ALTITUDE_M, carriers)
     assert len(events) == 1
@@ -142,9 +140,7 @@ async def test_the_list_does_not_read_the_approach_tracks(client) -> None:
 
 async def test_get_landing_detail_includes_approach_track(client) -> None:
     http, app = client
-    landing_id = await seed_landing(
-        app.state.session_factory, app.state.pipeline
-    )
+    landing_id = await seed_landing(app.state.session_factory, app.state.pipeline)
 
     response = await http.get(f"/api/landings/{landing_id}")
     assert response.status_code == 200
@@ -205,9 +201,7 @@ def test_websocket_receives_new_landing_events(settings) -> None:
     app = create_app(settings)
     with TestClient(app) as tc:
         # Events broadcast before connecting are replayed on connect.
-        asyncio.run(
-            tc.app.state.notifier.broadcast_landing({"id": 7, "grade": "OK"})
-        )
+        asyncio.run(tc.app.state.notifier.broadcast_landing({"id": 7, "grade": "OK"}))
         with tc.websocket_connect("/api/ws/landings") as ws:
             message = ws.receive_json()
             assert message["type"] == "landing"
@@ -343,9 +337,7 @@ async def test_a_landing_keeps_its_aircraft_when_the_object_row_is_reused(
     async with sf() as session:
         landing = await session.get(Landing, landing_id)
         obj = (
-            await session.execute(
-                select(DcsObject).where(DcsObject.id == landing.object_id)
-            )
+            await session.execute(select(DcsObject).where(DcsObject.id == landing.object_id))
         ).scalar_one()
         obj.name = "AIM_120"
         obj.type = "Weapon+Missile"
@@ -359,9 +351,7 @@ async def test_a_landing_keeps_its_aircraft_when_the_object_row_is_reused(
     # ...and the list view, which sorts and filters on the same fields.
     listing = (await http.get("/api/landings", params={"airframe": "UH-1H"})).json()
     assert [item["id"] for item in listing["items"]] == [landing_id]
-    assert (await http.get("/api/landings", params={"airframe": "AIM"})).json()[
-        "total"
-    ] == 0
+    assert (await http.get("/api/landings", params={"airframe": "AIM"})).json()["total"] == 0
 
 
 async def test_the_object_row_still_answers_for_rows_written_before_the_column(

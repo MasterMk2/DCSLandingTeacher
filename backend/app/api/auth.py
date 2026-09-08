@@ -25,9 +25,7 @@ from fastapi import HTTPException, Request, WebSocket
 
 
 def _tokens_match(provided: str, expected: str) -> bool:
-    return secrets.compare_digest(
-        provided.encode("utf-8"), expected.encode("utf-8")
-    )
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 def extract_rest_token(request: Request) -> str | None:

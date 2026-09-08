@@ -46,7 +46,7 @@ from app.grading.kinematics import annotate_kinematics
 @dataclass
 class LsoFactor:
     name: str
-    severity: str          # "minor" | "major" | "severe"
+    severity: str  # "minor" | "major" | "severe"
     evidence: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -79,9 +79,7 @@ def _detect_factors(
     # --- glideslope at the ramp: HIGH / LOW -------------------------------
     high_cfg = factor_cfg.get("HIGH", {})
     low_cfg = factor_cfg.get("LOW", {})
-    gs_ramp = [
-        s.glideslope_deviation for s in at_ramp if s.glideslope_deviation is not None
-    ]
+    gs_ramp = [s.glideslope_deviation for s in at_ramp if s.glideslope_deviation is not None]
     mean_gs = _mean(gs_ramp)
     if mean_gs is not None and high_cfg.get("gs_deviation_m") is not None:
         threshold = float(high_cfg["gs_deviation_m"])
@@ -172,11 +170,7 @@ def _detect_factors(
 
     # --- centerline at the ramp: OFFLINE ------------------------------------
     offline_cfg = factor_cfg.get("OFFLINE", {})
-    cl_ramp = [
-        abs(s.centerline_deviation)
-        for s in at_ramp
-        if s.centerline_deviation is not None
-    ]
+    cl_ramp = [abs(s.centerline_deviation) for s in at_ramp if s.centerline_deviation is not None]
     max_cl = max(cl_ramp) if cl_ramp else None
     if max_cl is not None and offline_cfg.get("lateral_deviation_m") is not None:
         threshold = float(offline_cfg["lateral_deviation_m"])
@@ -199,10 +193,7 @@ def _detect_factors(
     power_cfg = factor_cfg.get("POWER", {})
     power_window = analysis.window(20.0)
     power_speeds = [s.speed for s in power_window if s.speed is not None]
-    if (
-        power_cfg.get("speed_range_ms") is not None
-        and len(power_speeds) >= 2
-    ):
+    if power_cfg.get("speed_range_ms") is not None and len(power_speeds) >= 2:
         speed_range = max(power_speeds) - min(power_speeds)
         threshold = float(power_cfg["speed_range_ms"])
         if speed_range > threshold:
@@ -289,9 +280,7 @@ def _detect_burble(
 
     recent = [s for s in analysis.samples if td - window_s <= s.time < td]
     baseline = [
-        s
-        for s in analysis.samples
-        if td - window_s - baseline_window_s <= s.time < td - window_s
+        s for s in analysis.samples if td - window_s - baseline_window_s <= s.time < td - window_s
     ]
     recent_rates = [r for _, r in _derived_descent_rates(recent)]
     baseline_rates = [r for _, r in _derived_descent_rates(baseline)]
@@ -344,11 +333,15 @@ def grade_carrier_approach(
         comment = "ボルター（ワイヤーを捕捉できず）。"
     else:
         deep_low_threshold = decision.get("cut_low_gs_deviation_m")
-        deep_low = any(
-            f.name == "LOW"
-            and f.evidence.get("mean_glideslope_deviation_m", 0.0) < float(deep_low_threshold)
-            for f in factors
-        ) if deep_low_threshold is not None else False
+        deep_low = (
+            any(
+                f.name == "LOW"
+                and f.evidence.get("mean_glideslope_deviation_m", 0.0) < float(deep_low_threshold)
+                for f in factors
+            )
+            if deep_low_threshold is not None
+            else False
+        )
 
         cut_major_count = int(decision.get("cut_if_major_count", 3))
         ok_paren_count = int(decision.get("ok_paren_major_count", 2))
@@ -399,9 +392,7 @@ def grade_carrier_approach(
         # Which FLOLS geometry produced this grade (Issue #3): the resolved
         # per-carrier entry or the legacy touchdown-referenced fallback.
         "flols_geometry": (
-            analysis.geometry
-            if analysis.geometry is not None
-            else fallback_geometry_payload()
+            analysis.geometry if analysis.geometry is not None else fallback_geometry_payload()
         ),
         # How much this grade can be leaned on. Every deviation an LSO factor
         # measures is relative to the ramp, so the grade is only as good as

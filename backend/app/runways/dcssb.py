@@ -18,7 +18,7 @@ import math
 from logging import getLogger
 from typing import Any
 
-import httpx
+import httpx2
 
 from app.runways.models import Runway, runway_pair_from_dcs
 
@@ -46,7 +46,7 @@ class DcssbClient:
     def _headers(self) -> dict[str, str]:
         return {"x-api-key": self._api_key} if self._api_key else {}
 
-    async def _get(self, client: httpx.AsyncClient, endpoint: str, **params: Any) -> Any:
+    async def _get(self, client: httpx2.AsyncClient, endpoint: str, **params: Any) -> Any:
         response = await client.get(
             self._base + endpoint,
             params=params,
@@ -57,7 +57,7 @@ class DcssbClient:
         return response.json()
 
     async def list_servers(self) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient() as client:
+        async with httpx2.AsyncClient() as client:
             data = await self._get(client, "/servers")
         return data if isinstance(data, list) else []
 
@@ -89,7 +89,7 @@ class DcssbClient:
         which running theatre a landing belongs to, before committing to a
         paced sweep of it.
         """
-        async with httpx.AsyncClient() as client:
+        async with httpx2.AsyncClient() as client:
             listing = await self._get(client, "/airbases", server_name=server_name)
         return [a for a in (listing or {}).get("airbases", []) if a.get("runwayList")]
 
@@ -116,7 +116,7 @@ class DcssbClient:
         """
         runways: list[Runway] = []
         airbases = await self.fetch_airbases(server_name)
-        async with httpx.AsyncClient() as client:
+        async with httpx2.AsyncClient() as client:
             logger.info(
                 "DCSSB: sweeping %d airbases on %s (~%ds)",
                 len(airbases),
@@ -141,15 +141,11 @@ class DcssbClient:
                 except Exception:
                     logger.warning("DCSSB: /airbase failed for %s", name, exc_info=True)
                     continue
-                runways.extend(
-                    _parse_airbase(airbase, detail, _convergence_deg(airbase, airbases))
-                )
+                runways.extend(_parse_airbase(airbase, detail, _convergence_deg(airbase, airbases)))
         return runways
 
 
-def _convergence_deg(
-    airbase: dict[str, Any], airbases: list[dict[str, Any]]
-) -> float:
+def _convergence_deg(airbase: dict[str, Any], airbases: list[dict[str, Any]]) -> float:
     """Angle from DCS grid north to true north at ``airbase``.
 
     DCS's x/z is the theatre's map projection, whose north only coincides
@@ -200,8 +196,7 @@ def _convergence_deg(
     geographic = math.degrees(
         math.atan2(
             math.sin(delta) * math.cos(lat2),
-            math.cos(lat1) * math.sin(lat2)
-            - math.sin(lat1) * math.cos(lat2) * math.cos(delta),
+            math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(delta),
         )
     )
     grid = math.degrees(math.atan2(oz - z, ox - x))

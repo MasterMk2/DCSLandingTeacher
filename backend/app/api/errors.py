@@ -27,9 +27,7 @@ class AppError(Exception):
         self.details = details or {}
 
 
-def error_envelope(
-    status_code: int, error_code: str, message: str, details: dict
-) -> JSONResponse:
+def error_envelope(status_code: int, error_code: str, message: str, details: dict) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"error": error_code, "message": message, "details": details},

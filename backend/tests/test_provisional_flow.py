@@ -244,24 +244,33 @@ async def test_startup_settles_provisional_rows_left_by_a_previous_run(
     from app.api.main import settle_orphaned_provisionals
 
     async with session_factory() as session:
-        session.add_all([
-            Landing(
-                flight_id=1, object_id=1, kind="land", outcome="full_stop",
-                outcome_status="provisional", touchdown_time=100.0,
-            ),
-            Landing(
-                flight_id=1, object_id=1, kind="land", outcome="touch_and_go",
-                outcome_status="final", touchdown_time=50.0, grade="B",
-            ),
-        ])
+        session.add_all(
+            [
+                Landing(
+                    flight_id=1,
+                    object_id=1,
+                    kind="land",
+                    outcome="full_stop",
+                    outcome_status="provisional",
+                    touchdown_time=100.0,
+                ),
+                Landing(
+                    flight_id=1,
+                    object_id=1,
+                    kind="land",
+                    outcome="touch_and_go",
+                    outcome_status="final",
+                    touchdown_time=50.0,
+                    grade="B",
+                ),
+            ]
+        )
         await session.commit()
 
     assert await settle_orphaned_provisionals(session_factory) == 1
 
     async with session_factory() as session:
-        rows = (
-            await session.execute(select(Landing).order_by(Landing.id))
-        ).scalars().all()
+        rows = (await session.execute(select(Landing).order_by(Landing.id))).scalars().all()
     assert [r.outcome_status for r in rows] == ["final", "final"]
     # 記録済みの outcome は据え置く (観測が途中で切れた着陸の最良の証拠)。
     assert [r.outcome for r in rows] == ["full_stop", "touch_and_go"]

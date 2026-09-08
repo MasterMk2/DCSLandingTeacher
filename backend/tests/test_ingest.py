@@ -8,10 +8,17 @@ import pytest
 from sqlalchemy import event, select, text
 
 from app.ingest import TrackIngestor
-from app.models.database import create_engine, create_session_factory, init_db
+from app.models import entities  # noqa: F401
+from app.models.base import Base
+from app.models.database import create_engine, create_session_factory
 from app.models.entities import DcsObject, Flight, Track
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+async def create_test_schema(engine) -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 async def feed_sample(ingestor: TrackIngestor) -> None:
@@ -29,11 +36,9 @@ async def test_ingest_persists_flight_objects_tracks(session_factory) -> None:
     async with session_factory() as session:
         flights = (await session.execute(select(Flight))).scalars().all()
         objects = (
-            await session.execute(select(DcsObject).order_by(DcsObject.acmi_id))
-        ).scalars().all()
-        tracks = (
-            await session.execute(select(Track).order_by(Track.mission_time))
-        ).scalars().all()
+            (await session.execute(select(DcsObject).order_by(DcsObject.acmi_id))).scalars().all()
+        )
+        tracks = (await session.execute(select(Track).order_by(Track.mission_time))).scalars().all()
 
     # One flight created from global-object metadata.
     assert len(flights) == 1
@@ -209,7 +214,7 @@ async def test_ingest_batches_commits(tmp_path) -> None:
 
     db_path = (tmp_path / "batch.db").as_posix()
     engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
-    await init_db(engine)
+    await create_test_schema(engine)
 
     commit_count = {"n": 0}
 
@@ -238,8 +243,8 @@ async def test_ingest_batches_commits(tmp_path) -> None:
 
         async with session_factory() as session:
             tracks = (
-                await session.execute(select(Track).order_by(Track.mission_time))
-            ).scalars().all()
+                (await session.execute(select(Track).order_by(Track.mission_time))).scalars().all()
+            )
         assert len(tracks) == 3
         # Batching: fewer commits than writes.
         # With session-per-batch: 2 commits (batch of 2 + final batch of 1 on close).
@@ -268,7 +273,7 @@ async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> No
 
     db_path = (tmp_path / "batch_age.db").as_posix()
     engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
-    await init_db(engine)
+    await create_test_schema(engine)
     session_factory = create_session_factory(engine)
 
     # max_batch_size is high enough that only the age trigger can fire.
@@ -335,7 +340,7 @@ async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> No
 
     db_path = (tmp_path / "lock.db").as_posix()
     engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
-    await init_db(engine)
+    await create_test_schema(engine)
     session_factory = create_session_factory(engine)
 
     inserts = {"n": 0}
@@ -388,7 +393,8 @@ async def test_a_failed_write_does_not_wedge_the_ingestor(tmp_path) -> None:
     url = f"sqlite+aiosqlite:///{db_path}"
 
     engine = create_engine(url)
-    await init_db(engine)
+    await create_test_schema(engine)
+
     # Fail immediately instead of waiting out the 5 s busy timeout.
     @event.listens_for(engine.sync_engine, "connect")
     def _no_wait(dbapi_connection, _record):  # noqa: ANN001

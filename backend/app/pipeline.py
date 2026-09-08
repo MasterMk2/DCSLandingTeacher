@@ -211,9 +211,7 @@ class LandingPipeline:
         # touchdown-referenced approximation.
         self._runway_provider = runway_provider
         # Source path so the config can be reloaded at runtime (Issue #40).
-        self._config_path = (
-            Path(grading_config_path) if grading_config_path is not None else None
-        )
+        self._config_path = Path(grading_config_path) if grading_config_path is not None else None
 
     def reload_config(self) -> None:
         """Reload grading thresholds from disk without restarting (Issue #40).
@@ -288,9 +286,7 @@ class LandingPipeline:
         async with self._session_factory() as session:
             landing = await session.get(Landing, landing_id)
             if landing is None:
-                logger.warning(
-                    "cannot finalize landing #%d: row disappeared", landing_id
-                )
+                logger.warning("cannot finalize landing #%d: row disappeared", landing_id)
                 return
             venue_name = _write_graded_event(landing, event, analysis, result, score)
             await session.commit()
@@ -462,9 +458,7 @@ class LandingPipeline:
             # Corrupt stored JSON (Issue #44): report it instead of a raw 500.
             from app.api.errors import AppError
 
-            raise AppError(
-                422, "MALFORMED_APPROACH_TRACK", str(exc)
-            ) from exc
+            raise AppError(422, "MALFORMED_APPROACH_TRACK", str(exc)) from exc
         # 進入パターンと機体は landings / objects 側が正。approach_track に
         # 入れるようにしたのは後からなので、それ以前に記録された着陸では
         # 空のままになる。ここで補わないと、既存データの再採点だけ
@@ -714,9 +708,7 @@ class LandingPipeline:
             session.add(landing)
             await session.commit()
             await session.refresh(landing)
-            logger.info(
-                "landing #%d graded %s (%s)", landing.id, result.grade, event.kind
-            )
+            logger.info("landing #%d graded %s (%s)", landing.id, result.grade, event.kind)
             return landing.id
 
     async def _resolve_object_row(

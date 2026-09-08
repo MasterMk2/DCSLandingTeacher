@@ -7,7 +7,15 @@ import time
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -194,9 +202,7 @@ async def list_landings(
     venue: str | None = Query(default=None, description="Carrier or airbase name"),
     kind: str | None = Query(default=None, pattern="^(carrier|land)$"),
     grade: str | None = Query(default=None),
-    outcome: str | None = Query(
-        default=None, pattern="^(full_stop|touch_and_go|bolter)$"
-    ),
+    outcome: str | None = Query(default=None, pattern="^(full_stop|touch_and_go|bolter)$"),
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
     source: str | None = Query(default=None, description="Filter by Tacview source ID"),
@@ -227,9 +233,13 @@ async def list_landings(
     )
 
     if player:
-        query = query.where(func.coalesce(func.nullif(Landing.pilot, ""), DcsObject.pilot).ilike(f"%{player}%"))
+        query = query.where(
+            func.coalesce(func.nullif(Landing.pilot, ""), DcsObject.pilot).ilike(f"%{player}%")
+        )
     if airframe:
-        query = query.where(func.coalesce(func.nullif(Landing.airframe, ""), DcsObject.name).ilike(f"%{airframe}%"))
+        query = query.where(
+            func.coalesce(func.nullif(Landing.airframe, ""), DcsObject.name).ilike(f"%{airframe}%")
+        )
     if venue:
         query = query.where(Landing.venue_name.ilike(f"%{venue}%"))
     if kind:
@@ -257,9 +267,7 @@ async def list_landings(
             )
         )
 
-    total_result = await session.execute(
-        select(func.count()).select_from(query.subquery())
-    )
+    total_result = await session.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar_one()
 
     result = await session.execute(query.limit(limit).offset(offset))
@@ -372,9 +380,7 @@ async def regrade_landing(
     if landing is None:
         raise HTTPException(status_code=404, detail="landing not found")
     if not landing.approach_track:
-        raise HTTPException(
-            status_code=409, detail="landing has no stored approach track"
-        )
+        raise HTTPException(status_code=409, detail="landing has no stored approach track")
 
     pipeline = getattr(request.app.state, "pipeline", None)
     if pipeline is None:

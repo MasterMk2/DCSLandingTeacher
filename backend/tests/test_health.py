@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 
 from app.api import create_app
 from app.config import Settings
+from app.models import entities  # noqa: F401
+from app.models.base import Base
+from app.models.database import create_engine
 
 
 def make_settings(tmp_path, **overrides) -> Settings:
@@ -18,9 +21,15 @@ def make_settings(tmp_path, **overrides) -> Settings:
 
 
 async def test_health_endpoint_reports_ok(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    settings = make_settings(tmp_path)
+    schema_engine = create_engine(settings.database_url)
+    async with schema_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    await schema_engine.dispose()
+
+    app = create_app(settings)
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         async with app.router.lifespan_context(app):
             response = await client.get("/api/health")
 
@@ -29,18 +38,3 @@ async def test_health_endpoint_reports_ok(tmp_path) -> None:
     assert data["status"] == "ok"
     assert data["acmi_enabled"] is False
     assert data["acmi_connected"] is False
-
-
-async def test_lifespan_creates_database_tables(tmp_path) -> None:
-    settings = make_settings(tmp_path)
-    app = create_app(settings)
-    async with app.router.lifespan_context(app):
-        # The SQLite file must exist with our schema after startup.
-        assert (tmp_path / "health.db").exists()
-
-
-async def test_settings_defaults_match_requirements() -> None:
-    settings = Settings(acmi_enabled=False, _env_file=None)
-    assert settings.tacview_port == 31010
-    assert settings.reconnect_initial_delay > 0
-    assert settings.reconnect_max_delay >= settings.reconnect_initial_delay

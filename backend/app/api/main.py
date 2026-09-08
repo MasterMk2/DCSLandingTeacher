@@ -10,26 +10,26 @@ from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from sqlalchemy import update
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import update
 
 from app.acmi.multi_source import MultiSourceAcmiManager
 from app.acmi.stream import AcmiStreamClient
 from app.api.errors import AppError, error_envelope
 from app.api.imports import router as import_router
 from app.api.notifier import LandingNotifier
-from app.api.routes import protected_router, router as api_router
+from app.api.routes import protected_router
+from app.api.routes import router as api_router
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
 from app.grading.packaged import resolve_config_path
 from app.importer import ImportJobManager
 from app.logging_config import configure_logging
-from app.models.database import create_engine, create_session_factory, init_db
+from app.models.database import create_engine, create_session_factory
 from app.models.entities import Landing
-from app.models.migrations import run_migrations
 from app.pipeline import LandingPipeline
 from app.runways.dcssb import DcssbClient
 from app.runways.provider import RunwayProvider
@@ -51,6 +51,7 @@ _version_router = APIRouter()
 @_version_router.get("/version")
 async def api_version() -> dict[str, str]:
     return {"api": API_V1, "version": API_VERSION}
+
 
 # How often the grading config file is polled for changes (Issue #40). A
 # watchdog dependency would be heavier; mtime polling is dependency-free and
@@ -99,9 +100,7 @@ async def settle_orphaned_provisionals(session_factory) -> int:
         await session.commit()
     settled = result.rowcount or 0
     if settled:
-        logger.warning(
-            "settled %d landing(s) left provisional by a previous run", settled
-        )
+        logger.warning("settled %d landing(s) left provisional by a previous run", settled)
     return settled
 
 
@@ -163,9 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # that a bind mount cannot shadow. See app.grading.packaged for why: in
     # production /app/config is an empty mount, and the server ran on the
     # code defaults for weeks without saying a word.
-    grading_config_path = resolve_config_path(
-        settings.grading_config_path, "grading.yaml"
-    )
+    grading_config_path = resolve_config_path(settings.grading_config_path, "grading.yaml")
     grading_config = load_grading_config(grading_config_path)
     carrier_geometry_book = load_carrier_geometry_book(
         resolve_config_path(settings.carriers_config_path, "carriers.yaml")
@@ -173,13 +170,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if settings.migrations_on_startup:
-            await run_migrations(
-                settings.database_url, settings.migrations_dir or None
-            )
-        else:
-            await init_db(engine)
-
         await settle_orphaned_provisionals(session_factory)
 
         notifier = LandingNotifier()
@@ -215,7 +205,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             first_source = multi_source_manager.get_source("default")
             if first_source is not None:
                 acmi_client = first_source.client
-            logger.info("Multi-source ACMI manager started with %d source(s)", len(multi_source_manager._sources))
+            logger.info(
+                "Multi-source ACMI manager started with %d source(s)",
+                len(multi_source_manager._sources),
+            )
         else:
             logger.info("ACMI client disabled by configuration")
 
@@ -223,9 +216,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session_factory,
             pipeline,
             notifier=notifier,
-            sample_buffer_s=float(
-                grading_config.detection.get("sample_buffer_s", 600.0)
-            ),
+            sample_buffer_s=float(grading_config.detection.get("sample_buffer_s", 600.0)),
             detection_config=grading_config.to_detection_config(),
             keep_all_tracks=settings.keep_all_tracks,
         )
@@ -307,9 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rejection, not the limit itself: ``_save_upload`` still enforces the
         cap while streaming.
         """
-        if request.method == "POST" and request.url.path.rstrip("/").endswith(
-            "/import"
-        ):
+        if request.method == "POST" and request.url.path.rstrip("/").endswith("/import"):
             declared = request.headers.get("content-length")
             if declared is not None and declared.isdigit():
                 max_bytes = settings.import_max_upload_mb * 1024 * 1024
@@ -390,9 +379,7 @@ async def _handle_app_error(_request: Request, exc: AppError) -> JSONResponse:
     return error_envelope(exc.status_code, exc.error_code, exc.message, exc.details)
 
 
-async def _handle_validation_error(
-    _request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def _handle_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
     return error_envelope(
         422, "VALIDATION_ERROR", "Request validation failed", {"errors": exc.errors()}
     )

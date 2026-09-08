@@ -5,30 +5,30 @@ from __future__ import annotations
 import io
 import zipfile
 
-import httpx
+import httpx2
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.config import Settings
-from tests.helpers import make_acmi_text, make_approach_samples
+from tests.helpers import create_test_schema, make_acmi_text, make_approach_samples
 
 
 def _settings(tmp_path, **overrides) -> Settings:
     db_path = (tmp_path / "import.db").as_posix()
-    return Settings(
+    settings = Settings(
         acmi_enabled=False,
         database_url=f"sqlite+aiosqlite:///{db_path}",
         **overrides,
     )
+    create_test_schema(settings.database_url)
+    return settings
 
 
 def _sample_acmi() -> str:
     return make_acmi_text(make_approach_samples(outcome="full_stop"))
 
 
-async def _wait_for_job(
-    http: httpx.AsyncClient, job_id: str, timeout_s: float = 10.0
-) -> dict:
+async def _wait_for_job(http: httpx2.AsyncClient, job_id: str, timeout_s: float = 10.0) -> dict:
     """Poll the job endpoint until it reaches a terminal state."""
     import asyncio
 
@@ -43,9 +43,9 @@ async def _wait_for_job(
         await asyncio.sleep(0.01)
 
 
-async def _open_client(app) -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+async def _open_client(app) -> httpx2.AsyncClient:
+    transport = httpx2.ASGITransport(app=app)
+    return httpx2.AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_import_acmi_end_to_end(tmp_path) -> None:
@@ -115,12 +115,15 @@ async def test_discarding_an_import_removes_everything_it_created(tmp_path) -> N
             await _wait_for_job(http, start["id"])
 
             session_factory = app.state.session_factory
+
             async def counts() -> dict[str, int]:
                 async with session_factory() as session:
                     out = {}
                     for name, model in (
-                        ("flights", Flight), ("objects", DcsObject),
-                        ("tracks", Track), ("landings", Landing),
+                        ("flights", Flight),
+                        ("objects", DcsObject),
+                        ("tracks", Track),
+                        ("landings", Landing),
                     ):
                         out[name] = (
                             await session.execute(select(func.count()).select_from(model))
@@ -299,9 +302,7 @@ async def test_import_requires_authentication(tmp_path) -> None:
             )
             assert allowed.status_code == 202
 
-            listing = await http.get(
-                "/api/imports", headers={"X-Auth-Token": "secret"}
-            )
+            listing = await http.get("/api/imports", headers={"X-Auth-Token": "secret"})
             assert listing.status_code == 200
 
 
@@ -388,9 +389,8 @@ async def test_import_job_survives_restart(tmp_path) -> None:
     import asyncio
 
     db_path = (tmp_path / "persist.db").as_posix()
-    settings1 = Settings(
-        acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}"
-    )
+    settings1 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
+    create_test_schema(settings1.database_url)
     app1 = create_app(settings1)
     async with app1.router.lifespan_context(app1):
         async with await _open_client(app1) as http:
@@ -406,9 +406,7 @@ async def test_import_job_survives_restart(tmp_path) -> None:
 
     # app1's in-memory manager is gone now. A fresh app against the same
     # database must rebuild the job history from the import_jobs table.
-    settings2 = Settings(
-        acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}"
-    )
+    settings2 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
     app2 = create_app(settings2)
     async with app2.router.lifespan_context(app2):
         async with await _open_client(app2) as http:
@@ -475,9 +473,8 @@ async def test_discarded_import_does_not_come_back_after_a_restart(tmp_path) -> 
     import asyncio
 
     db_path = (tmp_path / "discard.db").as_posix()
-    settings1 = Settings(
-        acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}"
-    )
+    settings1 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
+    create_test_schema(settings1.database_url)
     app1 = create_app(settings1)
     async with app1.router.lifespan_context(app1):
         async with await _open_client(app1) as http:
@@ -491,9 +488,7 @@ async def test_discarded_import_does_not_come_back_after_a_restart(tmp_path) -> 
             assert (await http.post(f"/api/imports/{job_id}/discard")).status_code == 204
             assert (await http.get(f"/api/imports/{job_id}")).status_code == 404
 
-    settings2 = Settings(
-        acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}"
-    )
+    settings2 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
     app2 = create_app(settings2)
     async with app2.router.lifespan_context(app2):
         async with await _open_client(app2) as http:

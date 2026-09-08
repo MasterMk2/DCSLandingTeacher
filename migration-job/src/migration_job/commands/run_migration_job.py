@@ -8,6 +8,15 @@ from alembic.config import Config
 from sqlalchemy import URL
 
 
+def alembic_ini_path() -> Path:
+    """Return the Alembic configuration bundled with this migration project."""
+    project_file = Path(__file__).parents[3] / 'alembic.ini'
+    if project_file.is_file():
+        return project_file
+
+    return Path('/app/alembic.ini')
+
+
 def main() -> None:
     database_url = URL.create(
         drivername='postgresql+psycopg',
@@ -18,8 +27,7 @@ def main() -> None:
         database=os.environ['DB_NAME'],
     )
 
-    alembic_ini = Path('/app/alembic.ini')
-    config = Config(str(alembic_ini))
+    config = Config(str(alembic_ini_path()))
 
     # Alembic's ConfigParser treats "%" specially, so escape percent signs
     # that may appear in URL-encoded passwords/usernames.

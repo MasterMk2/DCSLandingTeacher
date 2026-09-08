@@ -200,9 +200,7 @@ def _ramp_aligned_event(
     ramp_lat, ramp_lon = offset_position(
         LAT0, LON0, 0.0, geometry.ramp_along_m, geometry.ramp_lateral_m
     )
-    td_lat, td_lon = offset_position(
-        ramp_lat, ramp_lon, course_deg, overshoot_m, 0.0
-    )
+    td_lat, td_lon = offset_position(ramp_lat, ramp_lon, course_deg, overshoot_m, 0.0)
     speed = 70.0
     samples = []
     for t in range(-55, 26):
@@ -276,9 +274,7 @@ def test_geometry_measures_distance_to_the_ramp_not_touchdown() -> None:
     for t in (-55.0, -30.0, -10.0):
         geo_sample = next(s for s in with_geo.samples if s.time == t)
         fb_sample = next(s for s in fallback.samples if s.time == t)
-        assert geo_sample.distance_to_go == pytest.approx(
-            fb_sample.distance_to_go - 80.0, abs=5.0
-        )
+        assert geo_sample.distance_to_go == pytest.approx(fb_sample.distance_to_go - 80.0, abs=5.0)
 
 
 def test_analysis_roundtrip_preserves_geometry() -> None:

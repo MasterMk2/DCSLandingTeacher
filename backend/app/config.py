@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # Database (SQLite via aiosqlite)
-    database_url: str = "sqlite+aiosqlite:///./data/dlt.db"
+    # PostgreSQL connection URL. Docker Compose supplies the container address.
+    database_url: str = (
+        "postgresql+psycopg://dcs_landing_teacher@localhost:5432/dcs_landing_teacher"
+    )
 
     # Tacview realtime telemetry stream (ACMI 2.2 Text over TCP)
     # Multi-source configuration (new): JSON array of TacviewSource objects.
@@ -69,16 +71,6 @@ class Settings(BaseSettings):
     # production database past 11 GB; only for a session recorded on purpose
     # as validation data. Applies to live sources and to file imports.
     keep_all_tracks: bool = False
-
-    # Apply Alembic migrations automatically at startup (Issue #7). When
-    # disabled, the legacy create_all bootstrap is used instead (dev mode).
-    migrations_on_startup: bool = True
-
-    # Explicit path to the Alembic migrations directory. Empty means
-    # auto-detect next to the app package. Set this in containers where the
-    # package is installed into site-packages (e.g. /app/migrations).
-    migrations_dir: str = ""
-
     # Simple shared-token authentication (Issue #8). Empty (default) disables
     # authentication entirely and the API behaves exactly as before. When set,
     # REST endpoints under /api require "Authorization: Bearer <token>" or
@@ -143,7 +135,7 @@ class Settings(BaseSettings):
     @property
     def tacview_sources(self) -> list[TacviewSource]:
         """Return parsed list of Tacview sources.
-        
+
         If tacview_sources_json is set, parse it. Otherwise fall back to
         legacy single-source configuration.
         """
@@ -151,15 +143,17 @@ class Settings(BaseSettings):
             data = json.loads(self.tacview_sources_json)
             return [TacviewSource(**item) for item in data]
         # Backward compatibility: construct a single source from legacy settings
-        return [TacviewSource(
-            id="default",
-            name="Default",
-            host=self.tacview_host,
-            port=self.tacview_port,
-            password=self.tacview_password,
-            client_name=self.tacview_client_name,
-            idle_timeout=self.acmi_idle_timeout,
-        )]
+        return [
+            TacviewSource(
+                id="default",
+                name="Default",
+                host=self.tacview_host,
+                port=self.tacview_port,
+                password=self.tacview_password,
+                client_name=self.tacview_client_name,
+                idle_timeout=self.acmi_idle_timeout,
+            )
+        ]
 
     @property
     def tacview_enabled(self) -> bool:

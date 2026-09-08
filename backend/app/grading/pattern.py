@@ -112,26 +112,20 @@ def track_points(
             continue
         # along 軸は「進入方向が正」。along_of は残距離なので符号反転。
         d_along = -(along_of(current) - along_of(anchor))
-        d_lateral = (current.centerline_deviation or 0.0) - (
-            anchor.centerline_deviation or 0.0
-        )
+        d_lateral = (current.centerline_deviation or 0.0) - (anchor.centerline_deviation or 0.0)
         if math.hypot(d_along, d_lateral) < min_step_m:
             continue
         points.append(TrackPoint(current, math.degrees(math.atan2(d_lateral, d_along))))
     return points
 
 
-def segment_approach(
-    analysis: ApproachAnalysis, settings: dict[str, Any]
-) -> ApproachSegments:
+def segment_approach(analysis: ApproachAnalysis, settings: dict[str, Any]) -> ApproachSegments:
     """進入をダウンウィンド / ファイナルに切り分ける。"""
     smoothing_s = float(settings.get("track_smoothing_s", 2.0))
     min_step_m = float(settings.get("track_min_step_m", 20.0))
     align_deg = float(settings.get("rollout_align_deg", 15.0))
     downwind_cone_deg = float(settings.get("downwind_cone_deg", 60.0))
-    downwind_max_turn_rate = float(
-        settings.get("downwind_max_turn_rate_deg_s", 1.5)
-    )
+    downwind_max_turn_rate = float(settings.get("downwind_max_turn_rate_deg_s", 1.5))
     gate_agl_m = float(settings.get("stabilization_gate_agl_m", 305.0))
 
     inbound = [s for s in analysis.samples if s.time < analysis.touchdown_time]
@@ -160,15 +154,11 @@ def segment_approach(
     rollout_time = track[rollout_index].sample.time
     segments.rollout_time = rollout_time
     segments.final_start_time = (
-        rollout_time
-        if segments.gate_time is None
-        else max(rollout_time, segments.gate_time)
+        rollout_time if segments.gate_time is None else max(rollout_time, segments.gate_time)
     )
     segments.final = _from(inbound, segments.final_start_time)
 
-    run = _downwind_leg(
-        track[: rollout_index + 1], downwind_cone_deg, downwind_max_turn_rate
-    )
+    run = _downwind_leg(track[: rollout_index + 1], downwind_cone_deg, downwind_max_turn_rate)
     segments.downwind = [point.sample for point in run]
     if run:
         start = track.index(run[0])
@@ -432,9 +422,7 @@ def _downwind_leg(
             previous = current[-1]
             dt = point.sample.time - previous.sample.time
             rate = (
-                abs(_wrap180(point.angle_deg - previous.angle_deg)) / dt
-                if dt > 0
-                else float("inf")
+                abs(_wrap180(point.angle_deg - previous.angle_deg)) / dt if dt > 0 else float("inf")
             )
             if rate > max_turn_rate:
                 runs.append(current)
@@ -480,9 +468,7 @@ def _gate_time(inbound: list[DeviationSample], gate_agl_m: float) -> float | Non
     return latest
 
 
-def _from(
-    inbound: list[DeviationSample], start: float | None
-) -> list[DeviationSample]:
+def _from(inbound: list[DeviationSample], start: float | None) -> list[DeviationSample]:
     if start is None:
         return []
     return [s for s in inbound if s.time >= start]
@@ -694,8 +680,7 @@ def pattern_metrics(
             (
                 s.centerline_deviation
                 for s in analysis.samples
-                if s.time >= segments.rollout_time
-                and s.centerline_deviation is not None
+                if s.time >= segments.rollout_time and s.centerline_deviation is not None
             ),
             None,
         )
@@ -719,9 +704,7 @@ def pattern_metrics(
         # 「旋回明けにどれだけ軸から外れていたか」。アンダーシュートは
         # ロールアウト時の残り、オーバーシュートは突き抜けた深さで、
         # 悪い方を代表値にする。
-        metrics["alignment_error_m"] = round(
-            max(abs(rollout_offset or 0.0), overshoot or 0.0), 2
-        )
+        metrics["alignment_error_m"] = round(max(abs(rollout_offset or 0.0), overshoot or 0.0), 2)
 
     # --- ダウンウィンド --------------------------------------------------
     if segments.downwind:

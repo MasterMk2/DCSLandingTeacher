@@ -1,5 +1,6 @@
 """API versioning (Issue #38): routes are served under /api/v1 and the
 unversioned /api alias is retained for backwards compatibility."""
+
 from __future__ import annotations
 
 from app.api.main import API_V1, API_VERSION

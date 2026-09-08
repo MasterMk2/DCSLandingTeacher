@@ -4,19 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
+import httpx2
 
 from app.api import create_app
 from app.config import Settings
+from tests.helpers import create_test_schema
 
 
 def make_settings(tmp_path: Path, dist_dir: Path) -> Settings:
     db_path = (tmp_path / "static.db").as_posix()
-    return Settings(
+    settings = Settings(
         acmi_enabled=False,
         database_url=f"sqlite+aiosqlite:///{db_path}",
         frontend_dist_dir=dist_dir.as_posix(),
     )
+    create_test_schema(settings.database_url)
+    return settings
 
 
 def _write_dist(root: Path) -> None:
@@ -32,8 +35,8 @@ async def test_spa_root_served_when_dist_exists(tmp_path) -> None:
     _write_dist(dist)
 
     app = create_app(make_settings(tmp_path, dist))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         async with app.router.lifespan_context(app):
             root = await client.get("/")
             asset = await client.get("/assets/app.js")
@@ -52,8 +55,8 @@ async def test_spa_root_served_when_dist_exists(tmp_path) -> None:
 
 async def test_api_only_mode_when_dist_missing(tmp_path) -> None:
     app = create_app(make_settings(tmp_path, tmp_path / "nope"))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         async with app.router.lifespan_context(app):
             response = await client.get("/api/health")
 

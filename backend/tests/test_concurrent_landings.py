@@ -85,9 +85,7 @@ def test_consecutive_approaches_recorded_as_two_events() -> None:
     # First pass: bolter (touch-and-go on the carrier), cut right after the
     # climb-out starts.
     first = [
-        s
-        for s in make_approach_samples(outcome="touch_and_go", ground_time_s=3)
-        if s.time <= 8
+        s for s in make_approach_samples(outcome="touch_and_go", ground_time_s=3) if s.time <= 8
     ]
     # Second pass: a fresh full-stop approach shifted +64 s so its inbound
     # segment starts right after the first climb-out.
@@ -184,9 +182,7 @@ async def test_interleaved_stream_yields_one_record_per_aircraft(session_factory
             },
             {
                 "obj_id": "201",
-                "samples": make_approach_samples(
-                    outcome="full_stop", offset_east_m=400.0
-                ),
+                "samples": make_approach_samples(outcome="full_stop", offset_east_m=400.0),
                 "name": "Su-33",
                 "pilot": "Bravo",
             },
@@ -200,13 +196,12 @@ async def test_interleaved_stream_yields_one_record_per_aircraft(session_factory
 
     async with session_factory() as session:
         landings = (
-            await session.execute(select(Landing).order_by(Landing.touchdown_time))
-        ).scalars().all()
+            (await session.execute(select(Landing).order_by(Landing.touchdown_time)))
+            .scalars()
+            .all()
+        )
         objects = {
-            obj.id: obj
-            for obj in (
-                await session.execute(select(DcsObject))
-            ).scalars().all()
+            obj.id: obj for obj in (await session.execute(select(DcsObject))).scalars().all()
         }
 
     # One record per aircraft, neither contaminated by the other.

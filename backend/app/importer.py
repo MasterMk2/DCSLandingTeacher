@@ -116,9 +116,7 @@ class ImportJob:
             "status": self.status,
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": (
-                self.finished_at.isoformat() if self.finished_at else None
-            ),
+            "finished_at": (self.finished_at.isoformat() if self.finished_at else None),
             "frames_processed": self.frames_processed,
             "total_frames": self.total_frames,
             "progress_percent": self.progress_percent,
@@ -203,10 +201,7 @@ class _DuplicateGuard:
             .join(Flight, Landing.flight_id == Flight.id)
             .where(DcsObject.acmi_id == context.acmi_object_id)
             .where(Landing.touchdown_time.is_not(None))
-            .where(
-                func.abs(Landing.touchdown_time - touchdown_time)
-                < TOUCHDOWN_EPSILON_S
-            )
+            .where(func.abs(Landing.touchdown_time - touchdown_time) < TOUCHDOWN_EPSILON_S)
         )
         if recording_time is not None:
             statement = statement.where(
@@ -374,9 +369,7 @@ class ImportJobManager:
                     try:
                         await self._persist_job(job)
                     except Exception:  # noqa: BLE001 - progress is not the payload
-                        logger.exception(
-                            "could not persist final state of import %s", job.id
-                        )
+                        logger.exception("could not persist final state of import %s", job.id)
                     await self._notify(job)
 
     async def _process(self, job: ImportJob, path: Path) -> None:
@@ -397,9 +390,7 @@ class ImportJobManager:
             deck_altitude_for=self._pipeline.deck_altitude_for,
             keep_all_tracks=self._keep_all_tracks,
         )
-        holder.append(
-            _DuplicateGuard(job, self._session_factory, self._pipeline, ingestor)
-        )
+        holder.append(_DuplicateGuard(job, self._session_factory, self._pipeline, ingestor))
 
         # Pre-count time-frame lines (#...) to estimate total frames for
         # progress. Plain text is re-read cheaply (buffered I/O, no parsing),
@@ -477,18 +468,12 @@ class ImportJobManager:
             # declared either, so relying on it would silently orphan every
             # track and landing of the discarded import.
             deleted = (
-                await session.execute(
-                    delete(Landing).where(Landing.flight_id.in_(flight_ids))
-                )
+                await session.execute(delete(Landing).where(Landing.flight_id.in_(flight_ids)))
             ).rowcount or 0
             await session.execute(delete(Track).where(Track.flight_id.in_(flight_ids)))
-            await session.execute(
-                delete(DcsObject).where(DcsObject.flight_id.in_(flight_ids))
-            )
+            await session.execute(delete(DcsObject).where(DcsObject.flight_id.in_(flight_ids)))
             flights = (
-                await session.execute(
-                    delete(Flight).where(Flight.source_id == source_id)
-                )
+                await session.execute(delete(Flight).where(Flight.source_id == source_id))
             ).rowcount or 0
             # The durable job row goes too (Issue #28 added it). Without this,
             # popping the in-memory entry below is only half a discard: the row
@@ -496,15 +481,15 @@ class ImportJobManager:
             # restart, and the UI lists a completed import whose data is gone
             # -- which purge_expired then "discards" again, every restart,
             # forever.
-            await session.execute(
-                delete(ImportJobRow).where(ImportJobRow.id == job_id)
-            )
+            await session.execute(delete(ImportJobRow).where(ImportJobRow.id == job_id))
             await session.commit()
         existed = self._jobs.pop(job_id, None) is not None
         if flights or existed:
             logger.info(
                 "discarded import %s (%d flight(s), %d landing(s))",
-                job_id, flights, deleted,
+                job_id,
+                flights,
+                deleted,
             )
         return existed or bool(flights)
 
@@ -518,21 +503,21 @@ class ImportJobManager:
         if retention_hours <= 0:
             return 0
         cutoff = _utcnow() - timedelta(hours=retention_hours)
-        stale = [
-            job_id
-            for job_id, job in self._jobs.items()
-            if job.created_at < cutoff
-        ]
+        stale = [job_id for job_id, job in self._jobs.items() if job.created_at < cutoff]
         # Also catch data whose in-memory job is gone (e.g. after a restart).
         async with self._session_factory() as session:
             orphaned = (
-                await session.execute(
-                    select(Flight.source_id)
-                    .where(Flight.source_id.like(f"{IMPORT_SOURCE_PREFIX}%"))
-                    .where(Flight.created_at < cutoff)
-                    .distinct()
+                (
+                    await session.execute(
+                        select(Flight.source_id)
+                        .where(Flight.source_id.like(f"{IMPORT_SOURCE_PREFIX}%"))
+                        .where(Flight.created_at < cutoff)
+                        .distinct()
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         for source_id in orphaned:
             job_id = source_id[len(IMPORT_SOURCE_PREFIX) :]
             if job_id not in stale:
@@ -547,9 +532,7 @@ class ImportJobManager:
         if self._notifier is None:
             return
         try:
-            await self._notifier.broadcast_message(
-                {"type": "import", "import": job.as_dict()}
-            )
+            await self._notifier.broadcast_message({"type": "import", "import": job.as_dict()})
         except Exception:
             logger.exception("import notification failed")
 

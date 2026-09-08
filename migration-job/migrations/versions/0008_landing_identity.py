@@ -34,34 +34,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # SQLite runs DDL non-transactionally under alembic, so the two ADD
-    # COLUMNs commit independently of the backfill below and of the version
-    # stamp. If anything fails in between, the columns exist but the revision
-    # does not, and a re-run would die on "duplicate column name". Adding only
-    # what is missing makes the migration safe to repeat from that state.
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    existing = {column['name'] for column in inspector.get_columns('landings')}
-    if 'pilot' not in existing:
-        op.add_column('landings', sa.Column('pilot', sa.String(128), nullable=True))
-    if 'airframe' not in existing:
-        op.add_column('landings', sa.Column('airframe', sa.String(128), nullable=True))
+    op.add_column('landings', sa.Column('pilot', sa.String(128), nullable=True))
+    op.add_column('landings', sa.Column('airframe', sa.String(128), nullable=True))
 
-    # Backfill from the approach track, which recorded the airframe at
-    # detection time. json_extract is SQLite-specific; this project ships on
-    # SQLite only (see docs/architecture.md), and the guard keeps the
-    # migration from failing anywhere else rather than pretending to work.
-    if bind.dialect.name == 'sqlite':
-        bind.execute(
-            sa.text(
-                """
-                UPDATE landings
-                   SET airframe = json_extract(approach_track, '$.airframe')
-                 WHERE approach_track IS NOT NULL
-                   AND json_extract(approach_track, '$.airframe') IS NOT NULL
-                """
-            )
-        )
+    # The approach track captures the airframe at detection time. PostgreSQL's
+    # JSON operator retrieves that stored value without consulting mutable
+    # object metadata.
+    op.execute(
+        """
+        UPDATE landings
+           SET airframe = approach_track ->> 'airframe'
+         WHERE approach_track IS NOT NULL
+           AND approach_track ->> 'airframe' IS NOT NULL
+        """
+    )
 
 
 def downgrade() -> None:

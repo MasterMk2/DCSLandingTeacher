@@ -250,9 +250,7 @@ def test_approach_captures_the_pattern_not_just_the_final() -> None:
     assert min(s.time for s in land[0].approach) < -70.0
 
     carrier_samples = make_approach_samples(duration_before_s=120)
-    carrier = analyze_track(
-        carrier_samples, DECK_ALTITUDE_M, carriers={"C1": make_carrier_state()}
-    )
+    carrier = analyze_track(carrier_samples, DECK_ALTITUDE_M, carriers={"C1": make_carrier_state()})
     assert len(carrier) == 1
     assert carrier[0].kind == "carrier"
     # The whole 120 s is inside 300 s / 8 nm (8400 m at 70 m/s).
@@ -288,11 +286,16 @@ def test_bounce_sequence_keeps_a_stable_identity_as_it_is_absorbed() -> None:
     # 進入 → 接地 → バウンド (頂点 6.4 m) → 再接地 → 小バウンド → 接地して停止。
     approach = [sample(float(t), 60.0 - t * 4.0) for t in range(0, 14)]
     bounce = [
-        sample(14.0, 2.6), sample(14.5, 0.7),          # 1 回目の接地
-        sample(15.0, 3.1), sample(16.0, 6.4), sample(17.0, 3.4),
-        sample(17.5, 2.3), sample(18.0, 1.4),          # 2 回目の接地
-        sample(18.5, 3.2), sample(19.0, 3.9),
-        sample(20.0, 2.9),                             # 3 回目の接地
+        sample(14.0, 2.6),
+        sample(14.5, 0.7),  # 1 回目の接地
+        sample(15.0, 3.1),
+        sample(16.0, 6.4),
+        sample(17.0, 3.4),
+        sample(17.5, 2.3),
+        sample(18.0, 1.4),  # 2 回目の接地
+        sample(18.5, 3.2),
+        sample(19.0, 3.9),
+        sample(20.0, 2.9),  # 3 回目の接地
     ]
     settled = [sample(20.0 + i * 0.5, 2.3) for i in range(1, 80)]
     full = approach + bounce + settled
@@ -385,9 +388,7 @@ def test_land_capture_stops_at_the_previous_touchdown() -> None:
     assert len(events) == 2
     final_arrival = events[-1]
     earliest = min(s.time for s in final_arrival.approach)
-    first_contact = max(
-        s.time for s in first if s.on_ground
-    )
+    first_contact = max(s.time for s in first if s.on_ground)
     assert earliest > first_contact, (
         "the second circuit's capture reached back past the first touchdown"
     )

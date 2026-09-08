@@ -100,7 +100,9 @@ class MultiSourceAcmiManager:
         )
         ctx.task = asyncio.create_task(self._run_source(ctx))
         self._sources[source.id] = ctx
-        logger.info("Started ACMI client for source: %s (%s:%d)", source.name, source.host, source.port)
+        logger.info(
+            "Started ACMI client for source: %s (%s:%d)", source.name, source.host, source.port
+        )
 
     async def _run_source(self, ctx: SourceContext) -> None:
         """Run loop for a single source (handles reconnections)."""

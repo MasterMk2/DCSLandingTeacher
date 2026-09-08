@@ -54,9 +54,7 @@ def _validate_filename(filename: str) -> None:
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "unsupported file type: expected .acmi, .acmi.txt or .acmi.zip"
-            ),
+            detail=("unsupported file type: expected .acmi, .acmi.txt or .acmi.zip"),
         )
 
 

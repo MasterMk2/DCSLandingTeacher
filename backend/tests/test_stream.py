@@ -17,10 +17,7 @@ from app.acmi.stream import (
 )
 
 ACMI_TEXT = (
-    "FileType=text/acmi/tacview\n"
-    "FileVersion=2.2\n"
-    "#1.50\n"
-    "101,T=41.6|41.5|100,Type=Air+FixedWing\n"
+    "FileType=text/acmi/tacview\nFileVersion=2.2\n#1.50\n101,T=41.6|41.5|100,Type=Air+FixedWing\n"
 )
 
 
@@ -71,9 +68,7 @@ async def _host_handshake_writer(
     host_name: str = "TestHost",
 ) -> bytes:
     """Send the host handshake and return the client's handshake reply."""
-    writer.write(
-        f"XtraLib.Stream.0\nTacview.RealTimeTelemetry.0\n{host_name}\n\0".encode()
-    )
+    writer.write(f"XtraLib.Stream.0\nTacview.RealTimeTelemetry.0\n{host_name}\n\0".encode())
     await writer.drain()
     # The client handshake ends with a terminal NUL byte.
     data = b""
@@ -152,9 +147,7 @@ async def test_stream_client_reconnects_after_disconnect() -> None:
     async def on_line(line: str) -> None:  # pragma: no cover - no data sent
         pass
 
-    client = AcmiStreamClient(
-        "127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1
-    )
+    client = AcmiStreamClient("127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1)
     task = asyncio.create_task(client.run())
     try:
         # The server closes each connection before the handshake completes;
@@ -188,9 +181,9 @@ def _feed_in_chunks(decoder: StreamDecoder, payload: bytes, size: int) -> str:
         pytest.param(lambda b: gzip.compress(b), id="gzip"),
         pytest.param(lambda b: zlib.compress(b), id="zlib"),
         pytest.param(
-            lambda b: (
-                lambda c: c.compress(b) + c.flush()
-            )(zlib.compressobj(9, zlib.DEFLATED, -15)),
+            lambda b: (lambda c: c.compress(b) + c.flush())(
+                zlib.compressobj(9, zlib.DEFLATED, -15)
+            ),
             id="deflate",
         ),
     ],
@@ -224,9 +217,9 @@ def test_stream_decoder_corrupt_gzip_raises() -> None:
 
 
 def test_stream_decoder_deflate_corrupted_midstream_raises() -> None:
-    payload = (
-        lambda c: c.compress(ACMI_TEXT.encode()) + c.flush()
-    )(zlib.compressobj(9, zlib.DEFLATED, -15))
+    payload = (lambda c: c.compress(ACMI_TEXT.encode()) + c.flush())(
+        zlib.compressobj(9, zlib.DEFLATED, -15)
+    )
     decoder = StreamDecoder()
     assert decoder.feed(payload[:12]) == "FileType=te"
     # Bit-flipped continuation of a committed deflate stream must fail
@@ -252,9 +245,7 @@ async def test_stream_client_receives_compressed_lines() -> None:
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
 
-    client = AcmiStreamClient(
-        "127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1
-    )
+    client = AcmiStreamClient("127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1)
     task = asyncio.create_task(client.run())
     try:
         await _wait_until(lambda: len(lines_received) >= 4)
@@ -298,9 +289,7 @@ async def test_stream_client_recovers_from_corrupt_compression() -> None:
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
 
-    client = AcmiStreamClient(
-        "127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1
-    )
+    client = AcmiStreamClient("127.0.0.1", port, on_line, initial_delay=0.05, max_delay=0.1)
     task = asyncio.create_task(client.run())
     try:
         await _wait_until(lambda: "FileVersion=2.2" in lines_received)

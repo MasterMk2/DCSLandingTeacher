@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.config import Settings
+from tests.helpers import create_test_schema
 
 
 def make_settings(tmp_path, **overrides) -> Settings:
     db_path = (tmp_path / "auth.db").as_posix()
-    return Settings(
+    settings = Settings(
         acmi_enabled=False,
         database_url=f"sqlite+aiosqlite:///{db_path}",
         **overrides,
     )
+    create_test_schema(settings.database_url)
+    return settings
 
 
-async def open_client(app) -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+async def open_client(app) -> httpx2.AsyncClient:
+    transport = httpx2.ASGITransport(app=app)
+    return httpx2.AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_auth_disabled_allows_anonymous_requests(tmp_path) -> None:
@@ -75,9 +78,7 @@ async def test_rest_rejects_wrong_token_with_403(tmp_path) -> None:
     app = create_app(make_settings(tmp_path, auth_token="secret"))
     async with app.router.lifespan_context(app):
         async with await open_client(app) as client:
-            response = await client.get(
-                "/api/landings", headers={"X-Auth-Token": "wrong"}
-            )
+            response = await client.get("/api/landings", headers={"X-Auth-Token": "wrong"})
 
     assert response.status_code == 403
 
@@ -86,9 +87,7 @@ async def test_rest_accepts_bearer_token(tmp_path) -> None:
     app = create_app(make_settings(tmp_path, auth_token="secret"))
     async with app.router.lifespan_context(app):
         async with await open_client(app) as client:
-            response = await client.get(
-                "/api/landings", headers={"Authorization": "Bearer secret"}
-            )
+            response = await client.get("/api/landings", headers={"Authorization": "Bearer secret"})
 
     assert response.status_code == 200
     assert response.json()["total"] == 0
@@ -98,9 +97,7 @@ async def test_rest_accepts_x_auth_token_header(tmp_path) -> None:
     app = create_app(make_settings(tmp_path, auth_token="secret"))
     async with app.router.lifespan_context(app):
         async with await open_client(app) as client:
-            response = await client.get(
-                "/api/landings", headers={"X-Auth-Token": "secret"}
-            )
+            response = await client.get("/api/landings", headers={"X-Auth-Token": "secret"})
 
     assert response.status_code == 200
 
@@ -108,9 +105,7 @@ async def test_rest_accepts_x_auth_token_header(tmp_path) -> None:
 def test_ws_accepts_valid_query_token(tmp_path) -> None:
     app = create_app(make_settings(tmp_path, auth_token="secret"))
     with TestClient(app) as test_client:
-        with test_client.websocket_connect(
-            "/api/ws/landings?token=secret"
-        ) as websocket:
+        with test_client.websocket_connect("/api/ws/landings?token=secret") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
 
@@ -156,9 +151,7 @@ def test_ws_connection_revoked_on_token_rotation(tmp_path) -> None:
     """Issue #25: rotating the server token must invalidate old connections."""
     app = create_app(make_settings(tmp_path, auth_token="old"))
     with TestClient(app) as test_client:
-        with test_client.websocket_connect(
-            "/api/ws/landings?token=old"
-        ) as websocket:
+        with test_client.websocket_connect("/api/ws/landings?token=old") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
 

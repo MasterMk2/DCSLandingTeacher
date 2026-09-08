@@ -82,8 +82,7 @@ def resolve_config_path(configured: str | Path | None, filename: str) -> Path | 
             # Not necessarily the code defaults: returning None lets the
             # loader try its own CWD-relative default path first, and only
             # then fall back to what is compiled in.
-            else "falling back to the loader's default path, then to the "
-            "built-in defaults in code",
+            else "falling back to the loader's default path, then to the built-in defaults in code",
         )
         return fallback
     return packaged_config(filename)

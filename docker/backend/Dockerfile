@@ -22,6 +22,9 @@ COPY backend/app ./app
 # This packaged copy remains available even when /app/config is shadowed
 # by a bind mount.
 COPY config/grading.yaml config/carriers.yaml ./app/grading/defaults/
+# Runway geometry is also available in the installed package when the DCS
+# server cannot sweep a theatre on demand.
+COPY config/runways/ ./app/runways/defaults/
 
 # Install the backend itself as a non-editable package.
 RUN uv sync \
@@ -41,15 +44,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DLT_RUNWAY_CACHE_DIR=/data/cache
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /data /data/cache /app/config /app/migrations \
+    && mkdir -p /data /data/cache /app/config \
     && chown -R appuser:appuser /data /app
 
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 
 COPY --chown=appuser:appuser config/grading.yaml /app/config/grading.yaml
 COPY --chown=appuser:appuser config/carriers.yaml /app/config/carriers.yaml
-
-COPY --chown=appuser:appuser backend/migrations /app/migrations
 
 VOLUME ["/data"]
 

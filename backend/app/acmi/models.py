@@ -42,9 +42,7 @@ class AcmiObject:
     #: track persistence), and re-parsing the raw strings each time dominated
     #: the parse budget (Issue #47). Invalidated wholesale whenever properties
     #: are merged; direct ``properties`` mutation is parser-internal only.
-    _float_cache: dict[str, float | None] = field(
-        default_factory=dict, repr=False, compare=False
-    )
+    _float_cache: dict[str, float | None] = field(default_factory=dict, repr=False, compare=False)
 
     def update_properties(self, values: dict[str, str]) -> None:
         """Merge new properties and drop the numeric parse cache."""
@@ -170,8 +168,8 @@ class AcmiObject:
     @property
     def speed(self) -> float | None:
         """Best-available speed in m/s (TAS preferred, then CAS, then IAS)."""
-        return self.tas if self.tas is not None else (
-            self.cas if self.cas is not None else self.ias
+        return (
+            self.tas if self.tas is not None else (self.cas if self.cas is not None else self.ias)
         )
 
     @property

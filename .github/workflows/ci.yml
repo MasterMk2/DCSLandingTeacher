@@ -18,22 +18,49 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/pyproject.toml
+
+      - uses: astral-sh/setup-uv@v5
 
       - name: Install backend with dev dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --frozen --group dev
 
       - name: Lint (ruff)
-        run: ruff check .
-
-      - name: Check migration drift (alembic check)
-        run: |
-          alembic -x db_url=sqlite:///./ci_drift.db upgrade head
-          alembic -x db_url=sqlite:///./ci_drift.db check
+        run: uv run ruff check .
 
       - name: Test (pytest)
-        run: pytest -q
+        run: uv run pytest -q
+
+  migration-job:
+    name: Migration job (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: migration-job
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install migration job with dev dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Test (pytest)
+        run: uv run pytest -q
+
+      - name: Validate Docker Compose
+        working-directory: .
+        env:
+          DLT_POSTGRES_DB: dcs_landing_teacher
+          DLT_POSTGRES_USER: dcs_landing_teacher
+          DLT_POSTGRES_PASSWORD: test-password
+        run: docker compose config --quiet
 
   frontend:
     name: Frontend (tsc build + vitest)

@@ -8,10 +8,7 @@ from app.acmi.file_reader import iter_acmi_lines
 from app.acmi.parser import AcmiParser
 
 SAMPLE_TEXT = (
-    "FileType=text/acmi/tacview\n"
-    "FileVersion=2.2\n"
-    "#1.50\n"
-    "101,T=41.6|41.5|100,Type=Air+FixedWing\n"
+    "FileType=text/acmi/tacview\nFileVersion=2.2\n#1.50\n101,T=41.6|41.5|100,Type=Air+FixedWing\n"
 )
 
 

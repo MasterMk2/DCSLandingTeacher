@@ -32,9 +32,7 @@ def to_local_xy(
 
     Returns ``(x_east, y_north)`` in meters.
     """
-    x = math.radians(lon_deg - origin_lon_deg) * radius_m * math.cos(
-        math.radians(origin_lat_deg)
-    )
+    x = math.radians(lon_deg - origin_lon_deg) * radius_m * math.cos(math.radians(origin_lat_deg))
     y = math.radians(lat_deg - origin_lat_deg) * radius_m
     return x, y
 
@@ -44,10 +42,7 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = phi2 - phi1
     dlambda = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dphi / 2) ** 2
-        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    )
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
 
 
@@ -97,9 +92,7 @@ def offset_position(
     x_east = along_m * sin_h + lateral_m * cos_h
     y_north = along_m * cos_h - lateral_m * sin_h
     lat = lat_deg + math.degrees(y_north / EARTH_RADIUS_M)
-    lon = lon_deg + math.degrees(
-        x_east / (EARTH_RADIUS_M * math.cos(math.radians(lat_deg)))
-    )
+    lon = lon_deg + math.degrees(x_east / (EARTH_RADIUS_M * math.cos(math.radians(lat_deg))))
     return lat, lon
 
 

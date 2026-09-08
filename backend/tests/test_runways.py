@@ -62,29 +62,21 @@ def test_threshold_position_matches_independently_computed_reference() -> None:
     conversion off the airbase reference point.
     """
     runway_13 = next(r for r in _batumi() if r.name == "13")
-    assert (
-        haversine_m(
-            runway_13.threshold_lat, runway_13.threshold_lon, 41.615005, 41.590119
-        )
-        < 5.0
-    )
+    assert haversine_m(runway_13.threshold_lat, runway_13.threshold_lon, 41.615005, 41.590119) < 5.0
 
 
 def test_thresholds_sit_a_full_runway_length_apart() -> None:
     runways = _batumi()
     a, b = runways[0], runways[1]
-    spacing = haversine_m(
-        a.threshold_lat, a.threshold_lon, b.threshold_lat, b.threshold_lon
-    )
+    spacing = haversine_m(a.threshold_lat, a.threshold_lon, b.threshold_lat, b.threshold_lon)
     assert spacing == pytest.approx(2070.4, rel=0.01)
 
 
 def test_aiming_point_lies_past_the_threshold_along_the_runway() -> None:
     runway_13 = next(r for r in _batumi() if r.name == "13")
     lat, lon = runway_13.aiming_point(300.0)
-    assert (
-        haversine_m(lat, lon, runway_13.threshold_lat, runway_13.threshold_lon)
-        == pytest.approx(300.0, rel=0.02)
+    assert haversine_m(lat, lon, runway_13.threshold_lat, runway_13.threshold_lon) == pytest.approx(
+        300.0, rel=0.02
     )
     # ...and towards the far end, not back down the approach.
     far = next(r for r in _batumi() if r.name == "31")
@@ -140,9 +132,18 @@ def test_airbase_is_queried_by_display_name_not_id() -> None:
             return None
 
         def json(self) -> dict:
-            return {"airbases": [{"id": "Anapa", "name": "Anapa-Vityazevo",
-                                  "runwayList": ["04"], "lat": 45.0, "lng": 37.3,
-                                  "position": {"x": 0.0, "z": 0.0}}]}
+            return {
+                "airbases": [
+                    {
+                        "id": "Anapa",
+                        "name": "Anapa-Vityazevo",
+                        "runwayList": ["04"],
+                        "lat": 45.0,
+                        "lng": 37.3,
+                        "position": {"x": 0.0, "z": 0.0},
+                    }
+                ]
+            }
 
     class _Client:
         async def __aenter__(self):
@@ -159,12 +160,12 @@ def test_airbase_is_queried_by_display_name_not_id() -> None:
 
     import app.runways.dcssb as module
 
-    original = module.httpx.AsyncClient
-    module.httpx.AsyncClient = _Client
+    original = module.httpx2.AsyncClient
+    module.httpx2.AsyncClient = _Client
     try:
         asyncio.run(client.fetch_runways("srv"))
     finally:
-        module.httpx.AsyncClient = original
+        module.httpx2.AsyncClient = original
 
     assert asked == ["Anapa-Vityazevo"]
 
@@ -362,7 +363,8 @@ def test_runways_are_rotated_from_the_dcs_grid_onto_true_north() -> None:
     # The thresholds rotate with it rather than staying put.
     moved = math.hypot(
         (rotated[0].threshold_lat - grid[0].threshold_lat) * 111_320,
-        (rotated[0].threshold_lon - grid[0].threshold_lon) * 111_320
+        (rotated[0].threshold_lon - grid[0].threshold_lon)
+        * 111_320
         * math.cos(math.radians(43.44)),
     )
     assert moved > 50.0

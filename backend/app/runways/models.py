@@ -37,9 +37,7 @@ class Runway:
     length_m: float
     width_m: float
 
-    def aiming_point(
-        self, aiming_point_m: float = DEFAULT_AIMING_POINT_M
-    ) -> tuple[float, float]:
+    def aiming_point(self, aiming_point_m: float = DEFAULT_AIMING_POINT_M) -> tuple[float, float]:
         """Lat/lon of the aiming point, ``aiming_point_m`` past the threshold."""
         from app.detection.geometry import offset_position
 
@@ -119,13 +117,10 @@ def best_runway_match(
     best_key: tuple[float, float] | None = None
     for runway in runways:
         if course_deg is not None and (
-            heading_difference_deg(runway.heading_deg, course_deg)
-            > max_heading_diff_deg
+            heading_difference_deg(runway.heading_deg, course_deg) > max_heading_diff_deg
         ):
             continue
-        distance = haversine_m(
-            latitude, longitude, runway.threshold_lat, runway.threshold_lon
-        )
+        distance = haversine_m(latitude, longitude, runway.threshold_lat, runway.threshold_lon)
         # A touchdown happens *past* the threshold, so allow the whole strip
         # plus a margin rather than requiring proximity to the threshold.
         if distance > max_distance_m:
@@ -217,9 +212,7 @@ def runway_pair_from_dcs(
     named_end = _designator_end(dcs_name, grid_heading)
 
     runways: list[Runway] = []
-    for index, grid_head in enumerate(
-        (grid_heading, normalize_heading(grid_heading + 180.0))
-    ):
+    for index, grid_head in enumerate((grid_heading, normalize_heading(grid_heading + 180.0))):
         rad = math.radians(grid_head)
         # The threshold of a landing direction sits half a length *behind*
         # the centre, along that direction. DCS x is grid north, z grid east.

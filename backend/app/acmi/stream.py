@@ -152,8 +152,7 @@ class StreamDecoder:
             # Not deflate either: fall back to lossy plain decoding, which
             # matches the pre-compression behavior for undecodable payloads.
             logger.debug(
-                "ACMI stream is neither text nor a known compression format; "
-                "decoding as plain text"
+                "ACMI stream is neither text nor a known compression format; decoding as plain text"
             )
             self._start("plain")
             return True
@@ -178,9 +177,7 @@ class StreamDecoder:
         try:
             out = self._decomp.decompress(data)
         except zlib.error as exc:
-            raise StreamDecodeError(
-                f"ACMI {self._mode} stream corrupted: {exc}"
-            ) from exc
+            raise StreamDecodeError(f"ACMI {self._mode} stream corrupted: {exc}") from exc
         return out.decode("utf-8", errors="replace")
 
 
@@ -255,9 +252,7 @@ class AcmiStreamClient:
             except asyncio.CancelledError:
                 raise
             except HandshakeError as exc:
-                logger.warning(
-                    "ACMI handshake with %s:%d failed: %s", self.host, self.port, exc
-                )
+                logger.warning("ACMI handshake with %s:%d failed: %s", self.host, self.port, exc)
                 writer.close()
                 try:
                     await writer.wait_closed()
@@ -286,9 +281,7 @@ class AcmiStreamClient:
 
             if self._stopping:
                 break
-            logger.info(
-                "ACMI stream disconnected; reconnecting in %.1fs", backoff
-            )
+            logger.info("ACMI stream disconnected; reconnecting in %.1fs", backoff)
             await self._sleep(backoff)
             backoff = min(backoff * 2, self._max_delay)
 
@@ -369,9 +362,7 @@ class AcmiStreamClient:
         await self._sleep(backoff)
         return None, None
 
-    async def _handshake(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         host_name = await perform_client_handshake(
             reader, writer, self._client_name, self._password
         )

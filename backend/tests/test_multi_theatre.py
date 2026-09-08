@@ -24,6 +24,7 @@ from app.runways.models import (
     runway_pair_from_dcs,
 )
 from app.runways.provider import CACHE_VERSION, RunwayProvider
+from tests.helpers import create_test_schema
 
 # --- a Nellis-shaped airfield -------------------------------------------------
 # Two parallel strips, 03L/21R and 03R/21L. The spacing and the stagger are
@@ -493,7 +494,7 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
     only works when the provider is handed in by a test proves nothing about a
     server whose provider is built from settings.
     """
-    import httpx
+    import httpx2 as httpx
 
     from app.api.main import create_app
     from app.config import Settings
@@ -508,6 +509,7 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
         runway_cache_dir=str(tmp_path / "cache"),
         runway_seed_dir=str(seeds),
     )
+    create_test_schema(settings.database_url)
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)

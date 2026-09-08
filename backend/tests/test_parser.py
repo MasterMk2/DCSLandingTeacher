@@ -120,10 +120,7 @@ def test_object_add_update_remove_from_fixture() -> None:
 
 def test_transform_full_syntax_typed_values() -> None:
     parser = AcmiParser()
-    parser.feed_line(
-        "101,T=41.6251307|41.5910417|2000.14|0|5|90,"
-        "Type=Air+FixedWing,Name=C172"
-    )
+    parser.feed_line("101,T=41.6251307|41.5910417|2000.14|0|5|90,Type=Air+FixedWing,Name=C172")
     obj = parser.objects["101"]
     assert obj.longitude == pytest.approx(41.6251307)
     assert obj.latitude == pytest.approx(41.5910417)
@@ -293,9 +290,7 @@ def test_mission_events_do_not_pollute_object_properties() -> None:
 
 def test_multiple_mission_events_on_one_line() -> None:
     parser = AcmiParser()
-    events = parser.feed_line(
-        "0,Event=Message|101|first,Event=Message|102|second"
-    )
+    events = parser.feed_line("0,Event=Message|101|first,Event=Message|102|second")
     mission_events = [e for e in events if isinstance(e, MissionEvent)]
     assert [e.text for e in mission_events] == ["first", "second"]
     assert [e.object_ids for e in mission_events] == [("101",), ("102",)]

@@ -99,7 +99,7 @@ DCS World Dedicated Server 上で行われた **着陸（陸上空港）／着�
 
 ### FR-7: データ保存
 
-- SQLite（初版。Docker ボリュームで永続化）
+- PostgreSQL（Docker ボリュームで永続化）
 - 生の ACMI 進入区間データも保存し、評価ロジック改良後に再評価可能にする
 
 ## 5. 非機能要件
@@ -121,7 +121,7 @@ flowchart LR
     ING --> PARSER[ACMI Parser]
     PARSER --> DETECTOR[Landing Detector]
     DETECTOR --> GRADER[LSO / Land Grader]
-    GRADER --> DB[(SQLite)]
+    GRADER --> DB[(PostgreSQL)]
     PARSER -- 進入区間生データ --> DB
     API[FastAPI Server] --> DB
     API -- REST + WebSocket --> UI[React Frontend]
@@ -174,7 +174,7 @@ DCSLandingTeacher/
 
 | フェーズ | 内容 |
 |---|---|
-| **Phase 1: 基盤** | ACMI ストリーム受信・パーサ、着陸イベント検出、SQLite 保存、REST API 骨格 |
+| **Phase 1: 基盤** | ACMI ストリーム受信・パーサ、着陸イベント検出、PostgreSQL 保存、REST API 骨格 |
 | **Phase 2: 可視化** | ダッシュボード一覧、トップダウン軌跡、時系列チャート、リアルタイム通知 |
 | **Phase 3: 評価** | 陸上簡易評価、GCA スコープビュー、データシート出力 |
 | **Phase 4: LSO** | 空母 LSO グレーディング（グレード＋ファクター）、評価閾値のチューニング |

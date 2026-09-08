@@ -9,12 +9,25 @@ from __future__ import annotations
 
 import math
 
+from sqlalchemy import create_engine as create_sync_engine
+
 from app.detection.detector import CarrierState, TrackSample
+from app.models import entities  # noqa: F401
+from app.models.base import Base
 
 LAT0 = 35.0
 LON0 = 140.0
 DECK_ALTITUDE_M = 20.0
 M_PER_DEG_LAT = 111320.0
+
+
+def create_test_schema(database_url: str) -> None:
+    """Create the disposable SQLite schema owned by an integration test."""
+    engine = create_sync_engine(database_url.replace("sqlite+aiosqlite", "sqlite"))
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        engine.dispose()
 
 
 def _lat_offset(meters: float) -> float:
@@ -69,9 +82,7 @@ def make_approach_samples(
       again after ~3 s of ground time.
     """
     tan_slope = math.tan(math.radians(glideslope_deg))
-    td_speed = (
-        approach_speed_ms if touchdown_speed_ms is None else touchdown_speed_ms
-    )
+    td_speed = approach_speed_ms if touchdown_speed_ms is None else touchdown_speed_ms
     samples: list[TrackSample] = []
     n_before = int(duration_before_s)
     n_after = max(int(ground_time_s), 12 if outcome != "full_stop" else int(ground_time_s))

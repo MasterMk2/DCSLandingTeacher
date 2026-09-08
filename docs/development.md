@@ -68,25 +68,21 @@ cd frontend && npm run build    # frontend/dist を生成
 
 ## データベースマイグレーション（Alembic）
 
-スキーマ変更は Alembic で管理します（Issue #7）。既定ではアプリ起動時に
-未適用マイグレーションが自動適用されます（`DLT_MIGRATIONS_ON_STARTUP=false`
-で無効化し、従来の `create_all` ブートストラップに戻せます。開発用）。
+スキーマ変更は `migration-job/` の Alembic プロジェクトで管理します。API は
+スキーマを作成・更新せず、Compose の `migration-job` が PostgreSQL の正常起動後に
+適用します。
 
 ```bash
-cd backend
+cd migration-job
 
-alembic current                  # 現在のリビジョン表示
-alembic upgrade head             # 未適用マイグレーションの適用
-alembic downgrade -1             # 1 つ前へ戻す
-alembic revision -m "add foo"    # 新しい空リビジョンの作成
+uv run migration-job-revision "add foo"  # 新しいリビジョンの作成
+docker compose run --rm migration-job     # 未適用マイグレーションの適用
 ```
 
-- スクリプト配置: [`backend/migrations/`](../backend/migrations/)
-- ベースライン `0001_baseline` は旧 create_all 時代のスキーマと同一。
-  旧バージョンで作成した DB は起動時に自動検出され、ベースラインにスタンプ
-  されてから以降のマイグレーションが適用されます（データは保持されます）
-- URL の上書き: `alembic -x db_url=sqlite:///path/to.db upgrade head`
-- コンテナ内では `DLT_MIGRATIONS_DIR=/app/migrations` が設定済みです
+- スクリプト配置: [`migration-job/migrations/`](../migration-job/migrations/)
+- `DLT_POSTGRES_USER`、`DLT_POSTGRES_PASSWORD`、`DLT_POSTGRES_DB` は `.env` に設定します。
+- 既存の SQLite ボリュームは PostgreSQL へ自動移行されません。データを残す場合は
+  別途エクスポート・インポートしてから切り替えます。
 
 ## テスト
 
@@ -100,7 +96,7 @@ pytest tests/test_grading.py -q   # 特定ファイル
 
 - `asyncio_mode = "auto"` のため async テストはデコレータ不要
 - フィクスチャ: `tests/fixtures/sample.acmi`、共通ヘルパーは `tests/conftest.py` / `tests/helpers.py`
-- DB はテストごとに一時ディレクトリ上の SQLite を使用（実データに影響しない）
+- バックエンドの単体テストは一時 SQLite を使用する。実運用の接続先とスキーマ管理は PostgreSQL と `migration-job`。
 
 ### フロントエンド（vitest）
 
@@ -125,7 +121,7 @@ ruff check --fix .   # 自動修正可能な違反を修正
 ```bash
 docker compose up --build     # ビルド + 起動
 curl http://localhost:8000/api/health
-docker compose down           # ボリューム dlt-data は保持される
+docker compose down           # ボリューム postgres_data は保持される
 docker compose down -v        # データも削除
 ```
 
