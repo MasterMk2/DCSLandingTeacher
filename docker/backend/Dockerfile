@@ -16,15 +16,19 @@ RUN uv sync \
     --no-editable
 
 # Application source.
-COPY backend/app ./app
+COPY backend/src ./src
 
 # The tuning YAMLs also live inside the installed package.
 # This packaged copy remains available even when /app/config is shadowed
 # by a bind mount.
-COPY config/grading.yaml config/carriers.yaml ./app/grading/defaults/
+<<<<<<< HEAD
+COPY config/grading.yaml config/carriers.yaml ./src/app/grading/defaults/
 # Runway geometry is also available in the installed package when the DCS
 # server cannot sweep a theatre on demand.
-COPY config/runways/ ./app/runways/defaults/
+COPY config/runways/ ./src/app/runways/defaults/
+=======
+COPY config/grading.yaml config/carriers.yaml ./src/app/grading/defaults/
+>>>>>>> 8bde5db (refactor: adopt backend src layout)
 
 # Install the backend itself as a non-editable package.
 RUN uv sync \

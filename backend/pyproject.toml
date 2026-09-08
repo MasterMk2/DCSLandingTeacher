@@ -36,6 +36,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["app*"]
 
 # Tuning YAMLs copied into the package by the image build (see
@@ -57,7 +58,7 @@ asyncio_mode = "auto"
 # Ensure the project root (backend/) is on sys.path so that tests can be
 # imported as a package ("from tests.helpers import ...") regardless of how
 # pytest is invoked (bare "pytest" vs "python -m pytest").
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100

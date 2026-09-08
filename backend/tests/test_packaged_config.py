@@ -87,14 +87,14 @@ def test_no_packaged_copy_in_a_source_checkout() -> None:
     artefact. If one appears in git, the two can drift."""
     assert (
         packaged_config("grading.yaml") is None
-        or not (REPO_ROOT / "backend" / "app" / "grading" / "defaults" / "grading.yaml").exists()
+        or not (REPO_ROOT / "backend" / "src" / "app" / "grading" / "defaults" / "grading.yaml").exists()
     ), "config/*.yaml must have exactly one copy in git"
 
 
 def test_the_image_build_copies_both_yamls_into_the_package() -> None:
     """The guard is only real if the build actually stages the files."""
     dockerfile = (REPO_ROOT / "docker" / "backend" / "Dockerfile").read_text(encoding="utf-8")
-    assert "./app/grading/defaults/" in dockerfile
+    assert "./src/app/grading/defaults/" in dockerfile
     assert "config/carriers.yaml" in dockerfile, (
         "carriers.yaml was missing from the image entirely, so no carrier "
         "approach ever had FLOLS geometry"
