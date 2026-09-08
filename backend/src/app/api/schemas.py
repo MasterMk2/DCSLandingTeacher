@@ -271,7 +271,7 @@ class RunwayInventoryResponse(BaseModel):
     theatres: list[TheatreOut]
     #: Theatres loaded on a DCS server right now, i.e. what can be swept.
     running: list[str]
-    #: False when DCSServerBot is not configured: shipped geometry still
+    #: False when DCSServerBot is not configured: configured seed geometry still
     #: resolves, but nothing new can be captured.
     can_sweep: bool
 

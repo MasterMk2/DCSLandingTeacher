@@ -24,7 +24,6 @@ from app.api.routes import router as api_router
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
-from app.grading.packaged import resolve_config_path
 from app.importer import ImportJobManager
 from app.logging_config import configure_logging
 from app.models.database import create_engine, create_session_factory
@@ -154,18 +153,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(level=settings.log_level, json_logs=settings.structured_logs)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    # Resolve the tuning YAMLs here rather than inside the loaders, so the
-    # loaders keep their "missing file -> built-in defaults" contract for
-    # direct callers and tests. What this adds is a WARNING naming the path
-    # that was configured and absent, and a copy shipped inside the package
-    # that a bind mount cannot shadow. See app.grading.packaged for why: in
-    # production /app/config is an empty mount, and the server ran on the
-    # code defaults for weeks without saying a word.
-    grading_config_path = resolve_config_path(settings.grading_config_path, "grading.yaml")
+    grading_config_path = Path(settings.grading_config_path)
     grading_config = load_grading_config(grading_config_path)
-    carrier_geometry_book = load_carrier_geometry_book(
-        resolve_config_path(settings.carriers_config_path, "carriers.yaml")
-    )
+    carrier_geometry_book = load_carrier_geometry_book(settings.carriers_config_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -179,11 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             notifier=notifier,
             carrier_geometry_book=carrier_geometry_book,
             runway_provider=runway_provider,
-            # 解決後のパスを渡す。設定マウントが空でパッケージ同梱の
-            # コピーを読んだ場合、存在しないパスを監視しても意味がない。
-            grading_config_path=(
-                str(grading_config_path) if grading_config_path is not None else None
-            ),
+            grading_config_path=str(grading_config_path),
         )
 
         multi_source_manager: MultiSourceAcmiManager | None = None
@@ -346,7 +332,7 @@ def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
     the build still resolves every map it covers, so a provider is still worth
     having: an import from a theatre captured earlier grades against the real
     runway on a machine that has never talked to a DCS server. Only when there
-    is neither a bot nor any shipped geometry do land landings fall back to the
+    is neither a bot nor configured seed geometry do land landings fall back to the
     touchdown-referenced approximation.
     """
     seed_dir = resolve_seed_dir(settings.runway_seed_dir)

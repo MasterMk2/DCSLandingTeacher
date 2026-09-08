@@ -504,7 +504,7 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
         acmi_enabled=False,
-        # No DCSServerBot at all: shipped geometry has to stand on its own.
+        # No DCSServerBot at all: configured seed geometry has to stand on its own.
         dcssb_base_url="",
         runway_cache_dir=str(tmp_path / "cache"),
         runway_seed_dir=str(seeds),

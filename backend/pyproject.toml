@@ -1,7 +1,3 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "dcs-landing-teacher-backend"
 version = "0.3.0"
@@ -34,23 +30,6 @@ dev = [
     "aiosqlite>=0.20",
     "ruff>=0.16.6",
 ]
-
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["app*"]
-
-# Tuning YAMLs copied into the package by the image build (see
-# docker/backend.Dockerfile). Absent in a source checkout, where config/ is
-# read directly; present in the image, where it is the copy that an empty
-# /app/config bind mount cannot hide.
-[tool.setuptools.package-data]
-"app.grading" = ["defaults/*.yaml"]
-# Runway geometry captured from DCS, staged the same way. Undeclared data is
-# silently dropped from the wheel: the image built without this line had no
-# shipped geometry at all, and nothing said so -- production still had its own
-# swept cache, and every test passed the seed directory explicitly.
-# tests/test_packaged_config.py cross-checks this against the Dockerfile.
-"app.runways" = ["defaults/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

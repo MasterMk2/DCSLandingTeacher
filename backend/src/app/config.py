@@ -124,8 +124,7 @@ class Settings(BaseSettings):
     #: Read-only runway geometry shipped with the build, used for theatres this
     #: server has never swept. A map can only be swept while it is loaded on a
     #: DCS server, so without these an import from a map nobody is flying
-    #: cannot resolve at all. Falls back to the copy inside the package when
-    #: this path does not exist (the container case; see app/runways/seeds.py).
+    #: cannot resolve at all. The deployment mounts this path from config/.
     runway_seed_dir: str = "config/runways"
 
     @property

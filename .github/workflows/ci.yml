@@ -21,8 +21,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - name: Install backend with dev dependencies
-        run: uv sync --frozen --group dev
+      - name: Install backend dependencies
+        run: uv sync --frozen --group dev --no-install-project
 
       - name: Lint (ruff)
         run: uv run ruff check .
