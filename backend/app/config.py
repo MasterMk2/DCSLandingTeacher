@@ -74,19 +74,15 @@ class Settings(BaseSettings):
     # Simple shared-token authentication (Issue #8). Empty (default) disables
     # authentication entirely and the API behaves exactly as before. When set,
     # REST endpoints under /api require "Authorization: Bearer <token>" or
-    # "X-Auth-Token"; the WebSocket accepts "?token=<token>". /api/health and
-    # the SPA static hosting stay public.
+    # "X-Auth-Token"; the WebSocket accepts "?token=<token>". /api/health
+    # stays public.
     auth_token: str = ""
 
     # CORS origins allowed to call the API from a browser. Empty list means
     # same-origin only (no CORS headers are emitted), which is the default
-    # single-container deployment where the frontend is served by this app.
+    # reverse-proxy deployment.
     # Example: DLT_CORS_ORIGINS=["http://localhost:5173","https://dlt.example.com"]
     cors_origins: list[str] = []
-
-    # Built frontend directory served in production. When the directory does
-    # not exist the API runs without static file hosting (dev mode).
-    frontend_dist_dir: str = "frontend/dist"
 
     # ACMI file import (POST /api/import): maximum accepted upload size in
     # megabytes. Larger uploads are rejected with 413.

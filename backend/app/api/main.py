@@ -8,11 +8,10 @@ from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from sqlalchemy import update
 
 from app.acmi.multi_source import MultiSourceAcmiManager
@@ -333,8 +332,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(protected_router, prefix=_prefix)
         # Token-protected ACMI file import endpoints (background jobs).
         app.include_router(import_router, prefix=_prefix)
-    _mount_frontend(app, Path(settings.frontend_dist_dir))
-
     # Standard error envelope (Issue #42) so clients can branch on a stable
     # ``error`` code instead of parsing message text.
     app.add_exception_handler(AppError, _handle_app_error)
@@ -383,32 +380,3 @@ async def _handle_validation_error(_request: Request, exc: RequestValidationErro
     return error_envelope(
         422, "VALIDATION_ERROR", "Request validation failed", {"errors": exc.errors()}
     )
-
-
-def _mount_frontend(app: FastAPI, dist_dir: Path) -> None:
-    """Serve the built frontend (SPA) when ``frontend/dist`` exists.
-
-    Vite emits ``index.html`` plus an ``assets/`` directory. Static assets are
-    served via StaticFiles; every other non-API GET path falls back to
-    ``index.html`` so client-side routing keeps working.
-    """
-    if not dist_dir.is_dir():
-        logger.info("Frontend dist not found at %s; API-only mode", dist_dir)
-        return
-
-    assets_dir = dist_dir / "assets"
-    if assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
-
-    dist_root = str(dist_dir.resolve())
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa_fallback(full_path: str) -> FileResponse:
-        if full_path == "api" or full_path.startswith("api/"):
-            raise HTTPException(status_code=404)
-        candidate = (dist_dir / full_path).resolve()
-        if full_path and candidate.is_file() and str(candidate).startswith(dist_root):
-            return FileResponse(candidate)
-        return FileResponse(dist_dir / "index.html")
-
-    logger.info("Serving frontend from %s", dist_dir)

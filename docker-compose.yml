@@ -1,5 +1,5 @@
-# DCS Landing Teacher - single-container deployment.
-# FastAPI serves both the REST/WebSocket API and the built frontend (SPA).
+# DCS Landing Teacher deployment.
+# The frontend and API are hosted by separate services behind a reverse proxy.
 #
 #   docker compose up --build
 #
