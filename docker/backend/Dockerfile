@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Install dependencies first for better Docker layer caching.
 COPY backend/pyproject.toml backend/uv.lock ./
 
-RUN uv sync --frozen --no-install-project --no-editable
+RUN uv sync --frozen --no-install-project --no-default-groups
 
 COPY backend/src ./src
 
