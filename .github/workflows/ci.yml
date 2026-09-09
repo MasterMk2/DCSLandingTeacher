@@ -6,64 +6,8 @@ on:
   pull_request:
 
 jobs:
-  backend:
-    name: Backend (ruff + pytest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: astral-sh/setup-uv@v5
-
-      - name: Install backend dependencies
-        run: uv sync --frozen --group dev --no-install-project
-
-      - name: Lint (ruff)
-        run: uv run ruff check .
-
-      - name: Test (pytest)
-        run: uv run pytest -q
-
-  migration-job:
-    name: Migration job (ruff + pytest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: migration-job
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: astral-sh/setup-uv@v5
-
-      - name: Install migration job with dev dependencies
-        run: uv sync --frozen --group dev
-
-      - name: Lint (ruff)
-        run: uv run ruff check .
-
-      - name: Test (pytest)
-        run: uv run pytest -q
-
-      - name: Validate Docker Compose
-        working-directory: .
-        env:
-          DLT_POSTGRES_DB: dcs_landing_teacher
-          DLT_POSTGRES_USER: dcs_landing_teacher
-          DLT_POSTGRES_PASSWORD: test-password
-        run: docker compose config --quiet
-
   frontend:
-    name: Frontend (tsc build + vitest)
+    name: Frontend
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -83,5 +27,80 @@ jobs:
       - name: Type-check and build
         run: npm run build
 
-      - name: Unit tests (vitest)
+      - name: Unit tests
         run: npm test
+
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install backend dependencies
+        run: uv sync --frozen --no-install-project
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # TODO: コード修正後有効化する
+      # - name: Type check
+      #   run: uv run basedpyright
+
+      - name: Test
+        run: uv run pytest -q
+
+  migration-job:
+    name: Migration job
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: migration-job
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install migration job with dev dependencies
+        run: uv sync --frozen --no-install-project
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run basedpyright
+
+      - name: Test
+        run: uv run pytest -q
+
+  compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Docker Compose
+        env:
+          DLT_POSTGRES_DB: dcs_landing_teacher
+          DLT_POSTGRES_USER: dcs_landing_teacher
+          DLT_POSTGRES_PASSWORD: test-password
+        run: docker compose config --quiet
+
+      - name: Build Docker Compose services
+        env:
+          DLT_POSTGRES_DB: dcs_landing_teacher
+          DLT_POSTGRES_USER: dcs_landing_teacher
+          DLT_POSTGRES_PASSWORD: test-password
+        run: docker compose build
