@@ -61,6 +61,38 @@ class DcssbClient:
             data = await self._get(client, "/servers")
         return data if isinstance(data, list) else []
 
+    async def theatre_of(self, server_name: str) -> str | None:
+        """Theatre ``server_name`` is currently running, or ``None``.
+
+        ``None`` covers both "no such server" and "no mission loaded"; the
+        caller decides what to do with an unknown, which is not the same
+        thing as a mismatch.
+        """
+        try:
+            servers = await self.list_servers()
+        except Exception:
+            logger.warning("DCSSB: /servers unavailable", exc_info=True)
+            return None
+        for server in servers:
+            if str(server.get("name") or "") != server_name:
+                continue
+            theatre = (server.get("mission") or {}).get("theatre")
+            return str(theatre) if theatre else None
+        return None
+
+    async def fetch_airbases(self, server_name: str) -> list[dict[str, Any]]:
+        """Airbases (with runways) of ``server_name``'s current theatre.
+
+        Cheap, unlike the per-airbase ``/airbase`` call this feeds: the bot
+        answers ``/airbases`` from its own state and never runs Lua on the
+        DCS simulation thread. That is what makes it usable for *finding*
+        which running theatre a landing belongs to, before committing to a
+        paced sweep of it.
+        """
+        async with httpx.AsyncClient() as client:
+            listing = await self._get(client, "/airbases", server_name=server_name)
+        return [a for a in (listing or {}).get("airbases", []) if a.get("runwayList")]
+
     async def find_server_for_theatre(self, theatre: str | None) -> str | None:
         """Name of a running server on ``theatre`` (any server if unknown)."""
         try:
@@ -83,13 +115,8 @@ class DcssbClient:
         Paced by ``request_spacing_ms``; a Caucasus sweep is ~21 airbases.
         """
         runways: list[Runway] = []
+        airbases = await self.fetch_airbases(server_name)
         async with httpx.AsyncClient() as client:
-            listing = await self._get(client, "/airbases", server_name=server_name)
-            airbases = [
-                a
-                for a in (listing or {}).get("airbases", [])
-                if a.get("runwayList")
-            ]
             logger.info(
                 "DCSSB: sweeping %d airbases on %s (~%ds)",
                 len(airbases),

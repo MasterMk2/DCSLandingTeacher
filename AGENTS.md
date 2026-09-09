@@ -49,7 +49,8 @@ Frontend (from `frontend/`):
 
 - Grading thresholds hot-reload from `config/grading.yaml` (mtime poll, ~5s). Regrade stored landings via `POST /api/landings/{id}/regrade` — raw approach samples are persisted in the DB for this.
 - `config/carriers.yaml` FLOLS geometry and BURBLE thresholds are unverified estimates — don't treat grades as authoritative or silently "fix" the values.
-- `DLT_DCSSB_REQUEST_SPACING_MS` (runway sweep via DCSServerBot) must not be lowered: `/airbase` runs Lua on the DCS simulation thread. Sweep results are cached per theatre in `cache/`.
+- `DLT_DCSSB_REQUEST_SPACING_MS` (runway sweep via DCSServerBot) must not be lowered: `/airbase` runs Lua on the DCS simulation thread. Sweep results are cached per theatre in `cache/`. `/servers` and `/airbases` are *not* paced — the bot answers both from its own state — which is what lets the provider work out which running theatre a landing is on before committing to a sweep.
+- Nothing is per-map, and nothing may become per-map: the ACMI stream carries no theatre name (DCS writes no `Theater`; `flights.theater` is NULL on real recordings), so a landing is placed by position alone. Anything verified only on Caucasus is suspect — it has no parallel runways and was the only map the deployment ever ran, which is how L/R suffixes, staggered thresholds and multi-server bots all went untested. `backend/tests/test_multi_theatre.py` covers those shapes.
 - `*.acmi` recordings are gitignored (huge files); the only tracked one is the test fixture `backend/tests/fixtures/sample.acmi`. `Testdata/`, `*.db`, `data/` are local-only too.
 
 ## Tests

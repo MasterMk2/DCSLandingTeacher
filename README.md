@@ -237,6 +237,55 @@ curl -H "X-Auth-Token: <token>" http://localhost:8000/api/imports/<job_id>
 採点できた重みが `min_measured_weight` に届かない着陸（進入がほとんど記録されて
 いないもの）には成績を付けず、`grade` / `score` は `null` になります。
 
+### 滑走路ジオメトリと対応マップ
+
+陸上着陸は、DCSServerBot の RestAPI 経由で **DCS 自身から取った実際の滑走路**
+（しきい値の位置・コース・長さ）を基準に採点します。`DLT_DCSSB_BASE_URL` が空の
+場合は接地点から推定したジオメトリにフォールバックします（精度は落ちますが外部
+サービス不要）。
+
+**マップごとの設定は不要です。** Caucasus / Nevada（Nellis）/ Syria / Mariana
+Islands など、どのマップでも同じ経路で動きます。
+
+- ACMI にマップ名は入りません（DCS は `Theater` を書き出しません）。そのため
+  着陸座標から「稼働中のどのサーバの theatre か」を判定し、そのマップだけを
+  1 回スイープして `cache/runways-<Theatre>.json` に保存します。判定に使う
+  `/servers` と `/airbases` は bot 内部の状態から返るため、DCS のシミュレーション
+  スレッドを消費しません。
+- したがって **そのマップを載せた DCS サーバが 1 台でも起動していること** が
+  スイープの条件です。過去の録画を import する場合も同じで、そのマップが今どこかで
+  動いていれば掃引され、動いていなければ推定ジオメトリになります。一度掃引すれば
+  以降はキャッシュだけで解決するので、サーバがマップを切り替えても過去の記録は
+  正しい滑走路に当たり続けます。
+- `DLT_DCSSB_SERVER_NAME` を指定した場合、そのサーバが **今実際に動かしている**
+  theatre だけが掃引対象になります（別マップを動かしている間は掃引しません）。
+- 平行滑走路（Nellis の 03L/21R・03R/21L など）は左右の区別を保ったまま扱われ、
+  接地点はしきい値までの距離ではなく延長センターラインからの横ずれで判定されます。
+- 解決できた滑走路は着陸行の「空港 / 空母」欄に `Nellis 03L` の形で入ります。
+  推定ジオメトリで採点された着陸は空欄のままです（どこに降りたか分からないため）。
+
+DCSServerBot を使えない環境では、キャッシュファイルを手で置くこともできます。
+
+```jsonc
+// cache/runways-Nevada.json
+{
+  "version": 2,          // CACHE_VERSION。古い版は無視され再掃引されます
+  "theatre": "Nevada",
+  "runways": [
+    {
+      "airbase": "Nellis",
+      "name": "03L",
+      "threshold_lat": 36.22,     // 進入端の緯度経度
+      "threshold_lon": -115.05,
+      "elevation_m": 570.0,       // MSL
+      "heading_deg": 31.5,        // 真方位（DCS のグリッド方位ではない）
+      "length_m": 3064.0,
+      "width_m": 45.0
+    }
+  ]
+}
+```
+
 ### 閾値の調整（config/grading.yaml）
 
 評価基準はすべて [`config/grading.yaml`](config/grading.yaml) に外部化されており、コード変更なしで調整できます。

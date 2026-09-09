@@ -9,6 +9,7 @@ against opposite thresholds.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -81,7 +82,7 @@ def heading_difference_deg(a: float, b: float) -> float:
     return abs((a - b + 180.0) % 360.0 - 180.0)
 
 
-def match_runway(
+def best_runway_match(
     runways: list[Runway],
     latitude: float,
     longitude: float,
@@ -89,18 +90,33 @@ def match_runway(
     *,
     max_distance_m: float = 4000.0,
     max_heading_diff_deg: float = 25.0,
-) -> Runway | None:
-    """Pick the runway a touchdown at ``latitude``/``longitude`` belongs to.
+) -> tuple[Runway, tuple[float, float]] | None:
+    """Best runway for a touchdown, with the key it was ranked by.
 
     Candidates must be within ``max_distance_m`` of the threshold and, when
     a course estimate is available, aligned with it -- otherwise a touchdown
     would happily match the *opposite* end of the same strip, which would
     invert every deviation.
+
+    Among the survivors the *lateral* offset from the extended centreline
+    decides, and only then the distance to the threshold. Ranking by
+    threshold distance alone is enough while an airfield has one strip, but
+    it decides parallel runways by how long the pilot floated: at Nellis the
+    two strips are ~275 m apart, so a touchdown 300 m past 03R is 300 m from
+    its own threshold and 407 m from 03L's -- while one 2000 m past (a long
+    landing, or a touch-and-go rolled well down the runway) is 2000 m versus
+    2019 m, and the wrong strip wins on noise. The lateral offset does not
+    move as the aircraft rolls down the centreline, which is exactly the
+    property the choice needs.
+
+    The returned key is comparable across theatres, so a caller holding
+    several swept maps can pick the single best match rather than the first
+    map that happened to produce one.
     """
-    from app.detection.geometry import haversine_m
+    from app.detection.geometry import haversine_m, transform_to_frame
 
     best: Runway | None = None
-    best_distance = max_distance_m
+    best_key: tuple[float, float] | None = None
     for runway in runways:
         if course_deg is not None and (
             heading_difference_deg(runway.heading_deg, course_deg)
@@ -112,10 +128,42 @@ def match_runway(
         )
         # A touchdown happens *past* the threshold, so allow the whole strip
         # plus a margin rather than requiring proximity to the threshold.
-        if distance <= max(best_distance, 0.0):
-            best = runway
-            best_distance = distance
-    return best
+        if distance > max_distance_m:
+            continue
+        _, lateral = transform_to_frame(
+            latitude,
+            longitude,
+            runway.threshold_lat,
+            runway.threshold_lon,
+            runway.heading_deg,
+        )
+        key = (abs(lateral), distance)
+        if best_key is None or key < best_key:
+            best, best_key = runway, key
+    if best is None or best_key is None:
+        return None
+    return best, best_key
+
+
+def match_runway(
+    runways: list[Runway],
+    latitude: float,
+    longitude: float,
+    course_deg: float | None,
+    *,
+    max_distance_m: float = 4000.0,
+    max_heading_diff_deg: float = 25.0,
+) -> Runway | None:
+    """Pick the runway a touchdown at ``latitude``/``longitude`` belongs to."""
+    match = best_runway_match(
+        runways,
+        latitude,
+        longitude,
+        course_deg,
+        max_distance_m=max_distance_m,
+        max_heading_diff_deg=max_heading_diff_deg,
+    )
+    return match[0] if match is not None else None
 
 
 def normalize_heading(deg: float) -> float:
@@ -166,6 +214,8 @@ def runway_pair_from_dcs(
     convergence = math.radians(convergence_deg)
     cos_c, sin_c = math.cos(convergence), math.sin(convergence)
 
+    named_end = _designator_end(dcs_name, grid_heading)
+
     runways: list[Runway] = []
     for index, grid_head in enumerate(
         (grid_heading, normalize_heading(grid_heading + 180.0))
@@ -185,7 +235,7 @@ def runway_pair_from_dcs(
         runways.append(
             Runway(
                 airbase=airbase,
-                name=_runway_name(dcs_name, grid_head, primary=index == 0),
+                name=_runway_name(dcs_name, grid_head, primary=index == named_end),
                 threshold_lat=lat,
                 threshold_lon=lon,
                 elevation_m=elevation_m,
@@ -197,9 +247,69 @@ def runway_pair_from_dcs(
     return runways
 
 
+#: Parallel strips are suffixed L / C / R from the point of view of the
+#: pilot on approach, so the *left* of a pair landing 03 is the *right* one
+#: landing 21. The mapping is therefore a mirror, not a copy.
+_SUFFIX_MIRROR = {"L": "R", "R": "L", "C": "C"}
+
+#: A runway designator as DCS reports it: one or two digits, optionally with
+#: a position suffix. DCS sends the number as an int for most airfields
+#: ("Name": 31) and as a string when there is a suffix ("Name": "03L").
+_DESIGNATOR_RE = re.compile(r"^(\d{1,2})\s*([LCR]?)$")
+
+
+def reciprocal_designator(designator: str) -> str:
+    """``"03L"`` -> ``"21R"``, ``"13"`` -> ``"31"``; ``""`` when unparsable.
+
+    Derived from the designator DCS itself reports rather than re-derived
+    from the heading, for two reasons. Runway numbers are *magnetic* and
+    rounded to ten degrees, so a heading-derived number lands on the wrong
+    side of the rounding wherever declination is a few degrees -- and the
+    heading here is the grid one, off by the meridian convergence on top.
+    More importantly a heading carries no L/C/R, so both strips of a
+    parallel pair came out with the same name: at Nellis (03L/21R and
+    03R/21L) the two runways were indistinguishable in the UI, in the venue
+    filter, and in anything counting landings per runway. Caucasus has no
+    parallel strips, which is why this held for as long as it did.
+    """
+    match = _DESIGNATOR_RE.match(designator)
+    if match is None:
+        return ""
+    number, suffix = int(match.group(1)), match.group(2)
+    if not 1 <= number <= 36:
+        return ""
+    opposite = (number + 17) % 36 + 1
+    return f"{opposite:02d}{_SUFFIX_MIRROR.get(suffix, '')}"
+
+
+def _designator_end(dcs_name: Any, grid_heading_deg: float) -> int:
+    """Which of the two ends the designator DCS reported actually names.
+
+    ``course`` and ``Name`` agree on every airfield checked so far (Batumi's
+    "31" points at 305.6 deg grid), but they are independent fields, and a
+    designator hung on the wrong end names both directions backwards --
+    which, unlike a wrong number, inverts the landing direction the pilot
+    reads off the row without anything looking odd. The designator is
+    magnetic and the heading is grid, so they differ by declination plus
+    convergence; only the 0-vs-180 question is asked here and 90 deg of
+    slack answers it on any map.
+    """
+    designator = "" if dcs_name in (None, "") else str(dcs_name).strip().upper()
+    match = _DESIGNATOR_RE.match(designator)
+    if match is None:
+        return 0
+    number = int(match.group(1))
+    if not 1 <= number <= 36:
+        return 0
+    return 0 if heading_difference_deg(number * 10.0, grid_heading_deg) <= 90.0 else 1
+
+
 def _runway_name(dcs_name: Any, heading_deg: float, *, primary: bool) -> str:
     """Prefer the name DCS reports for the primary end; derive the other."""
-    if primary and dcs_name not in (None, ""):
-        return str(dcs_name)
+    designator = "" if dcs_name in (None, "") else str(dcs_name).strip().upper()
+    if primary and designator:
+        return designator
+    if designator and (reciprocal := reciprocal_designator(designator)):
+        return reciprocal
     number = int(round(heading_deg / 10.0)) or 36
     return f"{number:02d}"

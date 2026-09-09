@@ -70,6 +70,38 @@ def _row_approach_pattern(
     return event.approach_pattern
 
 
+def _runway_venue(analysis: ApproachAnalysis) -> str | None:
+    """``"Nellis 03L"`` from a resolved runway, or ``None``.
+
+    Reads the analysis rather than the runway object so a re-grade produces
+    the same label from the stored ``approach_track`` without going back to
+    the DCS server.
+    """
+    geometry = analysis.geometry
+    if not geometry or geometry.get("kind") != "runway":
+        return None
+    airbase = str(geometry.get("airbase") or "").strip()
+    if not airbase:
+        return None
+    return f"{airbase} {str(geometry.get('name') or '').strip()}".strip()
+
+
+def _venue_name(event: LandingEvent, analysis: ApproachAnalysis) -> str | None:
+    """Where the landing happened, for the list view and the venue filter.
+
+    Carrier landings have always carried the ship's name; land landings
+    carried nothing and the table printed a literal "空港". That was survivable
+    while every recording came off one map -- there was only one airfield it
+    could sensibly be -- and is not once a second theatre is flown. The
+    airfield name exists only on the resolved runway, so a landing graded
+    against the touchdown-derived approximation still has no venue, which is
+    honest: nothing knows where it was.
+    """
+    if event.kind == "carrier":
+        return event.carrier_name
+    return _runway_venue(analysis)
+
+
 def _touchdown_epoch(
     reference_time: str | None, mission_time: float | None
 ) -> float | None:
@@ -144,7 +176,14 @@ class LandingPipeline:
         if self._notifier is not None and landing_id is not None:
             try:
                 await self._notifier.broadcast_landing(
-                    self._payload(landing_id, context, result, score, status),
+                    self._payload(
+                        landing_id,
+                        context,
+                        result,
+                        score,
+                        status,
+                        _venue_name(event, analysis),
+                    ),
                     message_type="landing",
                 )
             except Exception:
@@ -189,6 +228,12 @@ class LandingPipeline:
             landing.metrics = dict(result.metrics)
             landing.approach_track = analysis.as_dict()
             landing.approach_pattern = _row_approach_pattern(event, result)
+            # The touchdown moved, so the runway may have too -- but never
+            # clear a venue we already had: a re-resolve that comes back
+            # empty (the sweep expired, the bot went away) is missing
+            # information, not evidence the airfield changed.
+            venue_name = _venue_name(event, analysis) or landing.venue_name
+            landing.venue_name = venue_name
             landing.grading_version = GRADING_VERSION
             landing.graded_at = _utcnow()
             await session.commit()
@@ -196,7 +241,9 @@ class LandingPipeline:
         if self._notifier is not None:
             try:
                 await self._notifier.broadcast_landing(
-                    self._payload(landing_id, context, result, score, "final"),
+                    self._payload(
+                        landing_id, context, result, score, "final", venue_name
+                    ),
                     message_type="landing_update",
                 )
             except Exception:
@@ -279,6 +326,9 @@ class LandingPipeline:
         result: LandGradeResult | LsoGradeResult,
         score: float | None,
         status: str,
+        # Required, not defaulted: the comment below is the whole reason
+        # this function exists, and a default is how a field gets dropped.
+        venue_name: str | None,
     ) -> dict[str, Any]:
         event = context.event
         # This payload is inserted straight into the dashboard's list as a
@@ -301,7 +351,7 @@ class LandingPipeline:
             "approach_pattern": _row_approach_pattern(event, result),
             "pilot": context.pilot,
             "airframe": context.airframe,
-            "venue_name": event.carrier_name if event.kind == "carrier" else None,
+            "venue_name": venue_name,
             # Mission-relative time (ACMI seconds since mission start).
             "touchdown_time": event.touchdown.time,
             # Wall-clock epoch (Issue D-1): ReferenceTime + mission time so
@@ -415,6 +465,11 @@ class LandingPipeline:
             # 持っているので、書くのが自然な場所はここ。
             if not landing.airframe and analysis.airframe:
                 landing.airframe = analysis.airframe
+            # Rows graded before land landings carried a venue have the
+            # airfield sitting unused in their stored approach_track; a
+            # re-grade is where it costs nothing to bring it out.
+            if not landing.venue_name:
+                landing.venue_name = _runway_venue(analysis)
             landing.grading_version = GRADING_VERSION
             landing.graded_at = _utcnow()
             await session.commit()
@@ -461,9 +516,7 @@ class LandingPipeline:
                 )
                 return None
 
-            venue = None
-            if event.kind == "carrier":
-                venue = event.carrier_name
+            venue = _venue_name(event, analysis)
 
             landing = Landing(
                 flight_id=context.flight_id,
