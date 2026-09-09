@@ -1,33 +1,93 @@
-"""Tests for the grading engine: shared deviations, land grader, LSO grader."""
+"""Unit tests for app.grading.land_grader."""
 
 from __future__ import annotations
 
+import math
 import re
 
 import pytest
 
-from app.detection.detector import TrackSample, analyze_track
-from app.grading.config import load_grading_config
-from app.grading.deviations import (
-    ApproachAnalysis,
-    build_approach_analysis,
-    estimate_course_deg,
-)
-from app.grading.land_grader import grade_land_landing
-from app.grading.lso_grader import grade_carrier_approach
-from app.pipeline import LandingPipeline
+from app.detection.detector import analyze_track
+from app.grading.config import GradingConfig, load_grading_config
+from app.grading.deviations import ApproachAnalysis, DeviationSample, build_approach_analysis
+from app.grading.land_grader import _glideslope_errors, grade_land_landing
 from tests.conftest import GRADING_YAML
-from tests.helpers import DECK_ALTITUDE_M, make_approach_samples, make_carrier_state
+from tests.helpers import DECK_ALTITUDE_M, analysis_with_gs_deviations, make_approach_samples
 
 CONFIG = load_grading_config(GRADING_YAML)
 
 
-def _carrier_event(gs_offset_m: float = 0.0, **kwargs):
-    samples = make_approach_samples(gs_offset_m=gs_offset_m, **kwargs)
-    carriers = {"C1": make_carrier_state()}
-    events = analyze_track(samples, DECK_ALTITUDE_M, carriers)
-    assert len(events) == 1
-    return events[0]
+def test_glidepath_is_not_judged_when_there_is_no_approach_to_judge() -> None:
+    touchdown_time = 100.0
+    samples = [
+        DeviationSample(
+            time=touchdown_time - 30.0 + i * 0.25,
+            distance_to_go=17.0 + i * 0.3,
+            glideslope_deviation=8.0,
+            centerline_deviation=0.5,
+            speed=3.0,
+            agl=8.8 - i * 0.05,
+        )
+        for i in range(100)
+    ]
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=3.0,
+        touchdown_descent_rate_ms=0.2,
+        samples=samples,
+    )
+    result = grade_land_landing(analysis, GradingConfig({}))
+    glideslope = next(
+        component for component in result.components if component.name == "glideslope"
+    )
+    assert glideslope.evidence["mean_abs_error_deg"] is None
+    assert glideslope.evidence["samples"] == 0
+    assert glideslope.score is None
+    assert glideslope.evidence["unscored_reason"] == "not-measured"
+    assert "glideslope" in result.metrics["unmeasured_components"]
+    assert result.metrics["measured_weight"] < 1.0
+
+
+def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> None:
+    slope = math.tan(math.radians(3.0))
+    float_m = 800.0
+    window = [
+        DeviationSample(
+            time=float(i),
+            distance_to_go=distance,
+            glideslope_deviation=None,
+            centerline_deviation=0.0,
+            agl=(distance - float_m) * slope,
+        )
+        for i, distance in enumerate(range(2600, 1000, -100))
+    ]
+    error = _glideslope_errors(window, 3.0)
+    assert error is not None and error.method == "path-angle"
+    assert error.signed_error_deg == pytest.approx(0.0, abs=0.05)
+    anchored = [sample.glideslope_error_deg(3.0) for sample in window]
+    assert sum(value for value in anchored if value is not None) / len(anchored) < -1.0
+
+
+def test_glidepath_with_a_runway_keeps_the_absolute_aiming_point_error() -> None:
+    slope = math.tan(math.radians(3.0))
+    window = [
+        DeviationSample(
+            time=float(i),
+            distance_to_go=distance,
+            glideslope_deviation=None,
+            centerline_deviation=0.0,
+            agl=distance * slope - 40.0,
+            distance_to_threshold=distance - 300.0,
+        )
+        for i, distance in enumerate(range(2600, 1000, -100))
+    ]
+    error = _glideslope_errors(window, 3.0)
+    assert error is not None and error.method == "aiming-point"
+    assert error.signed_error_deg < -0.8
 
 
 def _land_event(**kwargs):
@@ -40,77 +100,6 @@ def _land_event(**kwargs):
     events = analyze_track(samples, DECK_ALTITUDE_M, carriers={})
     assert len(events) == 1
     return events[0]
-
-
-# ---------------------------------------------------------------------------
-# Shared deviation math
-# ---------------------------------------------------------------------------
-
-
-def test_deviation_series_ideal_approach() -> None:
-    event = _carrier_event()
-    analysis = build_approach_analysis(event, CONFIG.carrier_glideslope_deg)
-
-    assert analysis.kind == "carrier"
-    assert analysis.course_deg == pytest.approx(0.0, abs=1.0)
-    assert len(analysis.samples) == len(event.approach)
-
-    inbound = [s for s in analysis.samples if s.time < -10]
-    for sample in inbound:
-        assert sample.glideslope_deviation == pytest.approx(0.0, abs=1.5)
-        assert sample.centerline_deviation == pytest.approx(0.0, abs=1.0)
-        assert sample.distance_to_go > 500.0
-
-
-def test_window_excludes_touchdown_sample() -> None:
-    event = _carrier_event()
-    analysis = build_approach_analysis(event, 3.5)
-    window = analysis.window(3.0)
-    assert window
-    assert all(s.time < analysis.touchdown_time for s in window)
-
-
-def test_estimate_course_deg_prefers_touchdown_heading_over_curved_track() -> None:
-    """A continuous turn onto final (overhead break / tactical initial, the
-    normal way fighters land in DCS) makes a two-point position bearing
-    over the whole captured approach an unreliable course estimate: it
-    cuts across the turn instead of reading the runway heading. The
-    aircraft's own heading at touchdown must win whenever ACMI supplied
-    it (Issue: production landings showed 160-1200m "centerline
-    deviation" while touchdown itself was only ~20-30m off centerline --
-    a systematic angular bias from this exact 2-point method)."""
-    # Quarter-circle-ish turn: well clear of a straight line from the first
-    # to the last point.
-    samples = [
-        TrackSample(time=0.0, latitude=0.0, longitude=0.0),
-        TrackSample(time=10.0, latitude=0.01, longitude=0.01),
-        TrackSample(time=20.0, latitude=0.02, longitude=0.005),
-    ]
-    position_bearing = estimate_course_deg(samples, None)
-    # Default kind is "carrier": touchdown heading still wins (de-crabbed at
-    # the angled deck).
-    assert estimate_course_deg(samples, 330.0) == pytest.approx(330.0)
-    # Sanity check the scenario is meaningful: the position-only fallback
-    # really does disagree substantially with the touchdown heading.
-    angular_diff = abs(((330.0 - position_bearing + 180) % 360) - 180)
-    assert angular_diff > 30
-
-
-def test_estimate_course_deg_land_uses_stabilized_track_not_heading() -> None:
-    """Issue #26: a land crosswind approach crabs the heading away from the
-    runway course. The runway course equals the ground *track* on the
-    stabilized final, so a landed course must follow the track (here ~000,
-    straight north), not the crabbed touchdown heading (030)."""
-    # Straight-in final due north; positions share a longitude.
-    samples = [
-        TrackSample(time=0.0, latitude=34.990, longitude=140.0),
-        TrackSample(time=10.0, latitude=34.995, longitude=140.0),
-        TrackSample(time=20.0, latitude=35.000, longitude=140.0),
-    ]
-    assert estimate_course_deg(samples, 30.0, kind="land") == pytest.approx(0.0, abs=0.5)
-    # Without a track (no positions) the heading is the last-resort fallback.
-    empty = [TrackSample(time=0.0, latitude=None, longitude=None)]
-    assert estimate_course_deg(empty, 30.0, kind="land") == pytest.approx(30.0)
 
 
 def test_land_course_avoids_crosswind_crab_bias() -> None:
@@ -142,17 +131,13 @@ def test_land_course_avoids_crosswind_crab_bias() -> None:
     assert result.metrics["crosswind_crab_deg"] == pytest.approx(30.0, abs=1.0)
 
 
-# ---------------------------------------------------------------------------
-# Land grader (FR-4)
-# ---------------------------------------------------------------------------
-
-
 def test_land_grader_smooth_landing_scores_high() -> None:
     event = _land_event(pre_touchdown_descent_ms=1.2)
     analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
     result = grade_land_landing(analysis, CONFIG)
 
     assert result.grade in ("A", "B")
+    assert result.score is not None
     assert result.score >= 78
     assert result.comment
     evidence = {c.name: c.evidence for c in result.components}
@@ -165,6 +150,7 @@ def test_land_grader_hard_landing_scores_low() -> None:
     result = grade_land_landing(analysis, CONFIG)
 
     descent = next(c for c in result.components if c.name == "descent_rate")
+    assert descent.score is not None
     assert descent.score <= 30
     assert result.grade in ("C", "D", "E")
 
@@ -212,6 +198,7 @@ def test_land_grader_centerline_uses_final_segment_not_whole_approach() -> None:
     result = grade_land_landing(analysis, CONFIG)
     centerline = next(c for c in result.components if c.name == "centerline")
     assert centerline.evidence["max_abs_deviation_m"] == pytest.approx(2.0)
+    assert centerline.score is not None
     assert centerline.score >= 90
 
 
@@ -221,10 +208,13 @@ def test_land_grader_off_centerline_penalized() -> None:
     result = grade_land_landing(analysis, CONFIG)
 
     centerline = next(c for c in result.components if c.name == "centerline")
+    assert centerline.score is not None
     assert centerline.score < 40
     smooth = grade_land_landing(
         build_approach_analysis(_land_event(pre_touchdown_descent_ms=1.2), 3.0), CONFIG
     )
+    assert result.score is not None
+    assert smooth.score is not None
     assert result.score < smooth.score
 
 
@@ -244,68 +234,21 @@ def test_land_grader_comment_states_deviations_in_feet() -> None:
     assert f"{dev_m / 0.3048:.0f} ft" in result.comment
 
 
-def _analysis_with_gs_deviations(devs: list[float]):
-    """指定のグライドスロープ偏差を持つ analysis を組む。
-
-    偏差は AGL に埋め込む: 採点は角度 (AGL と距離の比) で行うので、
-    ``glideslope_deviation`` だけを差し替えて AGL を放置すると幾何的に
-    矛盾したサンプルになり、何をテストしているのか分からなくなる。
-    距離は ±30 m の偏差が現実的な範囲に収まるよう最終進入相当に取る。
-
-    滑走路が解決できた進入として組む (``distance_to_threshold`` を入れ、
-    geometry を runway にする)。一定オフセットの高低を測れるのは
-    照準点基準の測り方だけで、滑走路が無いときの経路角フィットは
-    平行移動を原理的に見ない --- そちらで組むと「-30 m 低い進入」が
-    誤差ゼロとして通り、何も検証しないテストになる。
-    """
-    import math
-
-    from app.grading.deviations import ApproachAnalysis, DeviationSample
-
-    touchdown_time = 100.0
-    tan_slope = math.tan(math.radians(3.0))
-    samples = []
-    for i, dev in enumerate(devs):
-        distance_to_go = 1250.0 + (len(devs) - 1 - i) * 250.0
-        samples.append(
-            DeviationSample(
-                time=touchdown_time - len(devs) + i,
-                distance_to_go=distance_to_go,
-                glideslope_deviation=dev,
-                centerline_deviation=1.0,
-                speed=70.0,
-                agl=distance_to_go * tan_slope + dev,
-                distance_to_threshold=distance_to_go - 300.0,
-            )
-        )
-    return ApproachAnalysis(
-        kind="land",
-        outcome="full_stop",
-        glideslope_deg=3.0,
-        course_deg=0.0,
-        touchdown_time=touchdown_time,
-        touchdown_speed_ms=70.0,
-        touchdown_descent_rate_ms=1.0,
-        geometry={"kind": "runway", "airbase": "TEST", "name": "09"},
-        samples=samples,
-    )
-
-
 def test_land_grader_says_low_when_the_approach_was_below_glideslope() -> None:
     """「低め」が到達不能だった: 向きを絶対値平均から決めていたため、
     実際には下を飛んでいた進入まで一律「高め」と言われていた。"""
-    result = grade_land_landing(_analysis_with_gs_deviations([-30.0] * 12), CONFIG)
+    result = grade_land_landing(analysis_with_gs_deviations([-30.0] * 12), CONFIG)
     assert "理想より低かった" in result.comment
     assert "高かった" not in result.comment
 
-    high = grade_land_landing(_analysis_with_gs_deviations([30.0] * 12), CONFIG)
+    high = grade_land_landing(analysis_with_gs_deviations([30.0] * 12), CONFIG)
     assert "理想より高かった" in high.comment
     assert "低かった" not in high.comment
 
 
 def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() -> None:
     """上下に振れて一方向に寄っていない進入を「高め」「低め」と言い切らない。"""
-    result = grade_land_landing(_analysis_with_gs_deviations([30.0, -30.0] * 6), CONFIG)
+    result = grade_land_landing(analysis_with_gs_deviations([30.0, -30.0] * 6), CONFIG)
     assert "安定しなかった" in result.comment
     assert "高め" not in result.comment and "低め" not in result.comment
     # 振れ幅は採点に効いたままである (相殺されて満点にならない)。
@@ -319,306 +262,13 @@ def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() ->
     absolute = glideslope.evidence["mean_abs_error_deg"]
     assert absolute > 0.5
     assert abs(signed) < absolute / 2
+    assert glideslope.score is not None
     assert glideslope.score < 60
-
-
-def test_pipeline_reload_config_picks_up_file_changes(tmp_path) -> None:
-    """Issue #40: editing grading.yaml and reloading applies new thresholds to
-    subsequent gradings without a server restart."""
-    from pathlib import Path
-
-    from app.grading.land_grader import MS_TO_FPM
-
-    config_path = tmp_path / "grading.yaml"
-    original = Path(GRADING_YAML).read_text(encoding="utf-8")
-    config_path.write_text(original, encoding="utf-8")
-
-    pipeline = LandingPipeline(
-        None, load_grading_config(config_path), grading_config_path=config_path
-    )
-    analysis = _analysis_with_gs_deviations([0.0] * 12)
-    # ~350 fpm: inside the "fair" band before the tweak.
-    analysis.touchdown_descent_rate_ms = 350.0 / MS_TO_FPM
-    before = next(
-        c
-        for c in grade_land_landing(analysis, pipeline._config).components
-        if c.name == "descent_rate"
-    ).score
-
-    # Tighten the fair band so the same descent rate drops a band.
-    modified = original.replace("fair: 450", "fair: 300")
-    assert modified != original
-    config_path.write_text(modified, encoding="utf-8")
-    pipeline.reload_config()
-
-    after = next(
-        c
-        for c in grade_land_landing(analysis, pipeline._config).components
-        if c.name == "descent_rate"
-    ).score
-    assert after < before
-
-
-async def test_config_reload_endpoint_requires_and_reloads(tmp_path) -> None:
-    """Issue #40: POST /api/config/reload is token-protected and hot-reloads."""
-    from pathlib import Path
-
-    from app.api.main import create_app
-    from tests.test_auth import make_settings, open_client
-
-    config_path = tmp_path / "grading.yaml"
-    original = Path(GRADING_YAML).read_text(encoding="utf-8")
-    config_path.write_text(original, encoding="utf-8")
-
-    settings = make_settings(tmp_path, grading_config_path=str(config_path), auth_token="secret")
-    app = create_app(settings)
-    async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
-            # No token -> rejected.
-            denied = await client.post("/api/config/reload")
-            assert denied.status_code == 401
-            # With token -> reloaded.
-            ok = await client.post("/api/config/reload", headers={"X-Auth-Token": "secret"})
-            assert ok.status_code == 200
-            assert ok.json()["reloaded"] is True
 
 
 def test_land_grader_letter_bands() -> None:
     letters = CONFIG.land_grading["letters"]
     assert letters["A"] > letters["B"] > letters["C"] > letters["D"]
-
-
-# ---------------------------------------------------------------------------
-# LSO grader (FR-3)
-# ---------------------------------------------------------------------------
-
-
-def test_lso_perfect_pass_is_ok() -> None:
-    event = _carrier_event()
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert result.grade == "OK"
-    assert result.factors == []
-
-
-def test_lso_high_pass_gets_high_factor() -> None:
-    event = _carrier_event(gs_offset_m=5.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    names = [f.name for f in result.factors]
-    assert "HIGH" in names
-    high = next(f for f in result.factors if f.name == "HIGH")
-    assert high.evidence["mean_glideslope_deviation_m"] > high.evidence["threshold_m"]
-    assert result.grade == "OK-"
-
-
-def test_lso_low_pass_gets_low_factor() -> None:
-    event = _carrier_event(gs_offset_m=-3.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    names = [f.name for f in result.factors]
-    assert "LOW" in names
-    assert result.grade == "OK-"
-
-
-def test_lso_dangerously_low_is_cut() -> None:
-    event = _carrier_event(gs_offset_m=-6.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert result.grade == "CUT"
-    assert any(f.name == "LOW" for f in result.factors)
-
-
-def test_lso_slow_pass_gets_slow_factor() -> None:
-    event = _carrier_event(touchdown_speed_ms=55.0)  # vs ~70 m/s approach
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    slow = next(f for f in result.factors if f.name == "SLOW")
-    assert slow.evidence["speed_ratio"] < slow.evidence["threshold_ratio"]
-    assert result.grade == "OK-"
-
-
-def test_lso_fast_pass_gets_fast_factor() -> None:
-    event = _carrier_event(touchdown_speed_ms=85.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert any(f.name == "FAST" for f in result.factors)
-
-
-def test_lso_offline_pass_gets_offline_factor() -> None:
-    event = _carrier_event(lateral_offset_m=8.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    offline = next(f for f in result.factors if f.name == "OFFLINE")
-    assert offline.evidence["max_lateral_deviation_m"] > offline.evidence["threshold_m"]
-
-
-def test_lso_bolter_is_no_grade() -> None:
-    event = _carrier_event(outcome="touch_and_go")
-    assert event.outcome == "bolter"
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert result.grade == "_NO_GRADE_"
-    assert any(f.name == "BOLTER" for f in result.factors)
-
-
-def test_lso_multiple_majors_cut() -> None:
-    # HIGH + FAST + OFFLINE at once -> three majors -> CUT.
-    event = _carrier_event(gs_offset_m=5.0, lateral_offset_m=8.0, touchdown_speed_ms=85.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert result.grade == "CUT"
-
-
-def test_lso_disabled_factors_never_emitted() -> None:
-    event = _carrier_event()
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    disabled = {
-        name
-        for name, cfg in CONFIG.lso_grading["factors"].items()
-        if isinstance(cfg, dict) and cfg.get("enabled") is False
-    }
-    assert disabled  # config declares them
-    assert all(f.name not in disabled for f in result.factors)
-
-
-# ---------------------------------------------------------------------------
-# BURBLE heuristic (Issue #4 / O-3)
-# ---------------------------------------------------------------------------
-
-
-def test_lso_burble_detected_on_sudden_sink() -> None:
-    # Steady approach at ~4.3 m/s sink, then ~7 m/s over the last 3 s:
-    # the characteristic burble sink. BURBLE is disabled by default
-    # (Issue #23: unvalidated heuristic, no wind data in ACMI), so enable it
-    # explicitly for this test of the heuristic itself.
-    from app.grading.config import apply_config_overrides
-
-    enabled_config = apply_config_overrides(
-        CONFIG,
-        {"lso_grading": {"factors": {"BURBLE": {"enabled": True}}}},
-    )
-
-    event = _carrier_event(pre_touchdown_descent_ms=7.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, enabled_config)
-
-    burble = next((f for f in result.factors if f.name == "BURBLE"), None)
-    assert burble is not None
-    assert burble.severity == "minor"
-    assert burble.evidence["method"] == "descent_rate_increase_heuristic"
-    assert burble.evidence["extra_descent_ms"] >= burble.evidence["threshold_ms"]
-    assert burble.evidence["recent_descent_ms"] > burble.evidence["baseline_descent_ms"]
-
-
-def test_lso_smooth_pass_has_no_burble() -> None:
-    event = _carrier_event()
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert all(f.name != "BURBLE" for f in result.factors)
-    assert result.grade == "OK"
-
-
-def test_lso_burble_respects_enabled_flag() -> None:
-    from app.grading.config import apply_config_overrides
-
-    disabled_config = apply_config_overrides(
-        CONFIG,
-        {"lso_grading": {"factors": {"BURBLE": {"enabled": False}}}},
-    )
-
-    event = _carrier_event(pre_touchdown_descent_ms=7.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, disabled_config)
-
-    assert all(f.name != "BURBLE" for f in result.factors)
-
-
-def test_lso_burble_disabled_by_default() -> None:
-    """BURBLE must be disabled out of the box (Issue #23).
-
-    The heuristic is unvalidated and ACMI 2.2 has no wind data, so it must
-    not influence grades until tuned against real DCS approach data.
-    """
-    event = _carrier_event(pre_touchdown_descent_ms=7.0)
-    analysis = build_approach_analysis(event, 3.5)
-    result = grade_carrier_approach(analysis, CONFIG)
-
-    assert all(f.name != "BURBLE" for f in result.factors)
-
-
-def test_lso_burble_insufficient_samples_is_silent() -> None:
-    # A very short approach segment cannot support the baseline comparison;
-    # the detector must stay silent rather than guess.
-    from app.grading.deviations import ApproachAnalysis, DeviationSample
-    from app.grading.lso_grader import _detect_burble
-
-    analysis = ApproachAnalysis(
-        kind="carrier",
-        outcome="full_stop",
-        glideslope_deg=3.5,
-        course_deg=0.0,
-        touchdown_time=0.0,
-        touchdown_speed_ms=70.0,
-        touchdown_descent_rate_ms=2.0,
-        samples=[
-            DeviationSample(
-                time=-1.0,
-                distance_to_go=70.0,
-                glideslope_deviation=0.0,
-                centerline_deviation=0.0,
-                agl=6.0,
-            )
-        ],
-    )
-    assert _detect_burble(analysis, {"enabled": True, "extra_descent_ms": 1.5}) is None
-
-
-# ---------------------------------------------------------------------------
-# Issue D-5: land glideslope reference is fixed at 3 degrees.
-# ---------------------------------------------------------------------------
-
-
-def test_land_glideslope_defaults_to_three_degrees() -> None:
-    """Land approaches are graded against a 3-degree path (Issue D-5).
-
-    The default must be 3.0 both in the shipped YAML and in the in-code
-    fallback, and ``glideslope_for`` must route land events to it.
-    """
-    from app.grading.config import GradingConfig
-
-    # Shipped configuration.
-    assert CONFIG.land_glideslope_deg == pytest.approx(3.0)
-    assert CONFIG.glideslope_for("land") == pytest.approx(3.0)
-    # Carrier path stays on the FLOLS 3.5-degree datum.
-    assert CONFIG.glideslope_for("carrier") == pytest.approx(3.5)
-
-    # In-code fallback when no YAML is present.
-    assert GradingConfig({}).land_glideslope_deg == pytest.approx(3.0)
-
-
-def test_land_analysis_uses_three_degree_reference() -> None:
-    """The deviation series for a land landing is built on the 3.0-degree slope."""
-    event = _land_event(pre_touchdown_descent_ms=1.2)
-    analysis = build_approach_analysis(event, CONFIG.land_glideslope_deg)
-    assert analysis.glideslope_deg == pytest.approx(3.0)
-
-
-# ---------------------------------------------------------------------------
-# Overhead patterns (the way fighters actually land in DCS)
-# ---------------------------------------------------------------------------
 
 
 def _pattern_analysis(
@@ -734,6 +384,7 @@ def test_glidepath_is_judged_from_the_rollout_not_a_fixed_lookback() -> None:
 
     glideslope = next(c for c in result.components if c.name == "glideslope")
     assert glideslope.evidence["mean_abs_error_deg"] < 0.35
+    assert glideslope.score is not None
     assert glideslope.score > 90
     # The cut really was made, and at the roll-out (25 s of final here).
     assert result.metrics["rollout_before_touchdown_s"] == pytest.approx(25.0, abs=2.0)
@@ -765,7 +416,10 @@ def test_fighter_touchdown_is_not_judged_by_transport_bands() -> None:
     )
     assert fighter_rate.evidence["airframe_class"] == "fighter"
     assert default_rate.evidence["airframe_class"] == "default"
+    assert fighter_rate.score is not None
     assert fighter_rate.score > 75
+    assert default_rate.score is not None
+    assert fighter_rate.score is not None
     assert default_rate.score < fighter_rate.score
 
 
@@ -884,6 +538,7 @@ def test_the_downwind_leg_decides_whether_a_pattern_was_flown() -> None:
 
     pattern = next(c for c in circuit_labelled_straight_in.components if c.name == "pattern")
     assert pattern.evidence["downwind_judged"] is True
+    assert pattern.score is not None
     assert pattern.score > 90
     assert circuit_labelled_straight_in.metrics["approach_pattern"] == "overhead"
 
@@ -903,6 +558,8 @@ def test_pattern_component_catches_an_overshot_rollout() -> None:
     assert overshot_pattern.evidence["overshoot_m"] == pytest.approx(400.0, abs=20.0)
     # Rolled out on the far side of the centerline: offset is negative.
     assert overshot_pattern.evidence["rollout_offset_m"] < 0
+    assert overshot_pattern.score is not None
+    assert clean_pattern.score is not None
     assert overshot_pattern.score < clean_pattern.score
     assert "オーバーシュート" in overshot.comment
 
@@ -915,6 +572,7 @@ def test_pattern_component_catches_a_wandering_downwind() -> None:
     pattern = next(c for c in wandering.components if c.name == "pattern")
     assert pattern.evidence["downwind_course_error_deg"] == pytest.approx(20.0, abs=3.0)
     assert pattern.evidence["downwind_altitude_spread_m"] == pytest.approx(160.0, abs=15.0)
+    assert pattern.score is not None
     assert pattern.score < 70
     assert "ダウンウィンド" in wandering.comment
 
@@ -937,11 +595,6 @@ def test_overhead_landing_flown_well_earns_a_high_grade() -> None:
     produced no A and no B at all."""
     result = grade_land_landing(_pattern_analysis(touchdown_descent_ms=1.6), CONFIG)
     assert result.grade in ("A", "B")
-
-
-# ---------------------------------------------------------------------------
-# Stabilization gate: how far back "final" reaches on a straight-in
-# ---------------------------------------------------------------------------
 
 
 def _straight_in_analysis(
@@ -1046,6 +699,8 @@ def test_a_level_off_on_final_stays_inside_the_window() -> None:
 
     stable_gs = next(c for c in stable.components if c.name == "glideslope")
     level_gs = next(c for c in level_off.components if c.name == "glideslope")
+    assert level_gs.score is not None
+    assert stable_gs.score is not None
     assert level_gs.score < stable_gs.score
 
 
@@ -1332,250 +987,6 @@ def test_a_recording_that_never_caught_the_break_is_not_judged_on_it() -> None:
     assert "break_altitude" not in pattern.evidence["sub_scores"]
 
 
-# ---------------------------------------------------------------------------
-# Operational hardening around the grader (Issues #36 / #42 / #44)
-# ---------------------------------------------------------------------------
-
-
-async def test_reap_stale_provisionals_finalizes_old_ones(session_factory) -> None:
-    """Issue #36: provisionals older than the max age are force-finalized while
-    recent ones stay provisional waiting for their final detection."""
-    from datetime import datetime, timedelta, timezone
-
-    from sqlalchemy import select
-
-    from app.api.main import _settle_stale_provisionals
-    from app.models.entities import DcsObject, Flight, Landing
-
-    now = datetime.now(timezone.utc)
-    async with session_factory() as session:
-        flight = Flight(source_id="default")
-        session.add(flight)
-        await session.flush()
-        obj_old = DcsObject(flight_id=flight.id, acmi_id="A1", first_seen=0.0, last_seen=1.0)
-        obj_new = DcsObject(flight_id=flight.id, acmi_id="A2", first_seen=0.0, last_seen=1.0)
-        session.add_all([obj_old, obj_new])
-        await session.flush()
-        session.add_all(
-            [
-                Landing(
-                    flight_id=flight.id,
-                    object_id=obj_old.id,
-                    outcome_status="provisional",
-                    created_at=now - timedelta(seconds=400),
-                ),
-                Landing(
-                    flight_id=flight.id,
-                    object_id=obj_new.id,
-                    outcome_status="provisional",
-                    created_at=now - timedelta(seconds=10),
-                ),
-            ]
-        )
-        await session.commit()
-
-    reaped = await _settle_stale_provisionals(session_factory, now - timedelta(seconds=300))
-    assert reaped == 1
-
-    async with session_factory() as session:
-        result = await session.execute(select(Landing).order_by(Landing.object_id))
-        rows = result.scalars().all()
-    assert rows[0].outcome_status == "final"
-    assert rows[1].outcome_status == "provisional"
-
-
-def test_approach_analysis_from_dict_rejects_malformed_json() -> None:
-    """Issue #44: a corrupt stored approach_track must fail loudly, not with an
-    opaque TypeError deep in the grader."""
-    from app.grading.deviations import ApproachAnalysis
-
-    with pytest.raises(ValueError):
-        ApproachAnalysis.from_dict({"samples": "not a list"})
-    with pytest.raises(ValueError):
-        ApproachAnalysis.from_dict({"samples": [{"time": 1.0}]})
-
-
-async def test_regrade_malformed_track_returns_structured_error(tmp_path) -> None:
-    """Issues #44/#42: a corrupt approach_track yields the standard error
-    envelope (422 / MALFORMED_APPROACH_TRACK) instead of a raw 500."""
-    from app.api.main import create_app
-    from app.models.entities import DcsObject, Flight, Landing
-    from tests.test_auth import make_settings, open_client
-
-    settings = make_settings(tmp_path, auth_token="secret")
-    app = create_app(settings)
-    async with app.router.lifespan_context(app):
-        sf = app.state.session_factory
-        async with sf() as s:
-            flight = Flight(source_id="default")
-            s.add(flight)
-            await s.flush()
-            obj = DcsObject(flight_id=flight.id, acmi_id="A1", first_seen=0.0, last_seen=1.0)
-            s.add(obj)
-            await s.flush()
-            landing = Landing(
-                flight_id=flight.id,
-                object_id=obj.id,
-                outcome_status="final",
-                approach_track={"samples": "not a list"},
-            )
-            s.add(landing)
-            await s.flush()
-            await s.commit()
-            lid = landing.id
-        async with await open_client(app) as client:
-            resp = await client.post(
-                f"/api/landings/{lid}/regrade",
-                headers={"X-Auth-Token": "secret"},
-            )
-            assert resp.status_code == 422
-            body = resp.json()
-            assert body["error"] == "MALFORMED_APPROACH_TRACK"
-            assert "message" in body
-
-
-def test_land_course_falls_back_to_heading_when_the_window_is_still_turning() -> None:
-    """The stabilized-final track is only trusted while it stays within a
-    plausible crab of the touchdown heading. A tight pattern whose last
-    seconds are still in the turn produces a track tens of degrees off the
-    runway -- exactly the contamination the whole-approach bearing suffered
-    from -- so the heading takes over (Issue #26 / MAX_PLAUSIBLE_CRAB_DEG)."""
-    # Ground track due north, heading 120: 120 deg apart, far past any crab.
-    samples = [
-        TrackSample(time=0.0, latitude=34.990, longitude=140.0),
-        TrackSample(time=10.0, latitude=34.995, longitude=140.0),
-        TrackSample(time=20.0, latitude=35.000, longitude=140.0),
-    ]
-    assert estimate_course_deg(samples, 120.0, kind="land") == pytest.approx(120.0)
-
-    # A believable 20 deg crab still yields the track, not the heading.
-    assert estimate_course_deg(samples, 20.0, kind="land") == pytest.approx(0.0, abs=0.5)
-
-
-def test_code_defaults_agree_with_the_shipped_yaml() -> None:
-    """``_DEFAULTS`` and ``config/grading.yaml`` must carry the same numbers.
-
-    This is not tidiness. ``load_grading_config()`` falls back to ``_DEFAULTS``
-    without a word when the configured path is missing, and in production it
-    IS missing -- the container mounts an empty directory over /app/config, so
-    the defaults in code are the live configuration and the YAML is inert.
-    Any value that lives only in the YAML is therefore silently absent from
-    the running server.
-
-    That is how ``lso_grading.factors`` shipped as ``{}``: every carrier
-    landing came out "OK" with the comment "On centerline, on glidepath, on
-    speed." because not one factor could fire. No test noticed, because every
-    LSO test loads the YAML (``CONFIG`` above) and none exercised the path
-    production actually runs.
-
-    Compares thresholds only. Prose (``details``) is deliberately kept in the
-    YAML alone, so it is excluded rather than duplicated.
-
-    LSO factors that the YAML only DECLARES -- the ones marked
-    ``enabled: false`` with no threshold, so the UI could list them -- are
-    allowed to be absent from the defaults, because no grade can depend on
-    them. That exemption is not taken on trust: it is proved per factor
-    below, so adding a real threshold to one of them fails this test.
-    """
-    import yaml
-
-    from app.grading.config import _DEFAULTS
-
-    with open(GRADING_YAML, encoding="utf-8") as stream:
-        shipped = yaml.safe_load(stream)
-
-    PROSE = {"details"}
-    #: Keys the LSO detectors actually read off a factor.
-    ACTIONABLE = {
-        "gs_deviation_m",
-        "speed_ratio",
-        "lateral_deviation_m",
-        "speed_range_ms",
-        "auto",
-        "extra_descent_ms",
-    }
-
-    yaml_factors = shipped["lso_grading"]["factors"]
-    declaration_only = set()
-    for name, cfg in yaml_factors.items():
-        if name in _DEFAULTS["lso_grading"]["factors"]:
-            continue
-        actionable = ACTIONABLE & set(cfg)
-        assert not actionable and cfg.get("enabled") is False, (
-            f"lso_grading.factors.{name} is absent from _DEFAULTS but could still "
-            f"change a grade (enabled={cfg.get('enabled')!r}, keys={sorted(actionable)}). "
-            "Production reads the defaults, so copy it across."
-        )
-        declaration_only.add(name)
-    for name in declaration_only:
-        yaml_factors.pop(name)
-
-    def compare(defaults, yaml_side, path: str, mismatches: list[str]) -> None:
-        if isinstance(defaults, dict) and isinstance(yaml_side, dict):
-            for key in sorted(set(defaults) | set(yaml_side)):
-                if key in PROSE:
-                    continue
-                here = f"{path}.{key}" if path else key
-                if key not in defaults:
-                    mismatches.append(
-                        f"{here}: missing from _DEFAULTS (yaml has {yaml_side[key]!r})"
-                    )
-                elif key not in yaml_side:
-                    mismatches.append(
-                        f"{here}: missing from grading.yaml (defaults have {defaults[key]!r})"
-                    )
-                else:
-                    compare(defaults[key], yaml_side[key], here, mismatches)
-        elif defaults != yaml_side:
-            mismatches.append(f"{path}: defaults={defaults!r} yaml={yaml_side!r}")
-
-    mismatches: list[str] = []
-    for section in ("geometry", "approach", "detection", "land_grading", "lso_grading"):
-        compare(_DEFAULTS[section], shipped[section], section, mismatches)
-    assert not mismatches, "code defaults and grading.yaml disagree:\n  " + "\n  ".join(mismatches)
-
-
-def test_carrier_grading_still_works_when_the_yaml_is_missing() -> None:
-    """The production path: no config file at all, only the code defaults.
-
-    Every other LSO test loads the YAML, so an empty ``factors`` table was
-    invisible to the suite while being exactly what the live server ran.
-    """
-    from app.grading.config import GradingConfig
-
-    defaults_only = GradingConfig({})
-    assert defaults_only.lso_grading["factors"], "no factor can fire without thresholds"
-
-    high = grade_carrier_approach(_carrier_event_analysis(gs_offset_m=6.0), defaults_only)
-    assert [f.name for f in high.factors] == ["HIGH"]
-    assert high.grade == "OK-"
-
-    clean = grade_carrier_approach(_carrier_event_analysis(), defaults_only)
-    assert clean.factors == []
-    assert clean.grade == "OK"
-
-
-def _carrier_event_analysis(**kwargs):
-    event = _carrier_event(**kwargs)
-    return build_approach_analysis(event, CONFIG.carrier_glideslope_deg)
-
-
-def test_carrier_course_prefers_the_touchdown_heading_over_the_track() -> None:
-    """On the boat the aircraft de-crabs onto the angled deck at the ramp, so
-    the heading reads the deck course even through a turn onto final."""
-    samples = [
-        TrackSample(time=0.0, latitude=34.990, longitude=140.0),
-        TrackSample(time=10.0, latitude=34.995, longitude=140.0),
-        TrackSample(time=20.0, latitude=35.000, longitude=140.0),
-    ]
-    assert estimate_course_deg(samples, 9.0, kind="carrier") == pytest.approx(9.0)
-
-
-# ---------------------------------------------------------------------------
-# What the grader is allowed to have an opinion about
-# ---------------------------------------------------------------------------
-
-
 def test_a_component_that_could_not_be_measured_carries_no_score() -> None:
     """Unmeasurable is not "average".
 
@@ -1797,6 +1208,7 @@ def test_the_speed_reference_is_the_speed_held_on_final_not_the_whole_final() ->
     whole_speed = next(c for c in whole.components if c.name == "touchdown_speed")
     assert whole_speed.evidence["mean_approach_speed_ms"] > 95.0
     assert whole_speed.evidence["verdict"] == "slow"
+    assert whole_speed.score is not None
     assert whole_speed.score < 50.0
 
 

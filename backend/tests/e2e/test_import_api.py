@@ -9,19 +9,12 @@ import httpx2
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
-from app.config import Settings
-from tests.helpers import create_test_schema, make_acmi_text, make_approach_samples
-
-
-def _settings(tmp_path, **overrides) -> Settings:
-    db_path = (tmp_path / "import.db").as_posix()
-    settings = Settings(
-        acmi_enabled=False,
-        database_url=f"sqlite+aiosqlite:///{db_path}",
-        **overrides,
-    )
-    create_test_schema(settings.database_url)
-    return settings
+from tests.helpers import (
+    make_acmi_text,
+    make_api_settings,
+    make_approach_samples,
+    open_api_client,
+)
 
 
 def _sample_acmi() -> str:
@@ -43,16 +36,11 @@ async def _wait_for_job(http: httpx2.AsyncClient, job_id: str, timeout_s: float 
         await asyncio.sleep(0.01)
 
 
-async def _open_client(app) -> httpx2.AsyncClient:
-    transport = httpx2.ASGITransport(app=app)
-    return httpx2.AsyncClient(transport=transport, base_url="http://test")
-
-
 async def test_import_acmi_end_to_end(tmp_path) -> None:
     """Upload -> ingest -> detect -> grade -> DB, scoped to the import."""
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("session.acmi", _sample_acmi().encode(), "text/plain")},
@@ -103,9 +91,9 @@ async def test_discarding_an_import_removes_everything_it_created(tmp_path) -> N
 
     from app.models.entities import DcsObject, Flight, Landing, Track
 
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             start = (
                 await http.post(
                     "/api/import",
@@ -146,9 +134,9 @@ async def test_import_zip_archive(tmp_path) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("session.acmi", _sample_acmi())
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={
@@ -171,9 +159,9 @@ async def test_import_compressed_plain_acmi(tmp_path) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("data.acmi", _sample_acmi())
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("tacview.acmi", buffer.getvalue(), "application/octet-stream")},
@@ -187,9 +175,9 @@ async def test_import_compressed_plain_acmi(tmp_path) -> None:
 
 async def test_duplicate_import_is_skipped(tmp_path) -> None:
     """Re-uploading the same recording creates no second landing rows."""
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             content = _sample_acmi().encode()
             first = await http.post(
                 "/api/import", files={"file": ("a.acmi", content, "text/plain")}
@@ -218,9 +206,9 @@ async def test_duplicate_import_is_skipped(tmp_path) -> None:
 
 
 async def test_import_rejects_unsupported_extension(tmp_path) -> None:
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("notes.txt.bak", b"hello", "application/octet-stream")},
@@ -229,9 +217,11 @@ async def test_import_rejects_unsupported_extension(tmp_path) -> None:
 
 
 async def test_import_rejects_oversized_upload(tmp_path) -> None:
-    app = create_app(_settings(tmp_path, import_max_upload_mb=0))
+    app = create_app(
+        make_api_settings(tmp_path, database_filename="import.db", import_max_upload_mb=0)
+    )
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("big.acmi", b"x" * 1024, "text/plain")},
@@ -242,9 +232,11 @@ async def test_import_rejects_oversized_upload(tmp_path) -> None:
 async def test_import_rejects_oversized_upload_via_content_length(tmp_path) -> None:
     """Issue #29: an upload whose (real) Content-Length exceeds the limit is
     rejected with 413 before the body is streamed to disk, not after."""
-    app = create_app(_settings(tmp_path, import_max_upload_mb=1))
+    app = create_app(
+        make_api_settings(tmp_path, database_filename="import.db", import_max_upload_mb=1)
+    )
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={
@@ -259,9 +251,9 @@ async def test_import_rejects_oversized_upload_via_content_length(tmp_path) -> N
 
 
 async def test_list_and_get_import_jobs(tmp_path) -> None:
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             started = await http.post(
                 "/api/import",
                 files={"file": ("s.acmi", _sample_acmi().encode(), "text/plain")},
@@ -279,9 +271,11 @@ async def test_list_and_get_import_jobs(tmp_path) -> None:
 
 
 async def test_import_requires_authentication(tmp_path) -> None:
-    app = create_app(_settings(tmp_path, auth_token="secret"))
+    app = create_app(
+        make_api_settings(tmp_path, database_filename="import.db", auth_token="secret")
+    )
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             denied = await http.post(
                 "/api/import",
                 files={"file": ("a.acmi", _sample_acmi().encode(), "text/plain")},
@@ -308,7 +302,7 @@ async def test_import_requires_authentication(tmp_path) -> None:
 
 def test_ws_notified_of_import_completion(tmp_path) -> None:
     """The completion broadcast rides the existing WebSocket channel."""
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     with TestClient(app) as test_client:
         with test_client.websocket_connect("/api/ws/landings") as websocket:
             # Consume the ping/pong handshake capability check first.
@@ -348,9 +342,9 @@ async def test_two_sessions_of_the_same_mission_are_both_imported(tmp_path) -> N
     the import reported "0 landings detected". RecordingTime is stamped per
     recording, so it is what tells the sessions apart.
     """
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             monday = make_acmi_text(
                 make_approach_samples(outcome="full_stop"),
                 recording_time="2026-08-25T07:03:07Z",
@@ -388,12 +382,10 @@ async def test_import_job_survives_restart(tmp_path) -> None:
     leaving completed jobs un-queryable as 404)."""
     import asyncio
 
-    db_path = (tmp_path / "persist.db").as_posix()
-    settings1 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
-    create_test_schema(settings1.database_url)
+    settings1 = make_api_settings(tmp_path, database_filename="persist.db")
     app1 = create_app(settings1)
     async with app1.router.lifespan_context(app1):
-        async with await _open_client(app1) as http:
+        async with open_api_client(app1) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("session.acmi", _sample_acmi().encode(), "text/plain")},
@@ -406,10 +398,10 @@ async def test_import_job_survives_restart(tmp_path) -> None:
 
     # app1's in-memory manager is gone now. A fresh app against the same
     # database must rebuild the job history from the import_jobs table.
-    settings2 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
+    settings2 = make_api_settings(tmp_path, database_filename="persist.db")
     app2 = create_app(settings2)
     async with app2.router.lifespan_context(app2):
-        async with await _open_client(app2) as http:
+        async with open_api_client(app2) as http:
             job = await http.get(f"/api/imports/{job_id}")
             assert job.status_code == 200
             assert job.json()["status"] == "completed"
@@ -429,9 +421,9 @@ async def test_importing_same_acmi_twice_deduplicates(tmp_path) -> None:
     must NOT be skipped, is covered by
     ``test_two_sessions_of_the_same_mission_are_both_imported``.
     """
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             body = _sample_acmi().encode()
 
             first = await http.post(
@@ -472,12 +464,10 @@ async def test_discarded_import_does_not_come_back_after_a_restart(tmp_path) -> 
     """
     import asyncio
 
-    db_path = (tmp_path / "discard.db").as_posix()
-    settings1 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
-    create_test_schema(settings1.database_url)
+    settings1 = make_api_settings(tmp_path, database_filename="discard.db")
     app1 = create_app(settings1)
     async with app1.router.lifespan_context(app1):
-        async with await _open_client(app1) as http:
+        async with open_api_client(app1) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("session.acmi", _sample_acmi().encode(), "text/plain")},
@@ -488,10 +478,10 @@ async def test_discarded_import_does_not_come_back_after_a_restart(tmp_path) -> 
             assert (await http.post(f"/api/imports/{job_id}/discard")).status_code == 204
             assert (await http.get(f"/api/imports/{job_id}")).status_code == 404
 
-    settings2 = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
+    settings2 = make_api_settings(tmp_path, database_filename="discard.db")
     app2 = create_app(settings2)
     async with app2.router.lifespan_context(app2):
-        async with await _open_client(app2) as http:
+        async with open_api_client(app2) as http:
             assert (await http.get(f"/api/imports/{job_id}")).status_code == 404
             listing = await http.get("/api/imports")
             assert [j["id"] for j in listing.json()["items"]] == []
@@ -517,9 +507,9 @@ async def test_import_survives_a_progress_write_mid_batch(tmp_path, monkeypatch)
     monkeypatch.setattr(importer_module, "JOB_PERSIST_INTERVAL_S", 0.0)
     monkeypatch.setattr(importer_module, "YIELD_EVERY_LINES", 1)
 
-    app = create_app(_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
-        async with await _open_client(app) as http:
+        async with open_api_client(app) as http:
             response = await http.post(
                 "/api/import",
                 files={"file": ("session.acmi", _sample_acmi().encode(), "text/plain")},

@@ -1,8 +1,9 @@
-"""Tests for the landing REST/WebSocket API."""
+"""Integration tests for routes defined in :mod:`app.api.routes`."""
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -10,11 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.main import create_app
 from app.detection.detector import analyze_track
 from app.ingest import LandingContext
-from app.models.entities import DcsObject, Flight
+from app.models.entities import DcsObject, Flight, Landing
+from tests.conftest import GRADING_YAML
 from tests.helpers import (
     DECK_ALTITUDE_M,
+    make_api_settings,
     make_approach_samples,
     make_carrier_state,
+    open_api_client,
 )
 
 
@@ -404,3 +408,52 @@ async def test_regrade_burns_in_a_missing_airframe(client) -> None:
     async with sf() as session:
         landing = await session.get(Landing, landing_id)
         assert landing.airframe == "A-10C_2"
+
+
+async def test_config_reload_endpoint_requires_and_reloads(tmp_path) -> None:
+    config_path = tmp_path / "grading.yaml"
+    config_path.write_text(Path(GRADING_YAML).read_text(encoding="utf-8"), encoding="utf-8")
+    app = create_app(
+        make_api_settings(
+            tmp_path,
+            database_filename="auth.db",
+            grading_config_path=str(config_path),
+            auth_token="secret",
+        )
+    )
+    async with app.router.lifespan_context(app):
+        async with open_api_client(app) as client:
+            assert (await client.post("/api/config/reload")).status_code == 401
+            response = await client.post("/api/config/reload", headers={"X-Auth-Token": "secret"})
+
+    assert response.status_code == 200
+    assert response.json()["reloaded"] is True
+
+
+async def test_regrade_malformed_track_returns_structured_error(tmp_path) -> None:
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
+    async with app.router.lifespan_context(app):
+        async with app.state.session_factory() as session:
+            flight = Flight(source_id="default")
+            session.add(flight)
+            await session.flush()
+            obj = DcsObject(flight_id=flight.id, acmi_id="A1", first_seen=0.0, last_seen=1.0)
+            session.add(obj)
+            await session.flush()
+            landing = Landing(
+                flight_id=flight.id,
+                object_id=obj.id,
+                outcome_status="final",
+                approach_track={"samples": "not a list"},
+            )
+            session.add(landing)
+            await session.flush()
+            await session.commit()
+        async with open_api_client(app) as client:
+            response = await client.post(
+                f"/api/landings/{landing.id}/regrade", headers={"X-Auth-Token": "secret"}
+            )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "MALFORMED_APPROACH_TRACK"
+    assert "message" in response.json()

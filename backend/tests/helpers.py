@@ -8,17 +8,52 @@ the origin ``(LAT0, LON0)`` with course ~000 (north). Touchdown happens at
 from __future__ import annotations
 
 import math
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import TypedDict, Unpack
 
+import httpx2
+from fastapi.applications import FastAPI
 from sqlalchemy import create_engine as create_sync_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.detection.detector import CarrierState, TrackSample
-from app.models import entities  # noqa: F401
+from app.config import Settings
+from app.detection.detector import CarrierState, LandingEvent, TrackSample, analyze_track
 from app.models.base import Base
 
 LAT0 = 35.0
 LON0 = 140.0
 DECK_ALTITUDE_M = 20.0
 M_PER_DEG_LAT = 111320.0
+DECK_LATITUDE = 35.0
+DECK_LONGITUDE = 140.0
+NIMITZ_DECK_ALTITUDE_M = 19.5
+
+
+class ApproachSampleOptions(TypedDict, total=False):
+    """Optional arguments accepted by :func:`make_approach_samples`."""
+
+    outcome: str
+    glideslope_deg: float
+    approach_speed_ms: float
+    touchdown_speed_ms: float | None
+    gs_offset_m: float
+    lateral_offset_m: float
+    pre_touchdown_descent_ms: float | None
+    duration_before_s: float
+    ground_time_s: float
+    deck_altitude_m: float
+    offset_east_m: float
+    offset_north_m: float
+
+
+class ApiSettingsOverrides(TypedDict, total=False):
+    """Settings values that API integration scenarios may override."""
+
+    auth_token: str
+    grading_config_path: str
+    import_max_upload_mb: int
 
 
 def create_test_schema(database_url: str) -> None:
@@ -28,6 +63,40 @@ def create_test_schema(database_url: str) -> None:
         Base.metadata.create_all(engine)
     finally:
         engine.dispose()
+
+
+async def create_async_test_schema(engine: AsyncEngine) -> None:
+    """Create all application tables in a disposable async test database."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+def make_api_settings(
+    tmp_path: Path, *, database_filename: str = "api.db", **overrides: Unpack[ApiSettingsOverrides]
+) -> Settings:
+    """Build API settings backed by a disposable SQLite database.
+
+    Args:
+        tmp_path: Test-owned directory in which to create the database.
+        database_filename: SQLite filename relative to ``tmp_path``.
+        **overrides: Explicit supported ``Settings`` values required by a test scenario.
+    """
+    database_path = (tmp_path / database_filename).as_posix()
+    settings = Settings(
+        acmi_enabled=False,
+        database_url=f"sqlite+aiosqlite:///{database_path}",
+        **overrides,
+    )
+    create_test_schema(settings.database_url)
+    return settings
+
+
+@asynccontextmanager
+async def open_api_client(app: FastAPI) -> AsyncGenerator[httpx2.AsyncClient, None]:
+    """Yield an HTTPX client bound to an ASGI application."""
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
 
 
 def _lat_offset(meters: float) -> float:
@@ -141,6 +210,65 @@ def make_approach_samples(
     return samples
 
 
+def make_carrier_landing_event(
+    **sample_options: Unpack[ApproachSampleOptions],
+) -> LandingEvent:
+    """Build the single carrier-landing event from a synthetic approach."""
+    samples = make_approach_samples(**sample_options)
+    events = analyze_track(samples, DECK_ALTITUDE_M, {"C1": make_carrier_state()})
+    assert len(events) == 1
+    return events[0]
+
+
+def make_deck_carrier_states(*, altitude_m: float = 0.0) -> dict[str, CarrierState]:
+    """Build a stationary carrier whose ACMI altitude is its waterline."""
+    return {
+        "C1": CarrierState(
+            obj_id="C1",
+            name="CVN_73",
+            type="Sea+Watercraft+AircraftCarrier",
+            samples=[
+                (time, DECK_LATITUDE, DECK_LONGITUDE, altitude_m, 0.0, 0.0)
+                for time in (-120.0, 120.0)
+            ],
+        )
+    }
+
+
+def make_deck_approach_samples(
+    *, final_altitude_m: float, speed_ms: float = 65.0
+) -> list[TrackSample]:
+    """Build a sea-referenced 3.5-degree carrier approach that levels at the deck."""
+    tan_slope = math.tan(math.radians(3.5))
+    samples: list[TrackSample] = []
+    for time in range(-40, 21):
+        if time < 0:
+            distance = abs(time) * speed_ms
+            altitude = final_altitude_m + distance * tan_slope
+            latitude = DECK_LATITUDE - _lat_offset(distance)
+        else:
+            altitude = final_altitude_m
+            latitude = DECK_LATITUDE
+        samples.append(
+            TrackSample(
+                time=float(time),
+                latitude=latitude,
+                longitude=DECK_LONGITUDE,
+                altitude=altitude,
+                agl=altitude,
+                speed=speed_ms if time < 0 else max(5.0, speed_ms - time * 3.0),
+                heading=0.0,
+                on_ground=None,
+            )
+        )
+    return samples
+
+
+def resolve_nimitz_deck_altitude(_: CarrierState) -> float:
+    """Return the deck altitude for the synthetic Nimitz carrier."""
+    return NIMITZ_DECK_ALTITUDE_M
+
+
 def make_acmi_text(
     samples: list[TrackSample],
     *,
@@ -170,8 +298,7 @@ def make_acmi_text(
     if include_carrier:
         lines.append("#0")
         lines.append(
-            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,"
-            f"T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
+            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
         )
     for sample in samples:
         absolute = base_time + sample.time
@@ -219,13 +346,12 @@ def make_acmi_text_multi(
     if include_carrier:
         lines.append("#0")
         lines.append(
-            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,"
-            f"T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
+            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
         )
 
     events: list[tuple[float, int, str, TrackSample, dict]] = []
     for index, spec in enumerate(aircraft):
-        for order, sample in enumerate(spec["samples"]):
+        for _, sample in enumerate(spec["samples"]):
             absolute = base_time + sample.time
             events.append((absolute, index, spec["obj_id"], sample, spec))
     events.sort(key=lambda e: (e[0], e[1]))
@@ -252,3 +378,50 @@ def make_acmi_text_multi(
             properties.append(f"TAS={sample.speed:g}")
         lines.append(f"{obj_id},{','.join(properties)}")
     return "\n".join(lines) + "\n"
+
+
+def analysis_with_gs_deviations(devs: list[float]):
+    """指定のグライドスロープ偏差を持つ analysis を組む。
+
+    偏差は AGL に埋め込む: 採点は角度 (AGL と距離の比) で行うので、
+    ``glideslope_deviation`` だけを差し替えて AGL を放置すると幾何的に
+    矛盾したサンプルになり、何をテストしているのか分からなくなる。
+    距離は ±30 m の偏差が現実的な範囲に収まるよう最終進入相当に取る。
+
+    滑走路が解決できた進入として組む (``distance_to_threshold`` を入れ、
+    geometry を runway にする)。一定オフセットの高低を測れるのは
+    照準点基準の測り方だけで、滑走路が無いときの経路角フィットは
+    平行移動を原理的に見ない --- そちらで組むと「-30 m 低い進入」が
+    誤差ゼロとして通り、何も検証しないテストになる。
+    """
+    import math
+
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    touchdown_time = 100.0
+    tan_slope = math.tan(math.radians(3.0))
+    samples = []
+    for i, dev in enumerate(devs):
+        distance_to_go = 1250.0 + (len(devs) - 1 - i) * 250.0
+        samples.append(
+            DeviationSample(
+                time=touchdown_time - len(devs) + i,
+                distance_to_go=distance_to_go,
+                glideslope_deviation=dev,
+                centerline_deviation=1.0,
+                speed=70.0,
+                agl=distance_to_go * tan_slope + dev,
+                distance_to_threshold=distance_to_go - 300.0,
+            )
+        )
+    return ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=70.0,
+        touchdown_descent_rate_ms=1.0,
+        geometry={"kind": "runway", "airbase": "TEST", "name": "09"},
+        samples=samples,
+    )

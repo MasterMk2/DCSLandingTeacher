@@ -15,7 +15,7 @@ from app.acmi.models import (
 )
 from app.acmi.parser import AcmiParseError, AcmiParser, expand_transform
 
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
 
 def load_sample() -> str:
@@ -105,7 +105,7 @@ def test_object_add_update_remove_from_fixture() -> None:
     # Feed the remaining lines and verify the removal took effect and the
     # aircraft kept receiving partial updates.
     for line in lines[consumed:]:
-        parser.feed_line(line)
+        _ = parser.feed_line(line)
 
     aircraft = parser.objects["101"]
     assert aircraft.type == "Air+FixedWing"
@@ -120,7 +120,7 @@ def test_object_add_update_remove_from_fixture() -> None:
 
 def test_transform_full_syntax_typed_values() -> None:
     parser = AcmiParser()
-    parser.feed_line("101,T=41.6251307|41.5910417|2000.14|0|5|90,Type=Air+FixedWing,Name=C172")
+    _ = parser.feed_line("101,T=41.6251307|41.5910417|2000.14|0|5|90,Type=Air+FixedWing,Name=C172")
     obj = parser.objects["101"]
     assert obj.longitude == pytest.approx(41.6251307)
     assert obj.latitude == pytest.approx(41.5910417)
@@ -132,8 +132,8 @@ def test_transform_full_syntax_typed_values() -> None:
 
 def test_transform_partial_update_keeps_previous_values() -> None:
     parser = AcmiParser()
-    parser.feed_line("101,T=41.62|41.58|100|10|20|30")
-    parser.feed_line("101,T=41.63||200|||91")
+    _ = parser.feed_line("101,T=41.62|41.58|100|10|20|30")
+    _ = parser.feed_line("101,T=41.63||200|||91")
 
     obj = parser.objects["101"]
     # Updated fields
@@ -148,7 +148,7 @@ def test_transform_partial_update_keeps_previous_values() -> None:
 
 def test_transform_syntax4_heading_flat_world() -> None:
     parser = AcmiParser()
-    parser.feed_line("101,T=-129|43|1500|15|-5|180|1000|2000|185.3")
+    _ = parser.feed_line("101,T=-129|43|1500|15|-5|180|1000|2000|185.3")
     obj = parser.objects["101"]
     assert obj.u == pytest.approx(1000.0)
     assert obj.v == pytest.approx(2000.0)
@@ -163,8 +163,8 @@ def test_transform_syntax4_heading_flat_world() -> None:
 def test_object_coordinates_are_absolute_after_reference_offset() -> None:
     """ACMI stores object lat/lon relative to the global reference origin."""
     parser = AcmiParser()
-    parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
-    parser.feed_line("101,T=4.57|5.10|1500")
+    _ = parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
+    _ = parser.feed_line("101,T=4.57|5.10|1500")
     obj = parser.objects["101"]
     assert obj.longitude == pytest.approx(40.57)
     assert obj.latitude == pytest.approx(43.10)
@@ -173,9 +173,9 @@ def test_object_coordinates_are_absolute_after_reference_offset() -> None:
 def test_reference_offset_applies_to_partial_transform_updates() -> None:
     """A later line updating only one axis must not lose or double the origin."""
     parser = AcmiParser()
-    parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
-    parser.feed_line("101,T=4.57|5.10|1500")
-    parser.feed_line("101,T=4.58||1400")
+    _ = parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
+    _ = parser.feed_line("101,T=4.57|5.10|1500")
+    _ = parser.feed_line("101,T=4.58||1400")
     obj = parser.objects["101"]
     assert obj.longitude == pytest.approx(40.58)
     assert obj.latitude == pytest.approx(43.10)  # unchanged, still absolute
@@ -185,8 +185,8 @@ def test_reference_offset_applies_to_partial_transform_updates() -> None:
 def test_reference_offset_leaves_native_uv_untouched() -> None:
     """U/V are already absolute in the simulator's flat world."""
     parser = AcmiParser()
-    parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
-    parser.feed_line("101,T=4.57|5.10|1500|0|0|90|517583.7|-198841.6|154.6")
+    _ = parser.feed_line("0,ReferenceLongitude=36,ReferenceLatitude=38")
+    _ = parser.feed_line("101,T=4.57|5.10|1500|0|0|90|517583.7|-198841.6|154.6")
     obj = parser.objects["101"]
     assert obj.u == pytest.approx(517583.7)
     assert obj.v == pytest.approx(-198841.6)
@@ -194,7 +194,7 @@ def test_reference_offset_leaves_native_uv_untouched() -> None:
 
 def test_heading_falls_back_to_flat_world_when_yaw_absent() -> None:
     parser = AcmiParser()
-    parser.feed_line("101,T=-129|43|1500,HDG=77.5")
+    _ = parser.feed_line("101,T=-129|43|1500,HDG=77.5")
     obj = parser.objects["101"]
     assert obj.yaw is None
     assert obj.heading == pytest.approx(77.5)
@@ -202,21 +202,21 @@ def test_heading_falls_back_to_flat_world_when_yaw_absent() -> None:
 
 def test_speed_prefers_tas_then_cas_then_ias() -> None:
     parser = AcmiParser()
-    parser.feed_line("101,T=1|2|3,TAS=80,CAS=70,IAS=60")
+    _ = parser.feed_line("101,T=1|2|3,TAS=80,CAS=70,IAS=60")
     assert parser.objects["101"].speed == pytest.approx(80.0)
 
-    parser.feed_line("102,T=1|2|3,CAS=70,IAS=60")
+    _ = parser.feed_line("102,T=1|2|3,CAS=70,IAS=60")
     assert parser.objects["102"].speed == pytest.approx(70.0)
 
-    parser.feed_line("103,T=1|2|3,IAS=60")
+    _ = parser.feed_line("103,T=1|2|3,IAS=60")
     assert parser.objects["103"].speed == pytest.approx(60.0)
 
 
 def test_on_ground_property() -> None:
     parser = AcmiParser()
-    parser.feed_line("101,T=1|2|3,OnGround=0")
+    _ = parser.feed_line("101,T=1|2|3,OnGround=0")
     assert parser.objects["101"].on_ground is False
-    parser.feed_line("101,OnGround=1")
+    _ = parser.feed_line("101,OnGround=1")
     assert parser.objects["101"].on_ground is True
 
 
@@ -231,16 +231,16 @@ def test_escaped_comma_in_value() -> None:
 
 def test_hexadecimal_ids_normalized_to_uppercase() -> None:
     parser = AcmiParser()
-    parser.feed_line("a1b2,T=1|2|3")
+    _ = parser.feed_line("a1b2,T=1|2|3")
     assert "A1B2" in parser.objects
-    parser.feed_line("-A1B2")
+    _ = parser.feed_line("-A1B2")
     assert "A1B2" not in parser.objects
 
 
 def test_invalid_time_line_raises() -> None:
     parser = AcmiParser()
     with pytest.raises(AcmiParseError):
-        parser.feed_line("#not-a-number")
+        _ = parser.feed_line("#not-a-number")
 
 
 def test_expand_transform_empty_components() -> None:
@@ -259,7 +259,7 @@ def test_expand_transform_empty_components() -> None:
 
 def test_mission_event_bookmark() -> None:
     parser = AcmiParser()
-    parser.feed_line("#8.62")
+    _ = parser.feed_line("#8.62")
     events = parser.feed_line("0,Event=Bookmark|Starting precautionary landing practice")
 
     mission_events = [e for e in events if isinstance(e, MissionEvent)]
@@ -273,7 +273,7 @@ def test_mission_event_bookmark() -> None:
 
 def test_mission_event_with_object_id() -> None:
     parser = AcmiParser()
-    parser.feed_line("#114.76")
+    _ = parser.feed_line("#114.76")
     events = parser.feed_line("0,Event=Landed|705|Maverick has landed on the USS Ranger")
 
     landed = [e for e in events if isinstance(e, MissionEvent)][0]
@@ -284,7 +284,7 @@ def test_mission_event_with_object_id() -> None:
 
 def test_mission_events_do_not_pollute_object_properties() -> None:
     parser = AcmiParser()
-    parser.feed_line("0,Event=Bookmark|test")
+    _ = parser.feed_line("0,Event=Bookmark|test")
     assert "Event" not in parser.header
 
 
@@ -348,7 +348,7 @@ def test_continuation_line_with_escaped_backslash() -> None:
 def test_continuation_line_then_normal_line() -> None:
     """After a continuation sequence, normal parsing resumes."""
     parser = AcmiParser()
-    parser.feed_line("0,Comments=Continued\\")
+    _ = parser.feed_line("0,Comments=Continued\\")
     events = parser.feed_line("value")
     updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
     assert updates[0].properties["Comments"] == "Continuedvalue"
@@ -364,7 +364,7 @@ def test_continuation_line_then_normal_line() -> None:
 def test_continuation_in_object_update() -> None:
     """Continuation lines work within object updates (not just global object)."""
     parser = AcmiParser()
-    parser.feed_line("101,T=1|2|3,Comments=Start\\")
+    _ = parser.feed_line("101,T=1|2|3,Comments=Start\\")
     events = parser.feed_line("End")
     updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
     assert len(updates) == 1
@@ -375,7 +375,7 @@ def test_continuation_in_object_update() -> None:
 def test_continuation_with_escaped_comma() -> None:
     """Escaped commas work correctly within continuation lines."""
     parser = AcmiParser()
-    parser.feed_line("0,Comments=First part\\,\\")
+    _ = parser.feed_line("0,Comments=First part\\,\\")
     events = parser.feed_line("second part")
     updates = [e for e in events if isinstance(e, ObjectUpdateEvent)]
     assert len(updates) == 1
@@ -386,7 +386,7 @@ def test_continuation_with_escaped_comma() -> None:
 def test_continuation_line_with_frame_time_between() -> None:
     """Frame time lines are not part of continuation and break the sequence."""
     parser = AcmiParser()
-    parser.feed_line("0,Comments=Start\\")
+    _ = parser.feed_line("0,Comments=Start\\")
     # Frame time line should be processed normally (not buffered)
     time_events = parser.feed_line("#10.0")
     assert len(time_events) == 1

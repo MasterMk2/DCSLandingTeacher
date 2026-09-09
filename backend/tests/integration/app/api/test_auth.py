@@ -2,37 +2,19 @@
 
 from __future__ import annotations
 
-import httpx2
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
-from app.config import Settings
-from tests.helpers import create_test_schema
-
-
-def make_settings(tmp_path, **overrides) -> Settings:
-    db_path = (tmp_path / "auth.db").as_posix()
-    settings = Settings(
-        acmi_enabled=False,
-        database_url=f"sqlite+aiosqlite:///{db_path}",
-        **overrides,
-    )
-    create_test_schema(settings.database_url)
-    return settings
-
-
-async def open_client(app) -> httpx2.AsyncClient:
-    transport = httpx2.ASGITransport(app=app)
-    return httpx2.AsyncClient(transport=transport, base_url="http://test")
+from tests.helpers import make_api_settings, open_api_client
 
 
 async def test_auth_disabled_allows_anonymous_requests(tmp_path) -> None:
     """Default (DLT_AUTH_TOKEN empty): the API behaves exactly as before."""
-    app = create_app(make_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             health = await client.get("/api/health")
             landings = await client.get("/api/landings")
 
@@ -41,9 +23,9 @@ async def test_auth_disabled_allows_anonymous_requests(tmp_path) -> None:
 
 
 async def test_health_stays_public_when_auth_enabled(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             response = await client.get("/api/health")
 
     assert response.status_code == 200
@@ -53,9 +35,9 @@ async def test_health_stays_public_when_auth_enabled(tmp_path) -> None:
 async def test_health_reports_database_connectivity(tmp_path) -> None:
     """Issue #45: the health endpoint must surface DB connectivity so probes
     do not pass against a dead/corrupt database."""
-    app = create_app(make_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             response = await client.get("/api/health")
 
     assert response.status_code == 200
@@ -66,27 +48,27 @@ async def test_health_reports_database_connectivity(tmp_path) -> None:
 
 
 async def test_rest_rejects_missing_token_with_401(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             response = await client.get("/api/landings")
 
     assert response.status_code == 401
 
 
 async def test_rest_rejects_wrong_token_with_403(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             response = await client.get("/api/landings", headers={"X-Auth-Token": "wrong"})
 
     assert response.status_code == 403
 
 
 async def test_rest_accepts_bearer_token(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             response = await client.get("/api/landings", headers={"Authorization": "Bearer secret"})
 
     assert response.status_code == 200
@@ -94,16 +76,16 @@ async def test_rest_accepts_bearer_token(tmp_path) -> None:
 
 
 async def test_rest_accepts_x_auth_token_header(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     async with app.router.lifespan_context(app):
-        async with await open_client(app) as client:
+        async with open_api_client(app) as client:
             response = await client.get("/api/landings", headers={"X-Auth-Token": "secret"})
 
     assert response.status_code == 200
 
 
 def test_ws_accepts_valid_query_token(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     with TestClient(app) as test_client:
         with test_client.websocket_connect("/api/ws/landings?token=secret") as websocket:
             websocket.send_text("ping")
@@ -111,7 +93,7 @@ def test_ws_accepts_valid_query_token(tmp_path) -> None:
 
 
 def test_ws_rejects_missing_or_wrong_token(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path, auth_token="secret"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
     with TestClient(app) as test_client:
         with pytest.raises(WebSocketDisconnect):
             with test_client.websocket_connect("/api/ws/landings"):
@@ -122,7 +104,7 @@ def test_ws_rejects_missing_or_wrong_token(tmp_path) -> None:
 
 
 def test_ws_allows_anonymous_when_auth_disabled(tmp_path) -> None:
-    app = create_app(make_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db"))
     with TestClient(app) as test_client:
         with test_client.websocket_connect("/api/ws/landings") as websocket:
             websocket.send_text("ping")
@@ -132,7 +114,7 @@ def test_ws_allows_anonymous_when_auth_disabled(tmp_path) -> None:
 def test_ws_connection_revoked_when_auth_enabled_after_connect(tmp_path) -> None:
     """Issue #25: enabling auth after a connection was established (while auth
     was off) must not leave the stale connection open."""
-    app = create_app(make_settings(tmp_path))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db"))
     with TestClient(app) as test_client:
         with test_client.websocket_connect("/api/ws/landings") as websocket:
             websocket.send_text("ping")
@@ -149,7 +131,7 @@ def test_ws_connection_revoked_when_auth_enabled_after_connect(tmp_path) -> None
 
 def test_ws_connection_revoked_on_token_rotation(tmp_path) -> None:
     """Issue #25: rotating the server token must invalidate old connections."""
-    app = create_app(make_settings(tmp_path, auth_token="old"))
+    app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="old"))
     with TestClient(app) as test_client:
         with test_client.websocket_connect("/api/ws/landings?token=old") as websocket:
             websocket.send_text("ping")

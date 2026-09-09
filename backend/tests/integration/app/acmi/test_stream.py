@@ -4,50 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import zlib
-
-import pytest
 
 from app.acmi.handshake import build_client_handshake
 from app.acmi.stream import (
     AcmiStreamClient,
-    LineAssembler,
-    StreamDecodeError,
-    StreamDecoder,
 )
 
 ACMI_TEXT = (
     "FileType=text/acmi/tacview\nFileVersion=2.2\n#1.50\n101,T=41.6|41.5|100,Type=Air+FixedWing\n"
 )
-
-
-def test_line_assembler_reassembles_split_chunks() -> None:
-    assembler = LineAssembler()
-    assert assembler.feed("FileType=text/acmi") == []
-    assert assembler.feed("/tacview\nFileVer") == ["FileType=text/acmi/tacview"]
-    assert assembler.feed("sion=2.2\n101,T=1|2|3\n") == [
-        "FileVersion=2.2",
-        "101,T=1|2|3",
-    ]
-    assert assembler.flush() is None
-
-
-def test_line_assembler_handles_crlf() -> None:
-    assembler = LineAssembler()
-    assert assembler.feed("line1\r\nline2\r\n") == ["line1", "line2"]
-
-
-def test_line_assembler_flush_returns_partial_tail() -> None:
-    assembler = LineAssembler()
-    assert assembler.feed("complete\npartial-without-newline") == ["complete"]
-    assert assembler.flush() == "partial-without-newline"
-    assert assembler.flush() is None
-
-
-def test_line_assembler_empty_lines_preserved() -> None:
-    assembler = LineAssembler()
-    assert assembler.feed("\n\nx\n") == ["", "", "x"]
-
 
 # ---------------------------------------------------------------------------
 # TCP client integration tests against a local asyncio server
@@ -163,70 +128,6 @@ async def test_stream_client_reconnects_after_disconnect() -> None:
             pass
         server.close()
         await server.wait_closed()
-
-
-# ---------------------------------------------------------------------------
-# StreamDecoder: compression auto-detection (Issue #2)
-# ---------------------------------------------------------------------------
-
-
-def _feed_in_chunks(decoder: StreamDecoder, payload: bytes, size: int) -> str:
-    return "".join(decoder.feed(payload[i : i + size]) for i in range(0, len(payload), size))
-
-
-@pytest.mark.parametrize(
-    "compress",
-    [
-        pytest.param(lambda b: b, id="plain"),
-        pytest.param(lambda b: gzip.compress(b), id="gzip"),
-        pytest.param(lambda b: zlib.compress(b), id="zlib"),
-        pytest.param(
-            lambda b: (lambda c: c.compress(b) + c.flush())(
-                zlib.compressobj(9, zlib.DEFLATED, -15)
-            ),
-            id="deflate",
-        ),
-    ],
-)
-def test_stream_decoder_detects_and_decodes(compress) -> None:
-    payload = compress(ACMI_TEXT.encode())
-    decoder = StreamDecoder()
-    text = _feed_in_chunks(decoder, payload, 7)  # awkward chunk boundaries
-    assert text == ACMI_TEXT
-
-
-def test_stream_decoder_plain_text_commits_early() -> None:
-    decoder = StreamDecoder()
-    assert decoder.feed(b"FileType=text/ac") == "FileType=text/ac"
-    assert decoder.feed(b"mi/tacview\n") == "mi/tacview\n"
-    assert decoder.flush() == ""
-
-
-def test_stream_decoder_binary_junk_falls_back_to_plain() -> None:
-    # Neither text nor any known compression format: decoded lossily as
-    # plain text (pre-compression behavior) instead of dropping the link.
-    decoder = StreamDecoder()
-    junk = b"\x07" * 600  # reserved deflate block type, not valid deflate
-    assert decoder.feed(junk) == junk.decode("utf-8", errors="replace")
-
-
-def test_stream_decoder_corrupt_gzip_raises() -> None:
-    decoder = StreamDecoder()
-    with pytest.raises(StreamDecodeError):
-        decoder.feed(b"\x1f\x8b" + b"\xff" * 32)
-
-
-def test_stream_decoder_deflate_corrupted_midstream_raises() -> None:
-    payload = (lambda c: c.compress(ACMI_TEXT.encode()) + c.flush())(
-        zlib.compressobj(9, zlib.DEFLATED, -15)
-    )
-    decoder = StreamDecoder()
-    assert decoder.feed(payload[:12]) == "FileType=te"
-    # Bit-flipped continuation of a committed deflate stream must fail
-    # loudly (reconnect) instead of emitting garbage.
-    corrupted = bytes(b ^ 0xA5 for b in payload[12:])
-    with pytest.raises(StreamDecodeError):
-        decoder.feed(corrupted)
 
 
 async def test_stream_client_receives_compressed_lines() -> None:

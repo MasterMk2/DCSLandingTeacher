@@ -9,28 +9,25 @@ from pathlib import Path
 import pytest
 
 from app.detection.detector import analyze_track
+from app.detection.geometry import offset_position
 from app.grading.carriers import (
     CarrierGeometryBook,
     FlolsGeometry,
-    fallback_geometry_payload,
     load_carrier_geometry_book,
 )
 from app.grading.config import load_grading_config
 from app.grading.deviations import ApproachAnalysis, build_approach_analysis
 from app.grading.lso_grader import grade_carrier_approach
-from app.pipeline import LandingPipeline
-from app.detection.geometry import offset_position
 from tests.conftest import GRADING_YAML
 from tests.helpers import (
     DECK_ALTITUDE_M,
     LAT0,
     LON0,
     TrackSample,
-    make_approach_samples,
     make_carrier_state,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[5]
 CARRIERS_YAML = REPO_ROOT / "config" / "carriers.yaml"
 
 CONFIG = load_grading_config(GRADING_YAML)
@@ -154,23 +151,6 @@ def test_yaml_values_are_documented_as_estimates() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Detection -> carrier facts on the event
-# ---------------------------------------------------------------------------
-
-
-def test_landing_event_carries_carrier_facts() -> None:
-    carrier = make_carrier_state(type_str="Sea+Watercraft+AircraftCarrier+Stennis")
-    events = analyze_track(make_approach_samples(), DECK_ALTITUDE_M, {"C1": carrier})
-    assert len(events) == 1
-    event = events[0]
-    assert event.carrier_type == "Sea+Watercraft+AircraftCarrier+Stennis"
-    assert event.carrier_latitude == pytest.approx(LAT0)
-    assert event.carrier_longitude == pytest.approx(LON0)
-    assert event.carrier_altitude_m == pytest.approx(DECK_ALTITUDE_M)
-    assert event.carrier_heading_deg == pytest.approx(0.0)
-
-
-# ---------------------------------------------------------------------------
 # Deviation math with geometry
 # ---------------------------------------------------------------------------
 
@@ -289,25 +269,37 @@ def test_analysis_roundtrip_preserves_geometry() -> None:
     assert result.metrics["flols_geometry"]["key"] == "stennis"
 
 
-# ---------------------------------------------------------------------------
-# Grader metrics record which geometry was used
-# ---------------------------------------------------------------------------
+def test_the_geometry_book_resolves_the_hull_names_dcs_actually_emits() -> None:
+    """A deck height the book cannot look up is a fix that does nothing.
 
+    The deck-referencing above is only reachable when
+    ``CarrierGeometryBook.resolve`` returns geometry for the ship on the
+    wire. It did not: measured in production 2026-09-06, the shipped
+    ``carriers.yaml`` matched none of the six hulls in the running mission,
+    including CVN_73 -- which is 100% of this server's carrier activity --
+    because the patterns said "cvn-74" (hyphen) while DCS writes "CVN_73"
+    (underscore), and the type patterns ("AircraftCarrier+Stennis" and the
+    like) are not substrings of the "Sea+Watercraft+AircraftCarrier" that
+    DCS actually emits. Every test passed over an inert change.
 
-def _carrier_context(name: str, type_str: str | None = None):
-    from app.ingest import LandingContext
+    So this test asserts against the identities observed in the ACMI stream,
+    not against the patterns the file happens to contain.
+    """
+    from pathlib import Path
 
-    carrier = make_carrier_state(name=name, type_str=type_str)
-    events = analyze_track(make_approach_samples(), DECK_ALTITUDE_M, {"C1": carrier})
-    assert len(events) == 1
-    return LandingContext(
-        flight_id=None,
-        acmi_object_id="101",
-        pilot=None,
-        airframe=None,
-        event=events[0],
+    from app.grading.carriers import load_carrier_geometry_book
+
+    book = load_carrier_geometry_book(
+        Path(__file__).resolve().parents[5] / "config" / "carriers.yaml"
     )
+    dcs_type = "Sea+Watercraft+AircraftCarrier"
+    for name in ("CVN_73", "CV_1143_5"):
+        geometry = book.resolve(name, dcs_type)
+        assert geometry is not None, f"{name} does not resolve; deck referencing is inert"
+        assert geometry.deck_altitude_m > 0
 
+    assert book.resolve("LHA_Tarawa", dcs_type) is None
+    assert book.resolve("USS_Arleigh_Burke_IIa", "Sea+Watercraft+Warship") is None
 
 def test_pipeline_metrics_record_resolved_geometry() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)

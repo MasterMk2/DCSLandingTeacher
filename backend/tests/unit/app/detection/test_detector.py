@@ -1,18 +1,38 @@
-"""Tests for the landing detection engine (FR-2)."""
+"""Tests for the landing detection engine."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
-from app.detection.classify import ObjectClass, classify_object_type
-from app.detection.detector import CarrierState, DetectionConfig, analyze_track
+import pytest
+
+from app.detection.detector import CarrierState, DetectionConfig, TrackSample, analyze_track
 from tests.helpers import (
     DECK_ALTITUDE_M,
     LAT0,
     LON0,
+    NIMITZ_DECK_ALTITUDE_M,
     make_approach_samples,
     make_carrier_state,
+    make_deck_approach_samples,
+    make_deck_carrier_states,
+    resolve_nimitz_deck_altitude,
 )
+
+M_PER_DEG_LAT = 111_320.0
+
+
+def test_landing_event_carries_carrier_facts() -> None:
+    carrier = make_carrier_state(type_str="Sea+Watercraft+AircraftCarrier+Stennis")
+    events = analyze_track(make_approach_samples(), DECK_ALTITUDE_M, {"C1": carrier})
+    assert len(events) == 1
+    event = events[0]
+    assert event.carrier_type == "Sea+Watercraft+AircraftCarrier+Stennis"
+    assert event.carrier_latitude == pytest.approx(LAT0)
+    assert event.carrier_longitude == pytest.approx(LON0)
+    assert event.carrier_altitude_m == pytest.approx(DECK_ALTITUDE_M)
+    assert event.carrier_heading_deg == pytest.approx(0.0)
 
 
 def _make_overhead_approach_samples(
@@ -21,7 +41,7 @@ def _make_overhead_approach_samples(
     duration_before_s: float = 60.0,
     ground_time_s: float = 25.0,
     deck_altitude_m: float = DECK_ALTITUDE_M,
-) -> list:
+) -> list[TrackSample]:
     """Build an overhead-break approach: initial -> break -> base -> final.
 
     Timeline (t=0 is touchdown):
@@ -118,15 +138,6 @@ def _make_overhead_approach_samples(
             )
         )
     return samples
-
-
-def test_classify_object_types() -> None:
-    assert classify_object_type("Air+FixedWing") is ObjectClass.AIRCRAFT
-    assert classify_object_type("Carrier+FixedWing") is ObjectClass.CARRIER
-    assert classify_object_type("Sea+Watercraft+AircraftCarrier") is ObjectClass.CARRIER
-    assert classify_object_type("Ground+Static+Aircraft") is ObjectClass.STATIC
-    assert classify_object_type("Sea+Watercraft+Destroyer") is ObjectClass.OTHER
-    assert classify_object_type(None) is ObjectClass.OTHER
 
 
 def test_detect_full_stop_carrier_arrestment() -> None:
@@ -443,3 +454,299 @@ def test_carrier_append_ignores_a_repeated_timestamp() -> None:
     carrier.append((1.0, 36.0, 140.0, 20.0, 0.0, 0.0))
     carrier.append((1.0, 37.0, 141.0, 20.0, 0.0, 0.0))
     assert carrier.samples == [(1.0, 36.0, 140.0, 20.0, 0.0, 0.0)]
+
+
+def test_a_trap_is_invisible_without_a_deck_reference() -> None:
+    """The bug, pinned so it cannot come back.
+
+    With no deck resolver the aircraft is judged against the sea, sits a
+    deck height "up" for the whole recording, and no landing is reported.
+    """
+    events = analyze_track(
+        make_deck_approach_samples(final_altitude_m=NIMITZ_DECK_ALTITUDE_M),
+        None,
+        make_deck_carrier_states(),
+        config=DetectionConfig(),
+    )
+    assert events == []
+
+
+def test_a_trap_on_the_deck_is_detected() -> None:
+    events = analyze_track(
+        make_deck_approach_samples(final_altitude_m=NIMITZ_DECK_ALTITUDE_M),
+        None,
+        make_deck_carrier_states(),
+        config=DetectionConfig(),
+        deck_altitude_for=resolve_nimitz_deck_altitude,
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "carrier"
+    assert event.outcome == "full_stop"
+    assert event.touchdown.time == pytest.approx(0.0, abs=1.5)
+    # The reference recorded with the touchdown is the deck, so everything
+    # downstream that asks "how high above the landing surface" gets the
+    # answer this whole module exists to produce.
+    assert event.touchdown.surface_is_deck is True
+    assert event.touchdown.ground_altitude_m == pytest.approx(NIMITZ_DECK_ALTITUDE_M)
+
+
+def test_hitting_the_water_beside_the_ship_is_not_a_trap() -> None:
+    """The only thing the old detector ever caught must now be rejected.
+
+    An object that descends to sea level, a deck height below the deck,
+    is not landing
+    on it; a one-sided "at or below deck height" test would still call this
+    an arrestment, so the band has a floor.
+    """
+    events = analyze_track(
+        make_deck_approach_samples(final_altitude_m=0.0),
+        None,
+        make_deck_carrier_states(),
+        config=DetectionConfig(),
+        deck_altitude_for=resolve_nimitz_deck_altitude,
+    )
+    assert events == []
+
+
+def test_an_unknown_hull_detects_nothing_rather_than_guessing() -> None:
+    """A ship absent from the geometry book has no known deck height.
+
+    Inventing one would fabricate arrestments; reporting nothing is the
+    honest failure, and it is what the resolver returning None must cause.
+    """
+    events = analyze_track(
+        make_deck_approach_samples(final_altitude_m=NIMITZ_DECK_ALTITUDE_M),
+        None,
+        make_deck_carrier_states(),
+        config=DetectionConfig(),
+        deck_altitude_for=lambda _c: None,
+    )
+    assert events == []
+
+
+def test_land_detection_is_untouched_by_the_deck_path() -> None:
+    """No carriers in the session: the terrain path must behave exactly as
+    before, including trusting Tacview's own AGL."""
+    samples = make_deck_approach_samples(final_altitude_m=0.0)
+    events = analyze_track(samples, 0.0, {}, config=DetectionConfig())
+    assert len(events) == 1
+    assert events[0].kind == "land"
+    assert events[0].touchdown.surface_is_deck is False
+
+
+def test_the_proximity_prefilter_does_not_change_the_answer() -> None:
+    """The bounding-box skip is an optimisation, not a different test.
+
+    ``_reference_surfaces`` used to run a haversine per ship per sample over
+    the whole rolling buffer on every detection pass, including for land
+    recordings that merely share a mission with a carrier group. The latitude
+    window added in front of it must reject only samples the haversine would
+    have rejected anyway -- so a ship right under the aircraft still deck-
+    references exactly the same samples.
+    """
+    from app.detection.detector import _reference_surfaces
+
+    config = DetectionConfig()
+    samples = make_deck_approach_samples(final_altitude_m=NIMITZ_DECK_ALTITUDE_M)
+
+    near = _reference_surfaces(
+        samples, make_deck_carrier_states(), config, resolve_nimitz_deck_altitude, None
+    )
+    assert any(is_deck for _, is_deck in near), "the ship is underneath; it must count"
+
+    # Same ship, two degrees away: every sample falls back to terrain.
+    distant = make_deck_carrier_states()
+    state = distant["C1"]
+    state.samples = [
+        (t, lat + 2.0, lon + 2.0, alt, hdg, spd) for (t, lat, lon, alt, hdg, spd) in state.samples
+    ]
+    far = _reference_surfaces(samples, distant, config, resolve_nimitz_deck_altitude, None)
+    assert not any(is_deck for _, is_deck in far)
+
+    # And the invariant that actually matters: the box must never reject a
+    # ship the haversine would accept. The previous version of this check
+    # placed the ship at 0.9x the radius, which is 10% inside a margin worth
+    # 0.19% -- it would have stayed green through a change that narrowed the
+    # window almost to the radius. Sweep bearings instead, right up against
+    # the edge, and compare against the haversine itself.
+    import math
+
+    from app.detection.geometry import EARTH_RADIUS_M, haversine_m
+
+    def place(lat, lon, distance_m, bearing_deg):
+        """Point `distance_m` from (lat, lon) on the sphere haversine_m uses."""
+        ang = distance_m / EARTH_RADIUS_M
+        br = math.radians(bearing_deg)
+        p1 = math.radians(lat)
+        l1 = math.radians(lon)
+        p2 = math.asin(math.sin(p1) * math.cos(ang) + math.cos(p1) * math.sin(ang) * math.cos(br))
+        l2 = l1 + math.atan2(
+            math.sin(br) * math.sin(ang) * math.cos(p1),
+            math.cos(ang) - math.sin(p1) * math.sin(p2),
+        )
+        return math.degrees(p2), (math.degrees(l2) + 540.0) % 360.0 - 180.0
+
+    radius = config.carrier_proximity_m
+    for lat in (0.0, 35.0, 42.0, 60.0, 80.0, 89.0):
+        for bearing in range(0, 360, 7):
+            for fraction in (0.5, 0.95, 0.999):
+                ship_lat, ship_lon = place(lat, 0.0, radius * fraction, bearing)
+                assert haversine_m(lat, 0.0, ship_lat, ship_lon) <= radius
+                one = [
+                    TrackSample(
+                        time=0.0,
+                        latitude=lat,
+                        longitude=0.0,
+                        altitude=50.0,
+                        agl=50.0,
+                        on_ground=None,
+                    )
+                ]
+                state = CarrierState(
+                    obj_id="C1",
+                    name="CVN_73",
+                    type="Sea+Watercraft+AircraftCarrier",
+                    samples=[(t, ship_lat, ship_lon, 0.0, 0.0, 0.0) for t in (-9.0, 9.0)],
+                )
+                surface, is_deck = _reference_surfaces(
+                    one, {"C1": state}, config, resolve_nimitz_deck_altitude, None
+                )[0]
+                assert is_deck, (
+                    f"prefilter rejected a ship {radius * fraction:.0f} m away "
+                    f"on bearing {bearing} at latitude {lat}"
+                )
+
+    # Longitude wraps: a ship just across the antimeridian is metres away, not
+    # 360 degrees away.
+    near_dateline = [
+        TrackSample(
+            time=0.0,
+            latitude=0.0,
+            longitude=-179.9995,
+            altitude=50.0,
+            agl=50.0,
+            on_ground=None,
+        )
+    ]
+    across = CarrierState(
+        obj_id="C1",
+        name="CVN_73",
+        type="Sea+Watercraft+AircraftCarrier",
+        samples=[(t, 0.0, 179.9995, 0.0, 0.0, 0.0) for t in (-9.0, 9.0)],
+    )
+    assert haversine_m(0.0, -179.9995, 0.0, 179.9995) < config.carrier_proximity_m
+    assert _reference_surfaces(
+        near_dateline, {"C1": across}, config, resolve_nimitz_deck_altitude, None
+    )[0][1], "the box must wrap longitude the way haversine_m does"
+
+
+# Per-aircraft detector-state regressions.
+
+
+def test_two_aircraft_same_carrier_produce_isolated_events() -> None:
+    samples_a = make_approach_samples(outcome="full_stop")
+    # Aircraft B traps 400 m east of A: still the same carrier (< 800 m).
+    samples_b = make_approach_samples(outcome="full_stop", offset_east_m=400.0)
+    carriers = {"C1": make_carrier_state()}
+
+    events_a = analyze_track(samples_a, DECK_ALTITUDE_M, carriers)
+    events_b = analyze_track(samples_b, DECK_ALTITUDE_M, carriers)
+
+    assert len(events_a) == 1
+    assert len(events_b) == 1
+    a, b = events_a[0], events_b[0]
+    assert a.kind == "carrier" and b.kind == "carrier"
+    assert a.carrier_obj_id == "C1" and b.carrier_obj_id == "C1"
+
+    # Touchdowns are distinct and each approach contains only its own track.
+    assert b.touchdown.longitude > a.touchdown.longitude
+    for event, own in ((a, samples_a), (b, samples_b)):
+        own_times = {s.time for s in own}
+        assert all(s.time in own_times for s in event.approach)
+
+
+def test_simultaneous_bolter_and_trap_do_not_cross_contaminate() -> None:
+    samples_a = make_approach_samples(outcome="touch_and_go")  # bolter
+    samples_b = make_approach_samples(outcome="full_stop", offset_east_m=400.0)
+    carriers = {"C1": make_carrier_state()}
+
+    events_a = analyze_track(samples_a, DECK_ALTITUDE_M, carriers)
+    events_b = analyze_track(samples_b, DECK_ALTITUDE_M, carriers)
+
+    assert len(events_a) == 1 and len(events_b) == 1
+    assert events_a[0].outcome == "bolter"
+    assert events_b[0].outcome == "full_stop"
+
+
+def test_consecutive_approaches_recorded_as_two_events() -> None:
+    # First pass: bolter (touch-and-go on the carrier), cut right after the
+    # climb-out starts.
+    first = [
+        s for s in make_approach_samples(outcome="touch_and_go", ground_time_s=3) if s.time <= 8
+    ]
+    # Second pass: a fresh full-stop approach shifted +64 s so its inbound
+    # segment starts right after the first climb-out.
+    shift = 64.0
+    second = [replace(s, time=s.time + shift) for s in make_approach_samples()]
+    samples = sorted(first + second, key=lambda s: s.time)
+    carriers = {"C1": make_carrier_state()}
+
+    events = analyze_track(samples, DECK_ALTITUDE_M, carriers)
+
+    assert len(events) == 2
+    bolter, trap = events
+    assert bolter.outcome == "bolter"
+    assert bolter.touchdown.time == pytest.approx(0.0)
+    assert trap.outcome == "full_stop"
+    assert trap.touchdown.time == pytest.approx(shift)
+    # The second approach segment must not contain first-pass samples.
+    assert all(s.time >= shift - 60.0 for s in trap.approach)
+
+
+def test_both_aircraft_bind_to_same_moving_carrier() -> None:
+    speed_ms = 5.0
+    # The ship steams north at 5 m/s; position sampled every 30 s.
+    carrier = CarrierState(
+        obj_id="C1",
+        name="CV-59",
+        samples=[
+            (
+                float(t),
+                LAT0 + (t * speed_ms) / M_PER_DEG_LAT,
+                LON0,
+                DECK_ALTITUDE_M,
+                0.0,
+                speed_ms,
+            )
+            for t in range(0, 121, 30)
+        ],
+    )
+    carriers = {"C1": carrier}
+
+    # Aircraft A traps at t=0 abeam of the ship's initial position,
+    # aircraft B traps at t=60 when the ship has moved ~300 m north.
+    samples_a = make_approach_samples(outcome="full_stop", ground_time_s=10)
+    samples_a = [s for s in samples_a if s.time <= 10]
+    samples_b = make_approach_samples(
+        outcome="full_stop",
+        ground_time_s=10,
+        offset_north_m=60 * speed_ms,
+    )
+    samples_b = [replace(s, time=s.time + 60.0) for s in samples_b]
+    samples_b = [s for s in samples_b if s.time <= 70]
+
+    events_a = analyze_track(samples_a, DECK_ALTITUDE_M, carriers)
+    events_b = analyze_track(samples_b, DECK_ALTITUDE_M, carriers)
+
+    assert len(events_a) == 1 and len(events_b) == 1
+    a, b = events_a[0], events_b[0]
+    assert a.carrier_obj_id == "C1" and b.carrier_obj_id == "C1"
+    # Each touchdown sits next to the ship's interpolated position at that
+    # moment (~300 m apart), proving per-time anchoring on the moving deck.
+    north_offset = (b.touchdown.latitude - a.touchdown.latitude) * M_PER_DEG_LAT
+    assert north_offset == pytest.approx(300.0, abs=50.0)
+    # Ship-relative rows exist for both and start far out on the approach.
+    assert a.ship_relative and b.ship_relative
+    assert a.ship_relative[0]["distance_to_go"] > 3000.0
+    assert b.ship_relative[0]["distance_to_go"] > 3000.0
