@@ -2,8 +2,7 @@
 
 ## 1. 目的・背景
 
-DCS World Dedicated Server 上で行われた **着陸（陸上空港）／着艦（空母）** を、
-プレイヤーが後から簡便に振り返り、自己改善につなげられるようにする。
+DCS World Dedicated Server 上で行われた **着陸（陸上空港）/着艦（空母）** を、プレイヤーが後から簡便に振り返り、自己改善につなげられるようにする。
 
 - Tacview（導入済み）の ACMI データストリームを情報源とする
 - 着陸・着艦の進入コースを視覚的に確認できる
@@ -13,7 +12,7 @@ DCS World Dedicated Server 上で行われた **着陸（陸上空港）／着�
 ## 2. 確定事項（ユーザー決定）
 
 | 項目 | 決定内容 |
-|---|---|
+| --- | --- |
 | データ取得 | **リアルタイム ACMI ストリーム受信（TCP 31010 番等）を主方式**。着陸直後に即座に評価結果を Web 表示 |
 | 評価方式 | **米海軍式の本格 LSO グレード**（OK / OK- / (OK) / _NO_GRADE_ / CUT 等）＋ファクター（ARCON, AOC, AOS 等）を空母着艦に適用。**陸上着陸は別の簡易評価** |
 | 技術スタック | **Python (FastAPI) バックエンド + TypeScript/React フロントエンド** |
@@ -25,7 +24,7 @@ DCS World Dedicated Server 上で行われた **着陸（陸上空港）／着�
 ### 3.1 対象（In Scope）
 
 1. Tacview ACMI リアルタイムストリーム（TCP）の受信・解析
-2. 着陸／着艦イベントの自動検出（空母・空港の識別を含む）
+2. 着陸/着艦イベントの自動検出（空母・空港の識別を含む）
 3. 空母着艦への LSO グレーディング自動評価
 4. 陸上着陸への簡易評価（グライドスロープ偏差・センターライン偏差・接地速度・降下率等）
 5. Web UI での閲覧
@@ -51,9 +50,9 @@ DCS World Dedicated Server 上で行われた **着陸（陸上空港）／着�
 - Tacview Realtime Telemetry（ACMI 2.2 Text、TCP ポート既定 31010）に接続し、常時受信する
 - 接続断・再接続に自動対応する
 - 受信データは時間管理（Time ヘッダ）・オブジェクト更新（`-`/`+` 行）を正しく解釈する
-- 参考: ACMI 形式は Tacview 公式ドキュメント（https://www.tacview.net/documentation/acmi/en/）に基づく実装とする
+- 参考: ACMI 形式は Tacview [公式ドキュメント](https://www.tacview.net/documentation/acmi/en/)に基づく実装とする
 
-### FR-2: 着陸／着艦イベント検出
+### FR-2: 着陸/着艦イベント検出
 
 - オブジェクトの `Type` プロパティから航空機・空母・空港（Static object）を識別
 - 空母判定: `Type=Carrier+...`（Kuznetsov, Stennis, Forrestal 等の艦種コード）
@@ -105,13 +104,47 @@ DCS World Dedicated Server 上で行われた **着陸（陸上空港）／着�
 ## 5. 非機能要件
 
 | ID | 要件 |
-|---|---|
+| --- | --- |
 | NFR-1 | Windows / Linux / Docker（docker-compose）で動作 |
 | NFR-2 | バックエンド: Python 3.11+ / FastAPI、フロントエンド: TypeScript + React（Vite） |
 | NFR-3 | ACMI 受信は常時稼働を前提とし、メモリリークなく長時間動作する |
 | NFR-4 | 着陸検出から Web 反映まで数秒程度を目標 |
 | NFR-5 | GitHub で公開可能: 秘密情報・ローカルパスを含まない、CI（GitHub Actions）でテスト・Lint |
 | NFR-6 | 設定は環境変数 + 設定ファイルで外部化（ポート、DB パス、評価閾値） |
+
+## 採点設定と再採点
+
+採点しきい値は `config/grading.yaml` に定義し、実行時に読み込む。設定ファイルの変更は mtime のポーリングによって検知し、変更後の設定をホットリロードする。
+
+保存済みの着艦結果は、`POST /api/v1/landings/{id}/regrade` により現在の採点設定で再採点できる。再採点を可能にするため、判定に使用した生のアプローチサンプルをデータベースに保持する。
+
+採点ロジックやしきい値を変更する場合は、設定値、再採点結果、および既存データとの整合性を確認すること。
+
+## 空母および FLOLS ジオメトリ
+
+空母および FLOLS に関するジオメトリ設定は `config/carriers.yaml` に定義する。
+
+現在の FLOLS ジオメトリおよび BURBLE 判定用しきい値には、実測または一次資料による十分な検証が完了していない値が含まれる。そのため、これらの値を権威ある実測値として扱わない。
+
+値を変更する場合は、根拠となる資料、測定結果、または仕様変更理由を明示すること。推測のみを根拠として既存値を変更しない。
+
+## DCSServerBot 経由の滑走路情報取得
+
+滑走路情報の取得には DCSServerBot の `/airbase` を使用する。
+
+`/airbase` の処理では DCS のシミュレーションスレッド上で Lua が実行されるため、短時間に連続してリクエストを送信しない。リクエスト間隔は `DLT_DCSSB_REQUEST_SPACING_MS` により制御する。
+
+この間隔を短縮する場合は、DCS シミュレーションへの影響がないことを確認できる根拠または測定結果を必要とする。
+
+滑走路スイープの結果は theatre 単位で `cache/` にキャッシュする。
+
+## ローカルデータとバージョン管理
+
+ACMI 録画、ローカルデータベース、およびインポート用データは実行環境固有のデータとして扱い、バージョン管理の対象としない。
+
+これらのデータは `.gitignore` により除外する。
+
+テストで使用する ACMI データについては、再現可能なテストに必要な最小限の fixture のみをリポジトリに含める。現在追跡対象としている ACMI fixture は `backend/tests/fixtures/sample.acmi` である。
 
 ## 6. システム構成（概要）
 
@@ -130,30 +163,30 @@ flowchart LR
 
 ### コンポーネント構成（想定リポジトリ構造）
 
-```
+```text
 DCSLandingTeacher/
-├── backend/            # Python (FastAPI)
-│   ├── app/
-│   │   ├── acmi/       # ACMI パーサ・ストリームクライアント
-│   │   ├── detection/  # 着陸・着艦イベント検出
-│   │   ├── grading/    # LSO グレーダ・陸上グレーダ
-│   │   ├── api/        # REST / WebSocket エンドポイント
-│   │   └── models/     # DB モデル
-│   └── tests/
-├── frontend/           # TypeScript + React (Vite)
-│   └── src/
-│       ├── views/      # Dashboard / Detail / GcaScope
-│       └── components/
-├── config/             # 評価閾値等の設定ファイル
-├── docker/             # Dockerfile / docker-compose.yml
-├── docs/               # ドキュメント
-└── .github/workflows/  # CI
+├─ backend/            # Python (FastAPI)
+│  ├─ app/
+│  │  ├─ acmi/       # ACMI パーサ・ストリームクライアント
+│  │  ├─ detection/  # 着陸・着艦イベント検出
+│  │  ├─ grading/    # LSO グレーダ・陸上グレーダ
+│  │  ├─ api/        # REST / WebSocket エンドポイント
+│  │  └─ models/     # DB モデル
+│  └─ tests/
+├─ frontend/           # TypeScript + React (Vite)
+│  └─ src/
+│      ├─ views/      # Dashboard / Detail / GcaScope
+│      └─ components/
+├─ config/             # 評価閾値等の設定ファイル
+├─ docker/             # Dockerfile / docker-compose.yml
+├─ docs/               # ドキュメント
+└─ .github/workflows/  # CI
 ```
 
 ## 7. ライセンス方針
 
 | 対象 | 方針 |
-|---|---|
+| --- | --- |
 | 本プロジェクトのコード | **MIT License**（シンプルで再利用しやすい。代替案: Apache-2.0） |
 | Tacview ACMI 形式 | Tacview 公式ドキュメントに基づく独自実装。Tacview 本体・SDK を同梱しない |
 | DCS 関連アセット | 一切同梱しない（機体名・艦名等の文字列参照は最小限に） |
@@ -173,7 +206,7 @@ DCSLandingTeacher/
 ## 9. マイルストーン（フェーズ分割）
 
 | フェーズ | 内容 |
-|---|---|
+| --- | --- |
 | **Phase 1: 基盤** | ACMI ストリーム受信・パーサ、着陸イベント検出、PostgreSQL 保存、REST API 骨格 |
 | **Phase 2: 可視化** | ダッシュボード一覧、トップダウン軌跡、時系列チャート、リアルタイム通知 |
 | **Phase 3: 評価** | 陸上簡易評価、GCA スコープビュー、データシート出力 |
@@ -183,7 +216,7 @@ DCSLandingTeacher/
 ## 10. 未決事項・リスク（Issue 起票候補）
 
 | ID | 事項 | 種別 |
-|---|---|---|
+| --- | --- | --- |
 | O-1 | ACMI の空母 `Type` コード・空港 Static オブジェクトの実データでの検証 | 検証 |
 | O-2 | FLOLS グライドスロープの厳密な幾何（艦ごとのランプ位置・甲板高度） | 調査 |
 | O-3 | BURBLE 等の環境ファクターの検出精度（風データの ACMI での取得可否） | 調査 |

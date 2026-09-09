@@ -49,6 +49,9 @@ $RECYCLE.BIN/
 # hundreds of MB and bloat the repo permanently once committed. The small
 # parser/import fixture below is the exception the test suite needs.
 *.acmi
+*.acmi.txt
 *.acmi.zip
 !backend/tests/fixtures/*.acmi
 Testdata/
+*.db
+data/
