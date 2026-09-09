@@ -1,42 +1,27 @@
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Environment
-.env
-.env.*
-
-# Logs
-logs
-*.log
+# Node.js
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
+.pnpm-store/
+.npm
+.yarn-integrity
 
-# Storybook
-*storybook.log
-storybook-static
-
-# VitePress
-docs/.vitepress/cache/
-docs/.vitepress/dist/
-
-# Tests
+# Coverage
 coverage/
-.vitest-attachments/
-test-results/
-tests/**/__screenshots__/
+*.lcov
+.nyc_output
+
+# Build output
+dist/
+build/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# React (Create React App)
+.eslintcache
+.parcel-cache/
