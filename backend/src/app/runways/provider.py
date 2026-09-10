@@ -91,8 +91,8 @@ class RunwayProvider:
             # An exact capture outranks a live sweep; see _cached_theatres.
             path = seed
         elif not path.is_file():
-            # Not swept on this server: fall back to the copy shipped with the
-            # build. Without this, a theatre that has a seed but no local sweep
+            # Not swept on this server: fall back to configured seed geometry.
+            # Without this, a theatre that has a seed but no local sweep
             # would start a pointless sweep on every restart -- and fail, if
             # the map is not loaded anywhere.
             seed = self._seed_path(theatre)
@@ -253,7 +253,7 @@ class RunwayProvider:
             # Mirror the precedence in _cached_theatres, or the listing names a
             # source that is not the one in use -- a stale v2 sweep sitting on
             # disk would read "swept" while its shipped replacement answers.
-            if shipped and self._seed_is_exact(seed):
+            if seed is not None and shipped and self._seed_is_exact(seed):
                 origin = "shipped"
             elif cache.is_file() and self._is_current(cache):
                 origin = "swept"
@@ -427,13 +427,13 @@ class RunwayProvider:
         Precedence, highest first -- whatever is loaded first owns the theatre,
         and later directories skip it:
 
-        1. Shipped seeds marked ``exact``: placed from DCS's own lat/lon by the
+        1. Configured seeds marked ``exact``: placed from DCS's own lat/lon by the
            in-game hook, so nothing about the projection is approximated.
         2. Live sweeps on this server. They describe this server's DCS build,
            but DCSServerBot only returns grid x/z for a runway, so the
            conversion to lat/lon is an approximation -- one that measured up
            to 18 m out on Caucasus. It must not displace an exact capture.
-        3. Other shipped seeds, for maps this server has never swept -- a map
+        3. Other configured seeds, for maps this server has never swept -- a map
            that is not loaded anywhere right now cannot be swept at all.
         """
         pools = list(self._memory.values())

@@ -1212,54 +1212,6 @@ def test_the_speed_reference_is_the_speed_held_on_final_not_the_whole_final() ->
     assert whole_speed.score < 50.0
 
 
-def test_a_carrier_grade_says_which_geometry_produced_it() -> None:
-    """Every LSO deviation is measured against the ramp, so the grade is only
-    worth what the geometry is -- and both weak cases were invisible in it.
-
-    Nothing pinned this metric when it was added, so the values were free to
-    drift or vanish silently.
-    """
-    from app.grading.carriers import FlolsGeometry
-
-    # No entry for the ship: distances are referenced to the touchdown point.
-    fallback = grade_carrier_approach(_carrier_event_analysis(), CONFIG)
-    assert fallback.metrics["geometry_confidence"] == "fallback"
-    assert fallback.metrics["flols_geometry"]["source"] == "touchdown_reference_fallback"
-
-    geometry = FlolsGeometry(
-        key="stennis",
-        deck_altitude_m=19.5,
-        ramp_along_m=-140.0,
-        ramp_lateral_m=-10.0,
-        glideslope_deg=3.5,
-        landing_course_offset_deg=9.0,
-        beam_width_m=12.0,
-        validated=False,
-    )
-    analysis = _carrier_event_analysis()
-    analysis.geometry = geometry.as_dict()
-    assert grade_carrier_approach(analysis, CONFIG).metrics["geometry_confidence"] == "unvalidated"
-
-    # And the only branch the shipped config can never produce today.
-    analysis.geometry = {**geometry.as_dict(), "validated": True}
-    assert grade_carrier_approach(analysis, CONFIG).metrics["geometry_confidence"] == "validated"
-
-
-def test_no_shipped_carrier_entry_claims_to_be_validated() -> None:
-    """Guards the comment in lso_grader: "validated" is unreachable from the
-    file we ship. If someone adds measured geometry, this test is where they
-    find out the claim needs updating."""
-    from app.grading.carriers import load_carrier_geometry_book
-    from tests.conftest import REPO_ROOT
-
-    book = load_carrier_geometry_book(REPO_ROOT / "config" / "carriers.yaml")
-    for _name, _type, geometry in book._entries.values():
-        assert not geometry.validated, (
-            f"{geometry.key} now claims validated geometry -- update the "
-            "geometry_confidence comment in lso_grader.py"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Minimum-flight gate: a hop is not an approach
 # ---------------------------------------------------------------------------

@@ -318,14 +318,14 @@ curl -s -X POST 'localhost:8000/api/v1/runways/sweep?theatre=Nevada' | jq
 curl -s localhost:8000/api/v1/runways/Nevada > config/runways/runways-Nevada.json
 ```
 
-`config/runways/` に置いた JSON はイメージビルド時にパッケージ内部
-（`app/runways/defaults/`）へ複製され、`/app/config` への空バインドマウントに
-潰されません（tuning YAML と同じ理屈・同じ経路）。読み込み順は
-**書き込み可能キャッシュ → 同梱シード**で、そのサーバで掃引した結果が常に優先されます。
+`config/runways/` に置いた JSON は、Compose が `/app/config` へ読み取り専用で
+マウントします。読み込み順は **書き込み可能キャッシュ → 設定済み seed** で、
+そのサーバで掃引した結果が常に優先されます。Compose を使わない実行では、
+`DLT_RUNWAY_SEED_DIR` にこのディレクトリを指定します。
 
 #### ゲーム内フックで捕獲する（正確・推奨）
 
-同梱シードは DCSServerBot 経由ではなく、ゲーム内フックで取っています。
+seed geometry は DCSServerBot 経由ではなく、ゲーム内フックで取っています。
 
 1. [`scripts/dlt-capture-runways.lua`](scripts/dlt-capture-runways.lua) を
    `<Saved Games>/<DCS>/Scripts/Hooks/` に置いてミッションをロードする
@@ -340,7 +340,7 @@ curl -s localhost:8000/api/v1/runways/Nevada > config/runways/runways-Nevada.jso
 `coord.LOtoLL` で変換するので近似がありません。そのため `exact` なシードは
 そのサーバでのライブ掃引より**優先**されます。
 
-同梱済みのマップ: Caucasus / Nevada / MarianaIslands / PersianGulf / SinaiMap / Syria。
+設定済みの seed map: Caucasus / Nevada / MarianaIslands / PersianGulf / SinaiMap / Syria。
 
 DCS の `getRunways()` が返す滑走路名はそのまま信用していません。平行滑走路の L/R が無い
 （Nellis は `3` と `21` の2本）、別の滑走路に名前が付いている（Sinai の Ben-Gurion は
