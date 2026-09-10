@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # Tacview realtime telemetry stream (ACMI 2.2 Text over TCP)
     # Multi-source configuration (new): JSON array of TacviewSource objects.
-    # Example: DLT_TACVIEW_SOURCES='[{"id":"s1","name":"Main","host":"10.0.0.1","port":31010}]'
+    # Example: DLT_TACVIEW_SOURCES_JSON='[{"id":"s1","name":"Main","host":"10.0.0.1","port":31010}]'
     tacview_sources_json: str = Field(
         default="",
         description="JSON string of Tacview source configurations",
@@ -126,7 +126,6 @@ class Settings(BaseSettings):
     #: DCS server, so without these an import from a map nobody is flying
     #: cannot resolve at all. The deployment mounts this path from config/.
     runway_seed_dir: str = "config/runways"
-
     @property
     def tacview_sources(self) -> list[TacviewSource]:
         """Return parsed list of Tacview sources.

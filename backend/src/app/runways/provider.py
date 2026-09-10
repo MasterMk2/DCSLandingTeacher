@@ -36,6 +36,7 @@ CACHE_VERSION = 3
 #: decide which runway a landing is on -- :func:`best_runway_match` does, on
 #: much tighter tolerances.
 THEATRE_MATCH_RADIUS_M = 50_000.0
+DEFAULT_CACHE_DIR = Path("/data/cache")
 
 
 class RunwayProvider:
@@ -44,7 +45,7 @@ class RunwayProvider:
     def __init__(
         self,
         client: DcssbClient | None,
-        cache_dir: str | Path,
+        cache_dir: str | Path = DEFAULT_CACHE_DIR,
         *,
         server_name: str = "",
         seed_dir: str | Path | None = None,

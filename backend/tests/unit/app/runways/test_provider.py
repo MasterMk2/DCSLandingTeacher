@@ -1,8 +1,17 @@
 """Tests for cached runway geometry provisioning."""
 
 import json
+from pathlib import Path
 
-from app.runways.provider import CACHE_VERSION, RunwayProvider
+from app.runways.provider import CACHE_VERSION, DEFAULT_CACHE_DIR, RunwayProvider
+
+
+def test_default_cache_directory_is_the_docker_image_cache_directory() -> None:
+    """The default runway cache uses the Docker image's cache directory."""
+    provider = RunwayProvider(None)
+
+    assert provider._cache_path("Caucasus") == Path("/data/cache/runways-Caucasus.json")
+    assert DEFAULT_CACHE_DIR == Path("/data/cache")
 
 
 def test_a_stale_runway_cache_is_ignored(tmp_path) -> None:
