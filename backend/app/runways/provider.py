@@ -22,8 +22,13 @@ logger = getLogger(__name__)
 
 #: Bumped when the stored geometry changes meaning. v2 rotates the DCS grid
 #: frame onto geographic axes (meridian convergence); v1 caches are ~5 deg
-#: out and must be re-swept.
-CACHE_VERSION = 2
+#: out and must be re-swept. v3 changes the names: reciprocal ends come from
+#: the DCS designator rather than the heading, designators are zero-padded,
+#: parallel strips get L/C/R, and a name that fits neither end is dropped. A v2
+#: cache holds the old names -- Beslan's 10/28 stored as "27", Tbilisi's
+#: designator hung on the wrong end -- and would keep them forever, because a
+#: cache hit never re-checks.
+CACHE_VERSION = 3
 
 #: How close a touchdown has to be to one of a theatre's airbases for that
 #: theatre to be the one worth sweeping. Generous on purpose: it only has to
@@ -70,9 +75,21 @@ class RunwayProvider:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in theatre)
         return self._seed_dir / f"runways-{safe or 'unknown'}.json"
 
+    @staticmethod
+    def _seed_is_exact(path: Path) -> bool:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return bool(data.get("exact")) and int(data.get("version", 1)) == CACHE_VERSION
+
     def _load_cache(self, theatre: str) -> list[Runway] | None:
         path = self._cache_path(theatre)
-        if not path.is_file():
+        seed = self._seed_path(theatre)
+        if seed is not None and seed.is_file() and self._seed_is_exact(seed):
+            # An exact capture outranks a live sweep; see _cached_theatres.
+            path = seed
+        elif not path.is_file():
             # Not swept on this server: fall back to the copy shipped with the
             # build. Without this, a theatre that has a seed but no local sweep
             # would start a pointless sweep on every restart -- and fail, if
@@ -229,17 +246,37 @@ class RunwayProvider:
         self._cached_theatres()  # fills _memory from both directories
         out: list[dict[str, Any]] = []
         for theatre, runways in sorted(self._memory.items()):
-            swept = self._cache_path(theatre).is_file()
             seed = self._seed_path(theatre)
+            shipped = seed is not None and seed.is_file()
+            cache = self._cache_path(theatre)
+            # Mirror the precedence in _cached_theatres, or the listing names a
+            # source that is not the one in use -- a stale v2 sweep sitting on
+            # disk would read "swept" while its shipped replacement answers.
+            if shipped and self._seed_is_exact(seed):
+                origin = "shipped"
+            elif cache.is_file() and self._is_current(cache):
+                origin = "swept"
+            elif shipped:
+                origin = "shipped"
+            else:
+                origin = "memory"
             out.append(
                 {
                     "theatre": theatre,
                     "runways": len(runways),
                     "airbases": len({r.airbase for r in runways}),
-                    "origin": "swept" if swept else ("shipped" if seed and seed.is_file() else "memory"),
+                    "origin": origin,
                 }
             )
         return out
+
+    @staticmethod
+    def _is_current(path: Path) -> bool:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return int(data.get("version", 1)) == CACHE_VERSION
 
     def export(self, theatre: str) -> dict[str, Any] | None:
         """The cache payload for ``theatre``, in the on-disk format.
@@ -356,7 +393,9 @@ class RunwayProvider:
             return best
         return None if listed_any else fallback
 
-    def _read_pool_dir(self, directory: Path) -> list[list[Runway]]:
+    def _read_pool_dir(
+        self, directory: Path, *, exact_only: bool = False
+    ) -> list[list[Runway]]:
         """Load every cache file in ``directory`` that is not already in memory."""
         pools: list[list[Runway]] = []
         if not directory.is_dir():
@@ -371,6 +410,8 @@ class RunwayProvider:
                     "runway cache is stale (v%s): %s", data.get("version"), path
                 )
                 continue
+            if exact_only and not data.get("exact"):
+                continue
             theatre = data.get("theatre") or path.stem
             if theatre in self._memory:
                 continue
@@ -382,14 +423,21 @@ class RunwayProvider:
     def _cached_theatres(self) -> list[list[Runway]]:
         """Every theatre this provider can resolve against.
 
-        Live sweeps first, then the seeds shipped with the build. Order is what
-        makes the writable cache authoritative: a theatre swept on this server
-        is already in ``_memory`` by the time the seed directory is read, and
-        the seed for it is skipped. Anything only ever captured on someone
-        else's server still resolves, which is the whole point of shipping them
-        -- a map that is not loaded anywhere right now cannot be swept at all.
+        Precedence, highest first -- whatever is loaded first owns the theatre,
+        and later directories skip it:
+
+        1. Shipped seeds marked ``exact``: placed from DCS's own lat/lon by the
+           in-game hook, so nothing about the projection is approximated.
+        2. Live sweeps on this server. They describe this server's DCS build,
+           but DCSServerBot only returns grid x/z for a runway, so the
+           conversion to lat/lon is an approximation -- one that measured up
+           to 18 m out on Caucasus. It must not displace an exact capture.
+        3. Other shipped seeds, for maps this server has never swept -- a map
+           that is not loaded anywhere right now cannot be swept at all.
         """
         pools = list(self._memory.values())
+        if self._seed_dir is not None:
+            pools += self._read_pool_dir(self._seed_dir, exact_only=True)
         pools += self._read_pool_dir(self._cache_dir)
         if self._seed_dir is not None:
             pools += self._read_pool_dir(self._seed_dir)

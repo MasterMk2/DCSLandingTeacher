@@ -1,0 +1,187 @@
+{
+ "version": 3,
+ "theatre": "MarianaIslands",
+ "exact": true,
+ "runways": [
+  {
+   "airbase": "Olf Orote",
+   "name": "25",
+   "threshold_lat": 13.44008,
+   "threshold_lon": 144.6467,
+   "elevation_m": 28.51,
+   "heading_deg": 246.58,
+   "length_m": 1051.4,
+   "width_m": 45.0
+  },
+  {
+   "airbase": "Olf Orote",
+   "name": "07",
+   "threshold_lat": 13.4363212,
+   "threshold_lon": 144.6377794,
+   "elevation_m": 28.51,
+   "heading_deg": 66.58,
+   "length_m": 1051.4,
+   "width_m": 45.0
+  },
+  {
+   "airbase": "Saipan Intl",
+   "name": "07",
+   "threshold_lat": 15.1148711,
+   "threshold_lon": 145.7189035,
+   "elevation_m": 65.0,
+   "heading_deg": 67.64,
+   "length_m": 2373.8,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Saipan Intl",
+   "name": "25",
+   "threshold_lat": 15.122991,
+   "threshold_lon": 145.7393548,
+   "elevation_m": 65.0,
+   "heading_deg": 247.64,
+   "length_m": 2373.8,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Rota Intl",
+   "name": "09",
+   "threshold_lat": 14.1746344,
+   "threshold_lon": 145.2324769,
+   "elevation_m": 173.38,
+   "heading_deg": 91.79,
+   "length_m": 1858.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Rota Intl",
+   "name": "27",
+   "threshold_lat": 14.1741109,
+   "threshold_lon": 145.2497078,
+   "elevation_m": 173.38,
+   "heading_deg": 271.79,
+   "length_m": 1858.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tinian Intl",
+   "name": "08",
+   "threshold_lat": 14.9971636,
+   "threshold_lon": 145.6083585,
+   "elevation_m": 73.15,
+   "heading_deg": 79.01,
+   "length_m": 2368.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tinian Intl",
+   "name": "26",
+   "threshold_lat": 15.0012236,
+   "threshold_lon": 145.6300047,
+   "elevation_m": 73.15,
+   "heading_deg": 259.01,
+   "length_m": 2368.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Antonio B. Won Pat Intl",
+   "name": "06L",
+   "threshold_lat": 13.4793242,
+   "threshold_lon": 144.7848914,
+   "elevation_m": 77.79,
+   "heading_deg": 64.82,
+   "length_m": 2851.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Antonio B. Won Pat Intl",
+   "name": "24R",
+   "threshold_lat": 13.4902353,
+   "threshold_lon": 144.8087562,
+   "elevation_m": 77.79,
+   "heading_deg": 244.82,
+   "length_m": 2851.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Antonio B. Won Pat Intl",
+   "name": "06R",
+   "threshold_lat": 13.4768688,
+   "threshold_lon": 144.784206,
+   "elevation_m": 77.79,
+   "heading_deg": 64.79,
+   "length_m": 2851.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Antonio B. Won Pat Intl",
+   "name": "24L",
+   "threshold_lat": 13.4877906,
+   "threshold_lon": 144.8080654,
+   "elevation_m": 77.79,
+   "heading_deg": 244.79,
+   "length_m": 2851.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Andersen AFB",
+   "name": "06R",
+   "threshold_lat": 13.5758011,
+   "threshold_lon": 144.9175735,
+   "elevation_m": 166.31,
+   "heading_deg": 65.75,
+   "length_m": 3195.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Andersen AFB",
+   "name": "24L",
+   "threshold_lat": 13.5876056,
+   "threshold_lon": 144.9445311,
+   "elevation_m": 166.31,
+   "heading_deg": 245.75,
+   "length_m": 3195.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Andersen AFB",
+   "name": "06L",
+   "threshold_lat": 13.5805057,
+   "threshold_lon": 144.9159945,
+   "elevation_m": 166.31,
+   "heading_deg": 65.75,
+   "length_m": 3195.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Andersen AFB",
+   "name": "24R",
+   "threshold_lat": 13.5923103,
+   "threshold_lon": 144.9429526,
+   "elevation_m": 166.31,
+   "heading_deg": 245.75,
+   "length_m": 3195.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Pagan Airstrip",
+   "name": "11",
+   "threshold_lat": 18.1239531,
+   "threshold_lon": 145.7609623,
+   "elevation_m": 15.31,
+   "heading_deg": 111.04,
+   "length_m": 495.1,
+   "width_m": 50.0
+  },
+  {
+   "airbase": "Pagan Airstrip",
+   "name": "29",
+   "threshold_lat": 18.1223542,
+   "threshold_lon": 145.7653349,
+   "elevation_m": 15.31,
+   "heading_deg": 291.04,
+   "length_m": 495.1,
+   "width_m": 50.0
+  }
+ ]
+}

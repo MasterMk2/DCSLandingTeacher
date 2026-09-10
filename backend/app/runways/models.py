@@ -304,12 +304,240 @@ def _designator_end(dcs_name: Any, grid_heading_deg: float) -> int:
     return 0 if heading_difference_deg(number * 10.0, grid_heading_deg) <= 90.0 else 1
 
 
+#: How far a DCS designator may sit from its strip's grid heading and still be
+#: believed. Measured over 302 runway records on six maps: the largest offset
+#: of a name that is right is 22.5 deg (Nevada, where ~12 deg of declination
+#: and the meridian convergence add up); the smallest of one that is plainly
+#: wrong is 30.0 deg (Gelendzhik's 04/22 strip reported as "1"). Between the
+#: two, angle alone cannot tell them apart -- Beirut's 17/35 strip reported as
+#: "16" is only 18.9 deg off -- which is what resolve_designator_clashes is for.
+DESIGNATOR_SLACK_DEG = 30.0
+
+
+def designator_offset(dcs_name: Any, heading_deg: float) -> float | None:
+    """Degrees from a designator to the nearer end of the strip, or ``None``."""
+    raw = "" if dcs_name in (None, "") else str(dcs_name).strip().upper()
+    match = _DESIGNATOR_RE.match(raw)
+    if match is None:
+        return None
+    number = int(match.group(1))
+    if not 1 <= number <= 36:
+        return None
+    axis = number * 10.0
+    return min(
+        heading_difference_deg(axis, heading_deg),
+        heading_difference_deg(axis, heading_deg + 180.0),
+    )
+
+
+def _usable_designator(dcs_name: Any, heading_deg: float) -> str:
+    """The DCS designator, zero-padded, or ``""`` if it does not fit the strip.
+
+    Zero-padded because DCS reports some as bare ints ("Name": 3) while the
+    reciprocal always comes out two-digit: one strip then read "3" at one end
+    and "21" at the other, and Nellis's two parallels came out "3" and "03" --
+    one runway split into several labels in the venue list.
+
+    Rejected at DESIGNATOR_SLACK_DEG or more from both ends of the strip. DCS
+    hangs names on the wrong strip more often than one would think: at
+    Ben-Gurion the 08/26 strip is reported as "21" and the 12/30 as "8", and
+    believing them produced two runways labelled 08/26. The designator is
+    magnetic and the heading is grid; see DESIGNATOR_SLACK_DEG for how much
+    of a gap that legitimately explains.
+    """
+    offset = designator_offset(dcs_name, heading_deg)
+    if offset is None or offset >= DESIGNATOR_SLACK_DEG:
+        return ""
+    match = _DESIGNATOR_RE.match(str(dcs_name).strip().upper())
+    assert match is not None  # designator_offset already parsed it
+    return f"{int(match.group(1)):02d}{match.group(2)}"
+
+
+def resolve_designator_clashes(
+    strips: list[tuple[Any, Any, float]],
+) -> list[list[Runway]]:
+    """Build each strip's pair, re-deriving names that collide.
+
+    ``strips`` holds ``(build, dcs_name, grid_heading_deg)`` per runway record,
+    where ``build(dcs_name=...)`` returns that strip's two landing directions.
+
+    A name within DESIGNATOR_SLACK_DEG can still be another strip's: Beirut's
+    17/35 strip is reported as "16", 18.9 deg off -- within what declination
+    and convergence explain elsewhere -- and it then shares 16/34 with the real
+    16/34. When two strips that are NOT parallel end up with the same name, the
+    one whose DCS name sits further from its own heading gives it up and is
+    named from its heading instead. Parallel strips sharing a name are left for
+    assign_parallel_suffixes, which is their correct answer.
+    """
+    names = [dcs_name for _build, dcs_name, _grid in strips]
+    pairs = [build(dcs_name=name) for (build, _n, _g), name in zip(strips, names)]
+    for _ in range(len(strips)):
+        by_name: dict[str, set[int]] = {}
+        for index, pair in enumerate(pairs):
+            for runway in pair:
+                by_name.setdefault(runway.name, set()).add(index)
+        culprit = None
+        for members in by_name.values():
+            if len(members) < 2:
+                continue
+            heads = [pairs[i][0].heading_deg for i in members]
+            if all(
+                min(
+                    heading_difference_deg(h, heads[0]),
+                    heading_difference_deg(h, heads[0] + 180.0),
+                )
+                <= 5.0
+                for h in heads
+            ):
+                continue
+            # Only a strip still carrying a DCS name can be wrong about it.
+            candidates = [
+                i for i in members if _usable_designator(names[i], strips[i][2])
+            ]
+            if candidates:
+                culprit = max(
+                    candidates,
+                    key=lambda i: designator_offset(names[i], strips[i][2]) or 0.0,
+                )
+                break
+        if culprit is None:
+            break
+        names[culprit] = None
+        pairs[culprit] = strips[culprit][0](dcs_name=None)
+    return pairs
+
+
 def _runway_name(dcs_name: Any, heading_deg: float, *, primary: bool) -> str:
     """Prefer the name DCS reports for the primary end; derive the other."""
-    designator = "" if dcs_name in (None, "") else str(dcs_name).strip().upper()
+    designator = _usable_designator(dcs_name, heading_deg)
     if primary and designator:
         return designator
     if designator and (reciprocal := reciprocal_designator(designator)):
         return reciprocal
     number = int(round(heading_deg / 10.0)) or 36
     return f"{number:02d}"
+
+
+#: Fields scripts/dlt-capture-runways.lua adds to a runway record: the centre
+#: and a probe point along the course, both converted by DCS itself.
+EXACT_FIELDS = ("lat", "lng", "probe_lat", "probe_lng", "probe_grid_m")
+
+
+def _initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return normalize_heading(math.degrees(math.atan2(y, x)))
+
+
+def runway_pair_from_exact(
+    airbase: str,
+    dcs_name: Any,
+    course_rad: float,
+    centre_lat: float,
+    centre_lon: float,
+    probe_lat: float,
+    probe_lon: float,
+    probe_grid_m: float,
+    elevation_m: float,
+    length_m: float,
+    width_m: float,
+) -> list[Runway]:
+    """Both landing directions from DCS's own lat/lon for the strip.
+
+    ``centre_*`` is ``coord.LOtoLL`` of the runway centre and ``probe_*`` of a
+    point ``probe_grid_m`` grid metres along the course, both computed inside
+    DCS by scripts/dlt-capture-runways.lua. Everything
+    :func:`runway_pair_from_dcs` has to approximate -- meridian convergence,
+    the projection's scale factor, the ellipsoid -- is already inside those two
+    points: the bearing between them is the true heading, and the thresholds
+    sit on the same line at +/- length/2 grid metres, i.e. at a fixed fraction
+    of the centre->probe vector. No metric model is involved at all.
+
+    Why it matters, measured on Caucasus: the approximate route placed
+    thresholds up to 18 m away from where this one does (Beslan), and the gap
+    grows with distance from the projection's central meridian -- the
+    transverse-Mercator scale factor, which that route never applied.
+    ``length`` is taken as grid metres: DCS's values are measurements
+    (2628.5647, 2334.54...), not design lengths.
+    """
+    from app.detection.geometry import haversine_m
+
+    grid_heading = normalize_heading(math.degrees(-course_rad))
+    named_end = _designator_end(dcs_name, grid_heading)
+    true_heading = _initial_bearing(centre_lat, centre_lon, probe_lat, probe_lon)
+    t = (length_m / 2.0) / probe_grid_m
+    dlat, dlon = probe_lat - centre_lat, probe_lon - centre_lon
+    ends = (
+        # Landing along the course: the threshold is half a length BEHIND.
+        (grid_heading, true_heading, centre_lat - t * dlat, centre_lon - t * dlon),
+        (
+            normalize_heading(grid_heading + 180.0),
+            normalize_heading(true_heading + 180.0),
+            centre_lat + t * dlat,
+            centre_lon + t * dlon,
+        ),
+    )
+    ground_length = haversine_m(ends[0][2], ends[0][3], ends[1][2], ends[1][3])
+    return [
+        Runway(
+            airbase=airbase,
+            name=_runway_name(dcs_name, grid_head, primary=index == named_end),
+            threshold_lat=lat,
+            threshold_lon=lon,
+            elevation_m=elevation_m,
+            heading_deg=heading,
+            length_m=ground_length,
+            width_m=width_m,
+        )
+        for index, (grid_head, heading, lat, lon) in enumerate(ends)
+    ]
+
+
+def assign_parallel_suffixes(runways: list[Runway]) -> list[Runway]:
+    """Give parallel strips their L / C / R when DCS did not.
+
+    ``getRunways()`` names each strip once and without a side. Nellis comes
+    back as two strips, "3" and "21", which after deriving the other ends are
+    both 03/21 -- so the venue list, the filter and any per-runway count could
+    not tell the two runways apart. Side is geometry, not data: looking down
+    the landing direction, the strip on the left is L. Each direction is sorted
+    on its own, which is what makes 03L's other end come out as 21R.
+
+    Only groups whose names collide are touched, and only when they really are
+    parallel (same heading within 5 deg), so a designator DCS did give a side
+    is never rewritten and two crossing strips that merely share a number are
+    left alone.
+    """
+    from dataclasses import replace
+
+    from app.detection.geometry import transform_to_frame
+
+    out = list(runways)
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index, runway in enumerate(out):
+        groups.setdefault((runway.airbase, runway.name), []).append(index)
+    for (_airbase, name), members in groups.items():
+        sides = {2: "LR", 3: "LCR"}.get(len(members))
+        if sides is None or not _DESIGNATOR_RE.match(name) or name[-1] in "LCR":
+            continue
+        ref = out[members[0]]
+        if any(
+            heading_difference_deg(out[i].heading_deg, ref.heading_deg) > 5.0
+            for i in members
+        ):
+            continue
+        ordered = sorted(
+            members,
+            key=lambda i: transform_to_frame(
+                out[i].threshold_lat,
+                out[i].threshold_lon,
+                ref.threshold_lat,
+                ref.threshold_lon,
+                ref.heading_deg,
+            )[1],
+        )
+        for index, side in zip(ordered, sides):
+            out[index] = replace(out[index], name=out[index].name + side)
+    return out

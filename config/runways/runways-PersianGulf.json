@@ -1,0 +1,747 @@
+{
+ "version": 3,
+ "theatre": "PersianGulf",
+ "exact": true,
+ "runways": [
+  {
+   "airbase": "Abu Musa Island",
+   "name": "08",
+   "threshold_lat": 25.8747737,
+   "threshold_lon": 55.0214166,
+   "elevation_m": 5.0,
+   "heading_deg": 83.29,
+   "length_m": 2317.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Abu Musa Island",
+   "name": "26",
+   "threshold_lat": 25.8772093,
+   "threshold_lon": 55.04442,
+   "elevation_m": 5.0,
+   "heading_deg": 263.29,
+   "length_m": 2317.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Bandar Abbas Intl",
+   "name": "03",
+   "threshold_lat": 27.203513,
+   "threshold_lon": 56.3706225,
+   "elevation_m": 5.59,
+   "heading_deg": 27.62,
+   "length_m": 3557.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Bandar Abbas Intl",
+   "name": "21",
+   "threshold_lat": 27.2318608,
+   "threshold_lon": 56.3873012,
+   "elevation_m": 5.59,
+   "heading_deg": 207.62,
+   "length_m": 3557.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Bandar Lengeh",
+   "name": "08",
+   "threshold_lat": 26.5305512,
+   "threshold_lon": 54.8131648,
+   "elevation_m": 24.65,
+   "heading_deg": 80.55,
+   "length_m": 2320.1,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Bandar Lengeh",
+   "name": "26",
+   "threshold_lat": 26.5339763,
+   "threshold_lon": 54.8361696,
+   "elevation_m": 24.65,
+   "heading_deg": 260.55,
+   "length_m": 2320.1,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Dubai Intl",
+   "name": "30R",
+   "threshold_lat": 25.2484976,
+   "threshold_lon": 55.3794524,
+   "elevation_m": 5.0,
+   "heading_deg": 301.55,
+   "length_m": 3349.1,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Dubai Intl",
+   "name": "12L",
+   "threshold_lat": 25.2642541,
+   "threshold_lon": 55.3510699,
+   "elevation_m": 5.0,
+   "heading_deg": 121.55,
+   "length_m": 3349.1,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Dubai Intl",
+   "name": "30L",
+   "threshold_lat": 25.2363058,
+   "threshold_lon": 55.3941156,
+   "elevation_m": 5.0,
+   "heading_deg": 301.56,
+   "length_m": 3349.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Dubai Intl",
+   "name": "12R",
+   "threshold_lat": 25.2520688,
+   "threshold_lon": 55.36574,
+   "elevation_m": 5.0,
+   "heading_deg": 121.56,
+   "length_m": 3349.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Maktoum Intl",
+   "name": "30",
+   "threshold_lat": 24.8888573,
+   "threshold_lon": 55.1750754,
+   "elevation_m": 37.62,
+   "heading_deg": 301.36,
+   "length_m": 3504.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Maktoum Intl",
+   "name": "12",
+   "threshold_lat": 24.9052561,
+   "threshold_lon": 55.1454026,
+   "elevation_m": 37.62,
+   "heading_deg": 121.36,
+   "length_m": 3504.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Fujairah Intl",
+   "name": "29",
+   "threshold_lat": 25.1059872,
+   "threshold_lon": 56.3405386,
+   "elevation_m": 18.52,
+   "heading_deg": 292.53,
+   "length_m": 2874.9,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Fujairah Intl",
+   "name": "11",
+   "threshold_lat": 25.1158932,
+   "threshold_lon": 56.3141638,
+   "elevation_m": 18.52,
+   "heading_deg": 112.53,
+   "length_m": 2874.9,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tunb Island AFB",
+   "name": "03",
+   "threshold_lat": 26.2514156,
+   "threshold_lon": 55.3115468,
+   "elevation_m": 13.0,
+   "heading_deg": 26.94,
+   "length_m": 1864.0,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Tunb Island AFB",
+   "name": "21",
+   "threshold_lat": 26.2663596,
+   "threshold_lon": 55.3200165,
+   "elevation_m": 13.0,
+   "heading_deg": 206.94,
+   "length_m": 1864.0,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Havadarya",
+   "name": "26",
+   "threshold_lat": 27.160194,
+   "threshold_lon": 56.1830297,
+   "elevation_m": 15.48,
+   "heading_deg": 258.64,
+   "length_m": 2222.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Havadarya",
+   "name": "08",
+   "threshold_lat": 27.156255,
+   "threshold_lon": 56.1610074,
+   "elevation_m": 15.48,
+   "heading_deg": 78.64,
+   "length_m": 2222.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Khasab",
+   "name": "19",
+   "threshold_lat": 26.1798707,
+   "threshold_lon": 56.2428795,
+   "elevation_m": 14.49,
+   "heading_deg": 193.61,
+   "length_m": 2298.4,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Khasab",
+   "name": "01",
+   "threshold_lat": 26.1597811,
+   "threshold_lon": 56.2374606,
+   "elevation_m": 14.49,
+   "heading_deg": 13.61,
+   "length_m": 2298.4,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Al Minhad AFB",
+   "name": "27",
+   "threshold_lat": 25.0270783,
+   "threshold_lon": 55.3836743,
+   "elevation_m": 58.15,
+   "heading_deg": 269.31,
+   "length_m": 3610.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Minhad AFB",
+   "name": "09",
+   "threshold_lat": 25.0266844,
+   "threshold_lon": 55.3478412,
+   "elevation_m": 58.15,
+   "heading_deg": 89.31,
+   "length_m": 3610.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Qeshm Island",
+   "name": "23",
+   "threshold_lat": 26.7665388,
+   "threshold_lon": 55.9178719,
+   "elevation_m": 8.03,
+   "heading_deg": 229.36,
+   "length_m": 4053.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Qeshm Island",
+   "name": "05",
+   "threshold_lat": 26.7427996,
+   "threshold_lon": 55.8868965,
+   "elevation_m": 8.03,
+   "heading_deg": 49.36,
+   "length_m": 4053.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sharjah Intl",
+   "name": "30R",
+   "threshold_lat": 25.3230259,
+   "threshold_lon": 55.531549,
+   "elevation_m": 30.0,
+   "heading_deg": 302.5,
+   "length_m": 3166.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sharjah Intl",
+   "name": "12L",
+   "threshold_lat": 25.3383245,
+   "threshold_lon": 55.5049769,
+   "elevation_m": 30.0,
+   "heading_deg": 122.5,
+   "length_m": 3166.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sharjah Intl",
+   "name": "30L",
+   "threshold_lat": 25.3208084,
+   "threshold_lon": 55.5307304,
+   "elevation_m": 30.0,
+   "heading_deg": 302.47,
+   "length_m": 3166.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sharjah Intl",
+   "name": "12R",
+   "threshold_lat": 25.336097,
+   "threshold_lon": 55.5041517,
+   "elevation_m": 30.0,
+   "heading_deg": 122.47,
+   "length_m": 3166.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sirri Island",
+   "name": "30",
+   "threshold_lat": 25.903563,
+   "threshold_lon": 54.5483922,
+   "elevation_m": 5.44,
+   "heading_deg": 306.31,
+   "length_m": 2268.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sirri Island",
+   "name": "12",
+   "threshold_lat": 25.9156429,
+   "threshold_lon": 54.5301167,
+   "elevation_m": 5.44,
+   "heading_deg": 126.31,
+   "length_m": 2268.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tunb Kochak",
+   "name": "26",
+   "threshold_lat": 26.2438729,
+   "threshold_lon": 55.1493036,
+   "elevation_m": 4.63,
+   "heading_deg": 260.67,
+   "length_m": 755.1,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Tunb Kochak",
+   "name": "08",
+   "threshold_lat": 26.2427716,
+   "threshold_lon": 55.1418322,
+   "elevation_m": 4.63,
+   "heading_deg": 80.67,
+   "length_m": 755.1,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Sir Abu Nuayr",
+   "name": "28",
+   "threshold_lat": 25.2164224,
+   "threshold_lon": 54.2369835,
+   "elevation_m": 7.68,
+   "heading_deg": 278.45,
+   "length_m": 678.1,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Sir Abu Nuayr",
+   "name": "10",
+   "threshold_lat": 25.2173187,
+   "threshold_lon": 54.2303159,
+   "elevation_m": 7.68,
+   "heading_deg": 98.45,
+   "length_m": 678.1,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Kerman",
+   "name": "34",
+   "threshold_lat": 30.2577958,
+   "threshold_lon": 56.9585606,
+   "elevation_m": 1751.43,
+   "heading_deg": 338.43,
+   "length_m": 3662.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Kerman",
+   "name": "16",
+   "threshold_lat": 30.2884249,
+   "threshold_lon": 56.9445421,
+   "elevation_m": 1751.43,
+   "heading_deg": 158.43,
+   "length_m": 3662.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Shiraz Intl",
+   "name": "29R",
+   "threshold_lat": 29.533352,
+   "threshold_lon": 52.6100247,
+   "elevation_m": 1487.0,
+   "heading_deg": 294.63,
+   "length_m": 4033.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Shiraz Intl",
+   "name": "11L",
+   "threshold_lat": 29.548468,
+   "threshold_lon": 52.5721231,
+   "elevation_m": 1487.0,
+   "heading_deg": 114.63,
+   "length_m": 4033.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Shiraz Intl",
+   "name": "29L",
+   "threshold_lat": 29.5295914,
+   "threshold_lon": 52.6080963,
+   "elevation_m": 1487.0,
+   "heading_deg": 294.63,
+   "length_m": 4033.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Shiraz Intl",
+   "name": "11R",
+   "threshold_lat": 29.5447094,
+   "threshold_lon": 52.5701985,
+   "elevation_m": 1487.0,
+   "heading_deg": 114.63,
+   "length_m": 4033.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Sas Al Nakheel",
+   "name": "16",
+   "threshold_lat": 24.4481242,
+   "threshold_lon": 54.5144168,
+   "elevation_m": 2.95,
+   "heading_deg": 161.31,
+   "length_m": 1646.8,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Sas Al Nakheel",
+   "name": "34",
+   "threshold_lat": 24.4340948,
+   "threshold_lon": 54.5196295,
+   "elevation_m": 2.95,
+   "heading_deg": 341.31,
+   "length_m": 1646.8,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Bandar-e-Jask",
+   "name": "06",
+   "threshold_lat": 25.650246,
+   "threshold_lon": 57.7922653,
+   "elevation_m": 7.95,
+   "heading_deg": 61.83,
+   "length_m": 2085.3,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Bandar-e-Jask",
+   "name": "24",
+   "threshold_lat": 25.6590991,
+   "threshold_lon": 57.8106059,
+   "elevation_m": 7.95,
+   "heading_deg": 241.83,
+   "length_m": 2085.3,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Abu Dhabi Intl",
+   "name": "13L",
+   "threshold_lat": 24.4645101,
+   "threshold_lon": 54.6390467,
+   "elevation_m": 28.0,
+   "heading_deg": 127.94,
+   "length_m": 3907.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Abu Dhabi Intl",
+   "name": "31R",
+   "threshold_lat": 24.4429055,
+   "threshold_lon": 54.669489,
+   "elevation_m": 28.0,
+   "heading_deg": 307.94,
+   "length_m": 3907.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Abu Dhabi Intl",
+   "name": "31C",
+   "threshold_lat": 24.4203056,
+   "threshold_lon": 54.6691574,
+   "elevation_m": 28.0,
+   "heading_deg": 307.93,
+   "length_m": 3907.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Abu Dhabi Intl",
+   "name": "13C",
+   "threshold_lat": 24.4419055,
+   "threshold_lon": 54.6387159,
+   "elevation_m": 28.0,
+   "heading_deg": 127.93,
+   "length_m": 3907.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Abu Dhabi Intl",
+   "name": "13R",
+   "threshold_lat": 24.4499033,
+   "threshold_lon": 54.6274387,
+   "elevation_m": 28.0,
+   "heading_deg": 127.92,
+   "length_m": 3031.9,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Abu Dhabi Intl",
+   "name": "31L",
+   "threshold_lat": 24.4331451,
+   "threshold_lon": 54.6510644,
+   "elevation_m": 28.0,
+   "heading_deg": 307.92,
+   "length_m": 3031.9,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al-Bateen",
+   "name": "13",
+   "threshold_lat": 24.4338466,
+   "threshold_lon": 54.4505247,
+   "elevation_m": 3.65,
+   "heading_deg": 128.19,
+   "length_m": 2075.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al-Bateen",
+   "name": "31",
+   "threshold_lat": 24.422308,
+   "threshold_lon": 54.4666357,
+   "elevation_m": 3.65,
+   "heading_deg": 308.19,
+   "length_m": 2075.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Kish Intl",
+   "name": "10L",
+   "threshold_lat": 26.529383,
+   "threshold_lon": 53.9648839,
+   "elevation_m": 35.0,
+   "heading_deg": 94.88,
+   "length_m": 3228.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Kish Intl",
+   "name": "28R",
+   "threshold_lat": 26.5269139,
+   "threshold_lon": 53.9972141,
+   "elevation_m": 35.0,
+   "heading_deg": 274.88,
+   "length_m": 3228.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Kish Intl",
+   "name": "10R",
+   "threshold_lat": 26.5266953,
+   "threshold_lon": 53.9646635,
+   "elevation_m": 35.0,
+   "heading_deg": 94.88,
+   "length_m": 3228.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Kish Intl",
+   "name": "28L",
+   "threshold_lat": 26.5242261,
+   "threshold_lon": 53.996993,
+   "elevation_m": 35.0,
+   "heading_deg": 274.88,
+   "length_m": 3228.2,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Ain Intl",
+   "name": "19",
+   "threshold_lat": 24.2768026,
+   "threshold_lon": 55.6114424,
+   "elevation_m": 248.05,
+   "heading_deg": 187.42,
+   "length_m": 3448.1,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Ain Intl",
+   "name": "01",
+   "threshold_lat": 24.2460527,
+   "threshold_lon": 55.6070481,
+   "elevation_m": 248.05,
+   "heading_deg": 7.42,
+   "length_m": 3448.1,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Lavan Island",
+   "name": "11",
+   "threshold_lat": 26.8151022,
+   "threshold_lon": 53.3414986,
+   "elevation_m": 22.91,
+   "heading_deg": 110.78,
+   "length_m": 2503.9,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Lavan Island",
+   "name": "29",
+   "threshold_lat": 26.8071134,
+   "threshold_lon": 53.3650881,
+   "elevation_m": 22.91,
+   "heading_deg": 290.78,
+   "length_m": 2503.9,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Jiroft",
+   "name": "13",
+   "threshold_lat": 28.7313825,
+   "threshold_lon": 57.6639285,
+   "elevation_m": 812.0,
+   "heading_deg": 128.77,
+   "length_m": 2793.3,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Jiroft",
+   "name": "31",
+   "threshold_lat": 28.7156515,
+   "threshold_lon": 57.6862615,
+   "elevation_m": 812.0,
+   "heading_deg": 308.77,
+   "length_m": 2793.3,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Ras Al Khaimah Intl",
+   "name": "35",
+   "threshold_lat": 25.6023337,
+   "threshold_lon": 55.9421535,
+   "elevation_m": 21.59,
+   "heading_deg": 344.83,
+   "length_m": 2571.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Ras Al Khaimah Intl",
+   "name": "17",
+   "threshold_lat": 25.6246549,
+   "threshold_lon": 55.9354411,
+   "elevation_m": 21.59,
+   "heading_deg": 164.83,
+   "length_m": 2571.6,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Liwa AFB",
+   "name": "13",
+   "threshold_lat": 23.6604941,
+   "threshold_lon": 53.8123062,
+   "elevation_m": 121.93,
+   "heading_deg": 131.19,
+   "length_m": 3281.8,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Liwa AFB",
+   "name": "31",
+   "threshold_lat": 23.6410568,
+   "threshold_lon": 53.8365524,
+   "elevation_m": 121.93,
+   "heading_deg": 311.19,
+   "length_m": 3281.8,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Quasoura_airport",
+   "name": "27",
+   "threshold_lat": 22.7762599,
+   "threshold_lon": 55.0771342,
+   "elevation_m": 100.47,
+   "heading_deg": 269.28,
+   "length_m": 2836.9,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Quasoura_airport",
+   "name": "09",
+   "threshold_lat": 22.77594,
+   "threshold_lon": 55.0494658,
+   "elevation_m": 100.47,
+   "heading_deg": 89.28,
+   "length_m": 2836.9,
+   "width_m": 30.0
+  },
+  {
+   "airbase": "Lar",
+   "name": "09",
+   "threshold_lat": 27.6745356,
+   "threshold_lon": 54.3683216,
+   "elevation_m": 803.33,
+   "heading_deg": 89.14,
+   "length_m": 2919.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Lar",
+   "name": "27",
+   "threshold_lat": 27.6749293,
+   "threshold_lon": 54.3979679,
+   "elevation_m": 803.33,
+   "heading_deg": 269.14,
+   "length_m": 2919.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Dhafra AFB",
+   "name": "13L",
+   "threshold_lat": 24.2577138,
+   "threshold_lon": 54.5340265,
+   "elevation_m": 16.0,
+   "heading_deg": 127.09,
+   "length_m": 3475.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Dhafra AFB",
+   "name": "31R",
+   "threshold_lat": 24.2388619,
+   "threshold_lon": 54.5613719,
+   "elevation_m": 16.0,
+   "heading_deg": 307.09,
+   "length_m": 3475.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Dhafra AFB",
+   "name": "13R",
+   "threshold_lat": 24.2404514,
+   "threshold_lon": 54.5373483,
+   "elevation_m": 16.0,
+   "heading_deg": 127.1,
+   "length_m": 3475.7,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Al Dhafra AFB",
+   "name": "31L",
+   "threshold_lat": 24.2215969,
+   "threshold_lon": 54.5646877,
+   "elevation_m": 16.0,
+   "heading_deg": 307.1,
+   "length_m": 3475.7,
+   "width_m": 60.0
+  }
+ ]
+}

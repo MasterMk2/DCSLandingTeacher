@@ -1,0 +1,527 @@
+{
+ "version": 3,
+ "theatre": "Nevada",
+ "exact": true,
+ "runways": [
+  {
+   "airbase": "Beatty",
+   "name": "16",
+   "threshold_lat": 36.8683947,
+   "threshold_lon": -116.7864198,
+   "elevation_m": 967.13,
+   "heading_deg": 179.99,
+   "length_m": 1643.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Beatty",
+   "name": "34",
+   "threshold_lat": 36.8536111,
+   "threshold_lon": -116.7864152,
+   "elevation_m": 967.13,
+   "heading_deg": 359.99,
+   "length_m": 1643.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Boulder City",
+   "name": "33",
+   "threshold_lat": 35.9437491,
+   "threshold_lon": -114.8602296,
+   "elevation_m": 646.66,
+   "heading_deg": 345.35,
+   "length_m": 1130.5,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Boulder City",
+   "name": "15",
+   "threshold_lat": 35.9535855,
+   "threshold_lon": -114.8634068,
+   "elevation_m": 646.66,
+   "heading_deg": 165.35,
+   "length_m": 1130.5,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Boulder City",
+   "name": "28",
+   "threshold_lat": 35.9454989,
+   "threshold_lon": -114.8549411,
+   "elevation_m": 646.66,
+   "heading_deg": 279.78,
+   "length_m": 1126.0,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Boulder City",
+   "name": "10",
+   "threshold_lat": 35.9472182,
+   "threshold_lon": -114.8672682,
+   "elevation_m": 646.66,
+   "heading_deg": 99.78,
+   "length_m": 1126.0,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Echo Bay",
+   "name": "06",
+   "threshold_lat": 36.3102065,
+   "threshold_lon": -114.469274,
+   "elevation_m": 472.03,
+   "heading_deg": 78.84,
+   "length_m": 981.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Echo Bay",
+   "name": "24",
+   "threshold_lat": 36.3119145,
+   "threshold_lon": -114.4585248,
+   "elevation_m": 472.03,
+   "heading_deg": 258.84,
+   "length_m": 981.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Henderson Executive",
+   "name": "35R",
+   "threshold_lat": 35.9674658,
+   "threshold_lon": -115.1331386,
+   "elevation_m": 759.44,
+   "heading_deg": 0.61,
+   "length_m": 1452.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Henderson Executive",
+   "name": "17L",
+   "threshold_lat": 35.980523,
+   "threshold_lon": -115.1329661,
+   "elevation_m": 759.44,
+   "heading_deg": 180.61,
+   "length_m": 1452.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Henderson Executive",
+   "name": "35L",
+   "threshold_lat": 35.965225,
+   "threshold_lon": -115.1355185,
+   "elevation_m": 759.44,
+   "heading_deg": 0.59,
+   "length_m": 1452.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Henderson Executive",
+   "name": "17R",
+   "threshold_lat": 35.9782822,
+   "threshold_lon": -115.1353518,
+   "elevation_m": 759.44,
+   "heading_deg": 180.59,
+   "length_m": 1452.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Jean",
+   "name": "20R",
+   "threshold_lat": 35.7739272,
+   "threshold_lon": -115.3259858,
+   "elevation_m": 860.88,
+   "heading_deg": 211.52,
+   "length_m": 1236.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Jean",
+   "name": "02L",
+   "threshold_lat": 35.7644462,
+   "threshold_lon": -115.3331509,
+   "elevation_m": 860.88,
+   "heading_deg": 31.52,
+   "length_m": 1236.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Jean",
+   "name": "20L",
+   "threshold_lat": 35.7727443,
+   "threshold_lon": -115.3256858,
+   "elevation_m": 860.88,
+   "heading_deg": 211.53,
+   "length_m": 1236.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Jean",
+   "name": "02R",
+   "threshold_lat": 35.7632639,
+   "threshold_lon": -115.3328524,
+   "elevation_m": 860.88,
+   "heading_deg": 31.53,
+   "length_m": 1236.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Laughlin",
+   "name": "16",
+   "threshold_lat": 35.1658884,
+   "threshold_lon": -114.5601928,
+   "elevation_m": 200.0,
+   "heading_deg": 176.46,
+   "length_m": 2180.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Laughlin",
+   "name": "34",
+   "threshold_lat": 35.1463166,
+   "threshold_lon": -114.5587109,
+   "elevation_m": 200.0,
+   "heading_deg": 356.46,
+   "length_m": 2180.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Lincoln County",
+   "name": "17",
+   "threshold_lat": 37.7934015,
+   "threshold_lon": -114.4195773,
+   "elevation_m": 1467.69,
+   "heading_deg": 182.5,
+   "length_m": 1345.8,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Lincoln County",
+   "name": "35",
+   "threshold_lat": 37.7813097,
+   "threshold_lon": -114.4202451,
+   "elevation_m": 1467.69,
+   "heading_deg": 2.5,
+   "length_m": 1345.8,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Mesquite",
+   "name": "01",
+   "threshold_lat": 36.8272129,
+   "threshold_lon": -114.0600429,
+   "elevation_m": 566.49,
+   "heading_deg": 29.27,
+   "length_m": 1505.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Mesquite",
+   "name": "19",
+   "threshold_lat": 36.8390254,
+   "threshold_lon": -114.0517711,
+   "elevation_m": 566.49,
+   "heading_deg": 209.27,
+   "length_m": 1505.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Mina",
+   "name": "31",
+   "threshold_lat": 38.3746747,
+   "threshold_lon": -118.0931959,
+   "elevation_m": 1390.51,
+   "heading_deg": 331.91,
+   "length_m": 1288.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Mina",
+   "name": "13",
+   "threshold_lat": 38.3848966,
+   "threshold_lon": -118.1001571,
+   "elevation_m": 1390.51,
+   "heading_deg": 151.91,
+   "length_m": 1288.4,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tonopah",
+   "name": "29",
+   "threshold_lat": 38.0582464,
+   "threshold_lon": -117.07572,
+   "elevation_m": 1644.14,
+   "heading_deg": 305.09,
+   "length_m": 1618.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Tonopah",
+   "name": "11",
+   "threshold_lat": 38.0666152,
+   "threshold_lon": -117.0908515,
+   "elevation_m": 1644.14,
+   "heading_deg": 125.09,
+   "length_m": 1618.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Tonopah",
+   "name": "35",
+   "threshold_lat": 38.0509021,
+   "threshold_lon": -117.0871787,
+   "elevation_m": 1644.14,
+   "heading_deg": 345.03,
+   "length_m": 1622.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Tonopah",
+   "name": "17",
+   "threshold_lat": 38.0650023,
+   "threshold_lon": -117.0919667,
+   "elevation_m": 1644.14,
+   "heading_deg": 165.03,
+   "length_m": 1622.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Creech",
+   "name": "08",
+   "threshold_lat": 36.5841606,
+   "threshold_lon": -115.6868241,
+   "elevation_m": 952.94,
+   "heading_deg": 92.34,
+   "length_m": 1855.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Creech",
+   "name": "26",
+   "threshold_lat": 36.5834776,
+   "threshold_lon": -115.6660609,
+   "elevation_m": 952.94,
+   "heading_deg": 272.34,
+   "length_m": 1855.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Creech",
+   "name": "15",
+   "threshold_lat": 36.5976388,
+   "threshold_lon": -115.6787857,
+   "elevation_m": 952.94,
+   "heading_deg": 146.05,
+   "length_m": 1861.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Creech",
+   "name": "33",
+   "threshold_lat": 36.5837558,
+   "threshold_lon": -115.6671447,
+   "elevation_m": 952.94,
+   "heading_deg": 326.05,
+   "length_m": 1861.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Groom Lake",
+   "name": "32",
+   "threshold_lat": 37.2192439,
+   "threshold_lon": -115.7849968,
+   "elevation_m": 1369.87,
+   "heading_deg": 337.25,
+   "length_m": 3360.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Groom Lake",
+   "name": "14",
+   "threshold_lat": 37.2471145,
+   "threshold_lon": -115.7996742,
+   "elevation_m": 1369.87,
+   "heading_deg": 157.25,
+   "length_m": 3360.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "McCarran International",
+   "name": "07L",
+   "threshold_lat": 36.0764015,
+   "threshold_lon": -115.1621904,
+   "elevation_m": 661.38,
+   "heading_deg": 89.96,
+   "length_m": 3156.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "McCarran International",
+   "name": "25R",
+   "threshold_lat": 36.0764183,
+   "threshold_lon": -115.1270736,
+   "elevation_m": 661.38,
+   "heading_deg": 269.96,
+   "length_m": 3156.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "McCarran International",
+   "name": "07R",
+   "threshold_lat": 36.0736422,
+   "threshold_lon": -115.1611904,
+   "elevation_m": 661.38,
+   "heading_deg": 89.97,
+   "length_m": 3156.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "McCarran International",
+   "name": "25L",
+   "threshold_lat": 36.0736535,
+   "threshold_lon": -115.1260749,
+   "elevation_m": 661.38,
+   "heading_deg": 269.97,
+   "length_m": 3156.0,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Nellis",
+   "name": "03R",
+   "threshold_lat": 36.2254842,
+   "threshold_lon": -115.0435592,
+   "elevation_m": 561.31,
+   "heading_deg": 41.16,
+   "length_m": 2877.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Nellis",
+   "name": "21L",
+   "threshold_lat": 36.244964,
+   "threshold_lon": -115.0224419,
+   "elevation_m": 561.31,
+   "heading_deg": 221.16,
+   "length_m": 2877.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Nellis",
+   "name": "03L",
+   "threshold_lat": 36.2272854,
+   "threshold_lon": -115.0461201,
+   "elevation_m": 561.31,
+   "heading_deg": 41.17,
+   "length_m": 2877.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Nellis",
+   "name": "21R",
+   "threshold_lat": 36.2467623,
+   "threshold_lon": -115.0249982,
+   "elevation_m": 561.31,
+   "heading_deg": 221.17,
+   "length_m": 2877.3,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "North Las Vegas",
+   "name": "25",
+   "threshold_lat": 36.2136353,
+   "threshold_lon": -115.186746,
+   "elevation_m": 679.28,
+   "heading_deg": 268.55,
+   "length_m": 1439.8,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "North Las Vegas",
+   "name": "07",
+   "threshold_lat": 36.213308,
+   "threshold_lon": -115.2027894,
+   "elevation_m": 679.28,
+   "heading_deg": 88.55,
+   "length_m": 1439.8,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "North Las Vegas",
+   "name": "31",
+   "threshold_lat": 36.2055254,
+   "threshold_lon": -115.191113,
+   "elevation_m": 679.28,
+   "heading_deg": 314.53,
+   "length_m": 1442.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "North Las Vegas",
+   "name": "13",
+   "threshold_lat": 36.2146258,
+   "threshold_lon": -115.2025778,
+   "elevation_m": 679.28,
+   "heading_deg": 134.53,
+   "length_m": 1442.9,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "North Las Vegas",
+   "name": "12",
+   "threshold_lat": 36.2127227,
+   "threshold_lon": -115.1967984,
+   "elevation_m": 679.28,
+   "heading_deg": 134.5,
+   "length_m": 1362.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "North Las Vegas",
+   "name": "30",
+   "threshold_lat": 36.2041317,
+   "threshold_lon": -115.1859663,
+   "elevation_m": 679.28,
+   "heading_deg": 314.5,
+   "length_m": 1362.7,
+   "width_m": 20.0
+  },
+  {
+   "airbase": "Pahute Mesa",
+   "name": "36",
+   "threshold_lat": 37.0947666,
+   "threshold_lon": -116.3150725,
+   "elevation_m": 1541.36,
+   "heading_deg": 13.8,
+   "length_m": 1655.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Pahute Mesa",
+   "name": "18",
+   "threshold_lat": 37.1092249,
+   "threshold_lon": -116.3106202,
+   "elevation_m": 1541.36,
+   "heading_deg": 193.8,
+   "length_m": 1655.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tonopah Test Range",
+   "name": "32",
+   "threshold_lat": 37.7841445,
+   "threshold_lon": -116.7729865,
+   "elevation_m": 1686.81,
+   "heading_deg": 337.28,
+   "length_m": 3551.5,
+   "width_m": 60.0
+  },
+  {
+   "airbase": "Tonopah Test Range",
+   "name": "14",
+   "threshold_lat": 37.8136053,
+   "threshold_lon": -116.7885976,
+   "elevation_m": 1686.81,
+   "heading_deg": 157.28,
+   "length_m": 3551.5,
+   "width_m": 60.0
+  }
+ ]
+}

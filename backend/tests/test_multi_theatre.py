@@ -377,6 +377,54 @@ async def test_a_local_sweep_wins_over_the_shipped_copy(tmp_path) -> None:
     assert [t["origin"] for t in provider.inventory()] == ["swept"]
 
 
+async def test_an_exact_capture_outranks_a_live_sweep(tmp_path) -> None:
+    """DCSServerBot returns runways as grid x/z, so a live sweep is converted
+    by approximation; the in-game hook has DCS convert them itself. When both
+    exist, the approximation must not win just because it was made locally.
+    """
+    seeds, cache = tmp_path / "seeds", tmp_path / "cache"
+    seeds.mkdir()
+    (seeds / "runways-Nevada.json").write_text(
+        json.dumps(
+            {
+                "version": CACHE_VERSION,
+                "theatre": "Nevada",
+                "exact": True,
+                "runways": [_strip("Nellis (exact)", NELLIS_LAT, NELLIS_LON).as_dict()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_pool(cache, "Nevada", [_strip("Nellis (live sweep)", NELLIS_LAT, NELLIS_LON)])
+
+    # Both entry points: the directory scan resolve() runs, and the per-theatre
+    # load runways_for() does on a fresh provider.
+    provider = RunwayProvider(None, cache, seed_dir=seeds)
+    matched = await provider.resolve(NELLIS_LAT, NELLIS_LON, 90.0)
+    assert matched is not None and matched.airbase == "Nellis (exact)"
+    assert [t["origin"] for t in provider.inventory()] == ["shipped"]
+
+    fresh = RunwayProvider(None, cache, seed_dir=seeds)
+    assert [r.airbase for r in await fresh.runways_for("Nevada")] == ["Nellis (exact)"]
+
+
+def test_a_zero_length_runway_is_a_ship_not_a_2000_m_runway() -> None:
+    """CVN-71 on Marianas comes back from getRunways() with length 0, width 0.
+
+    `record.get("length") or 2000.0` read that 0 as missing and gave the deck
+    a 2000 m runway, frozen where the carrier started the mission.
+    """
+    detail = {
+        "airbase": {
+            "runways": [
+                {"course": 0.0, "Name": "03", "length": 0, "width": 0,
+                 "position": {"x": 0.0, "y": 0.0, "z": 0.0}},
+            ]
+        }
+    }
+    assert _parse_airbase(NELLIS_AIRBASE, detail) == []
+
+
 async def test_a_stale_cache_file_is_ignored_by_the_directory_scan(tmp_path) -> None:
     """v1 geometry is ~5 deg rotated and must not be served from anywhere.
 
@@ -488,6 +536,196 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
                 "21L",
             }
             assert (await http.get("/api/v1/runways/Syria")).status_code == 404
+
+
+# --- geometry and names as DCS actually reports them ---------------------------
+
+
+def test_exact_geometry_uses_the_points_dcs_converted() -> None:
+    """With DCS's own lat/lon for the centre and a probe, nothing is modelled.
+
+    The approximate route converts grid metres as if they were ground metres;
+    on Caucasus that left thresholds up to 18 m out, growing with distance from
+    the projection's central meridian. Here the thresholds are a fixed
+    fraction of the centre->probe vector and the heading is its bearing, so
+    whatever the projection does is already inside the two points.
+    """
+    from app.runways.models import _initial_bearing, runway_pair_from_exact
+
+    centre = (41.0, 41.0)
+    probe = (41.009, 41.001)
+    pair = runway_pair_from_exact(
+        airbase="X",
+        dcs_name="01",
+        course_rad=-math.radians(5.0),
+        centre_lat=centre[0],
+        centre_lon=centre[1],
+        probe_lat=probe[0],
+        probe_lon=probe[1],
+        probe_grid_m=1000.0,
+        elevation_m=10.0,
+        length_m=3000.0,
+        width_m=45.0,
+    )
+    by = {r.name: r for r in pair}
+    assert set(by) == {"01", "19"}
+    # Half of 3000 grid metres is 1.5 probe lengths either side of the centre.
+    assert by["01"].threshold_lat == pytest.approx(centre[0] - 1.5 * 0.009)
+    assert by["01"].threshold_lon == pytest.approx(centre[1] - 1.5 * 0.001)
+    assert by["19"].threshold_lat == pytest.approx(centre[0] + 1.5 * 0.009)
+    assert by["19"].threshold_lon == pytest.approx(centre[1] + 1.5 * 0.001)
+    bearing = _initial_bearing(*centre, *probe)
+    assert by["01"].heading_deg == pytest.approx(bearing, abs=1e-9)
+    assert by["19"].heading_deg == pytest.approx((bearing + 180.0) % 360.0, abs=1e-9)
+
+
+def test_parallel_strips_get_their_side_from_geometry() -> None:
+    """Nellis as the live server reports it: "3" and "21", no sides at all.
+
+    Two records, centres ~305 m apart, the same 40 deg grid course, one named
+    by its 03 end and the other by its 21 end. Without sides both strips are
+    03/21 and cannot be told apart anywhere a runway is shown or counted.
+    """
+    detail = {
+        "airbase": {
+            "runways": [
+                {"course": -math.radians(40.0), "Name": 3,
+                 "position": {"y": 561.0, "x": 0.0, "z": 0.0},
+                 "length": 2877.0, "width": 60},
+                {"course": -math.radians(40.0), "Name": 21,
+                 "position": {"y": 561.0, "x": 195.0, "z": -234.0},
+                 "length": 2877.0, "width": 60},
+            ]
+        }
+    }
+    runways = _parse_airbase(NELLIS_AIRBASE, detail)
+    assert sorted(r.name for r in runways) == ["03L", "03R", "21L", "21R"]
+    # Sides mirror: the strip on the left landing 03 is on the right landing 21.
+    left = next(r for r in runways if r.name == "03L")
+    other_end = min(
+        (r for r in runways if r.name.startswith("21")),
+        key=lambda r: abs(
+            haversine_m(r.threshold_lat, r.threshold_lon,
+                        left.threshold_lat, left.threshold_lon) - 2877.0
+        ),
+    )
+    assert other_end.name == "21R"
+
+
+def test_a_designator_that_fits_neither_end_is_not_used() -> None:
+    """DCS names Boulder City's 09/27 strip "15" -- about 50 deg off both ends.
+
+    Taking it gave that strip and the real 15/33 the same label. Ignoring it
+    falls back to the heading, which is only ever a number or so out.
+    """
+    pair = runway_pair_from_dcs(
+        airbase="Boulder City",
+        dcs_name="15",
+        course_rad=-math.radians(278.48),
+        centre_x=0.0,
+        centre_z=0.0,
+        elevation_m=700.0,
+        length_m=1128.5,
+        width_m=20.0,
+        airbase_ref=(35.95, -114.86, 0.0, 0.0),
+    )
+    assert sorted(r.name for r in pair) == ["10", "28"]
+
+
+def _records(*rows):
+    """Runway records as DCS reports them: (Name, grid heading, x, z, length)."""
+    return {
+        "airbase": {
+            "runways": [
+                {"course": -math.radians(grid), "Name": dcs_name,
+                 "position": {"y": 10.0, "x": x, "z": z},
+                 "length": length, "width": 45}
+                for dcs_name, grid, x, z, length in rows
+            ]
+        }
+    }
+
+
+def _airbase_at(x: float, z: float) -> dict:
+    return {"id": "AB", "name": "AB", "lat": 32.0, "lng": 34.9, "alt": 10.0,
+            "position": {"y": 10.0, "x": x, "z": z}, "runwayList": []}
+
+
+def test_names_dcs_hung_on_the_wrong_strip_are_not_believed() -> None:
+    """Ben-Gurion (Sinai) as the live server reports it.
+
+    Three strips, 03/21, 08/26 and 12/30, reported as "3", "21" and "8": the
+    last two are 48.8 and 40.4 deg off their own strips. Believing them gave
+    two runways labelled 08/26 and none labelled 12/30.
+    """
+    runways = _parse_airbase(
+        _airbase_at(217468, 348036),
+        _records(("3", 27.8, 217468, 348036, 2571),
+                 ("21", 78.8, 218358, 346492, 2571),
+                 ("8", 300.4, 217446, 346858, 2897)),
+    )
+    assert sorted(r.name for r in runways) == ["03", "08", "12", "21", "26", "30"]
+
+
+def test_a_believable_name_that_clashes_gives_way_to_the_heading() -> None:
+    """Beirut (Syria): "16" on the 17/35 strip is only 18.9 deg off.
+
+    That is inside what declination and convergence explain on other maps, so
+    no angle threshold rejects it -- but it makes a second 16/34 next to the
+    real one. The strip whose name sits further from its heading is renamed.
+    """
+    runways = _parse_airbase(
+        _airbase_at(-131532, -42725),
+        _records(("34", 348.9, -131532, -42725, 2884),
+                 ("16", 178.9, -131247, -42288, 2884),
+                 ("17", 214.8, -133073, -42024, 2169)),
+    )
+    names = sorted(r.name for r in runways)
+    assert len(names) == len(set(names)) == 6
+    assert {"16", "34"} <= set(names)
+    # The 214.8 deg strip reported as "17" (44.8 deg off) is its 03/21.
+    assert {"03", "21"} <= set(names)
+
+
+def test_a_name_thirty_degrees_off_is_rejected() -> None:
+    """Gelendzhik (Caucasus): "1" on a strip at 40.0 deg grid -- its 04/22.
+
+    The production seed held this strip as "1" at one end and "22" at the
+    other, a pair that cannot exist.
+    """
+    pair = runway_pair_from_dcs(
+        airbase="Gelendzhik", dcs_name=1, course_rad=-math.radians(40.0),
+        centre_x=0.0, centre_z=0.0, elevation_m=22.0, length_m=1661.8,
+        width_m=60.0, airbase_ref=(44.57, 38.01, 0.0, 0.0),
+    )
+    assert sorted(r.name for r in pair) == ["04", "22"]
+
+
+def test_a_misnamed_parallel_still_gets_its_side() -> None:
+    """Tel Nof (Sinai): two parallel 15/33 strips, one reported as "18"."""
+    runways = _parse_airbase(
+        _airbase_at(198387, 341243),
+        _records(("36", 1.7, 198387, 341243, 2205),
+                 ("18", 329.7, 198604, 342089, 2205),
+                 ("33", 329.7, 198657, 342643, 2224)),
+    )
+    assert sorted(r.name for r in runways) == ["15L", "15R", "18", "33L", "33R", "36"]
+
+
+def test_bare_int_designators_are_zero_padded() -> None:
+    """DCS sends "Name": 6 for Sochi; the other end always comes out "24"."""
+    pair = runway_pair_from_dcs(
+        airbase="Sochi",
+        dcs_name=6,
+        course_rad=-math.radians(62.0),
+        centre_x=0.0,
+        centre_z=0.0,
+        elevation_m=10.0,
+        length_m=2500.0,
+        width_m=60.0,
+        airbase_ref=(43.44, 39.93, 0.0, 0.0),
+    )
+    assert sorted(r.name for r in pair) == ["06", "24"]
 
 
 # --- the row says where -------------------------------------------------------

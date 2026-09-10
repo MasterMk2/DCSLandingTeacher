@@ -291,6 +291,30 @@ curl -s localhost:8000/api/v1/runways/Nevada > config/runways/runways-Nevada.jso
 潰されません（tuning YAML と同じ理屈・同じ経路）。読み込み順は
 **書き込み可能キャッシュ → 同梱シード**で、そのサーバで掃引した結果が常に優先されます。
 
+#### ゲーム内フックで捕獲する（正確・推奨）
+
+同梱シードは DCSServerBot 経由ではなく、ゲーム内フックで取っています。
+
+1. [`scripts/dlt-capture-runways.lua`](scripts/dlt-capture-runways.lua) を
+   `<Saved Games>/<DCS>/Scripts/Hooks/` に置いてミッションをロードする
+2. ロード完了時に `Logs/dlt-runways.json` へ全空港の滑走路が書き出される
+3. `python scripts/dlt_runways_from_dump.py dlt-runways.json` で
+   `config/runways/runways-<Theatre>.json` ができる（`"exact": true`）
+
+違いは座標変換です。DCS の x/z は横メルカトルの格子なので、外で緯度経度に直すには
+子午線収差だけでなく**縮尺係数**も要ります。DCSServerBot の `/airbase` は格子座標しか
+返さないためこの変換が近似になり、Caucasus で中央子午線（東経33°）から離れた東部の
+空港ほどしきい値が最大 18 m ずれることを実測しました。フックは DCS 自身の
+`coord.LOtoLL` で変換するので近似がありません。そのため `exact` なシードは
+そのサーバでのライブ掃引より**優先**されます。
+
+同梱済みのマップ: Caucasus / Nevada / MarianaIslands / PersianGulf / SinaiMap / Syria。
+
+DCS の `getRunways()` が返す滑走路名はそのまま信用していません。平行滑走路の L/R が無い
+（Nellis は `3` と `21` の2本）、別の滑走路に名前が付いている（Sinai の Ben-Gurion は
+08/26 が `21`、12/30 が `8`）といった例が実データにあるため、方位と合わない名前は捨てて
+方位から付け直し、平行滑走路には位置関係から L/C/R を付けます。
+
 DCSServerBot が無い環境でも、この形式の JSON を置けば動きます。
 
 ```jsonc

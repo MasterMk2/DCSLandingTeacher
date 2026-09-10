@@ -225,25 +225,70 @@ def _parse_airbase(
     except (KeyError, TypeError, ValueError):
         return []
 
+    from functools import partial
+
+    from app.runways.models import (
+        EXACT_FIELDS,
+        assign_parallel_suffixes,
+        resolve_designator_clashes,
+        runway_pair_from_exact,
+    )
+
     name = str(airbase.get("id") or airbase.get("name") or "?")
-    out: list[Runway] = []
+    # (build, dcs_name, grid heading) per strip; names are settled across the
+    # whole airbase afterwards, because whether DCS hung a designator on the
+    # wrong strip only shows once two strips claim the same one.
+    strips: list[tuple[Any, Any, float]] = []
     for record in payload.get("runways") or []:
         pos = record.get("position") or {}
         try:
-            out.extend(
-                runway_pair_from_dcs(
+            elevation = float(pos.get("y", airbase.get("alt", 0.0)) or 0.0)
+            raw_length = record.get("length")
+            # A reported length of 0 is not a missing one. Ships come back from
+            # getRunways() exactly like that -- CVN-71 on Marianas: length 0,
+            # width 0 -- and `or 2000.0` turned the deck into a 2000 m runway
+            # frozen where the carrier started the mission. Decks move, and the
+            # carrier grader handles them. Only an ABSENT length gets the old
+            # default. No minimum beyond that: Sinai has a real 194 m strip.
+            length = 2000.0 if raw_length is None else float(raw_length)
+            if length < 1.0:
+                continue
+            width = float(record.get("width") or 45.0)
+            course = float(record["course"])
+            if all(record.get(field) is not None for field in EXACT_FIELDS):
+                # Captured by the in-game hook: DCS converted the points itself,
+                # so nothing about the projection has to be approximated here.
+                build = partial(
+                    runway_pair_from_exact,
                     airbase=name,
-                    dcs_name=record.get("Name"),
-                    course_rad=float(record["course"]),
+                    course_rad=course,
+                    centre_lat=float(record["lat"]),
+                    centre_lon=float(record["lng"]),
+                    probe_lat=float(record["probe_lat"]),
+                    probe_lon=float(record["probe_lng"]),
+                    probe_grid_m=float(record["probe_grid_m"]),
+                    elevation_m=elevation,
+                    length_m=length,
+                    width_m=width,
+                )
+            else:
+                build = partial(
+                    runway_pair_from_dcs,
+                    airbase=name,
+                    course_rad=course,
                     centre_x=float(pos["x"]),
                     centre_z=float(pos["z"]),
-                    elevation_m=float(pos.get("y", airbase.get("alt", 0.0)) or 0.0),
-                    length_m=float(record.get("length") or 2000.0),
-                    width_m=float(record.get("width") or 45.0),
+                    elevation_m=elevation,
+                    length_m=length,
+                    width_m=width,
                     airbase_ref=reference,
                     convergence_deg=convergence_deg,
                 )
-            )
-        except (KeyError, TypeError, ValueError):
+            # Build once here so a record that cannot be built is dropped with
+            # the others below, not raised later from the clash resolution.
+            build(dcs_name=record.get("Name"))
+            strips.append((build, record.get("Name"), math.degrees(-course) % 360.0))
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
             logger.debug("DCSSB: unusable runway record at %s", name, exc_info=True)
-    return out
+    pairs = resolve_designator_clashes(strips)
+    return assign_parallel_suffixes([runway for pair in pairs for runway in pair])
