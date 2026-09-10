@@ -26,7 +26,7 @@ export const IMPORT_SOURCE_PREFIX = "import:";
  * #33): a landing that the server would exclude on the next refetch must not
  * be shown as a live row in the meantime.
  *
- * The predicates mirror `list_landings` in backend/app/api/routes.py one for
+ * The predicates mirror `list_landings` in backend/src/app/api/routes.py one for
  * one, because every divergence surfaces as a row that pops into the list and
  * silently disappears on the next refetch (or the reverse):
  *

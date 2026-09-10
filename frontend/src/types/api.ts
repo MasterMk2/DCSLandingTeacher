@@ -1,5 +1,5 @@
 /**
- * TypeScript types mirroring backend/app/api/schemas.py.
+ * TypeScript types mirroring backend/src/app/api/schemas.py.
  * Keep in sync with the Pydantic response models.
  */
 

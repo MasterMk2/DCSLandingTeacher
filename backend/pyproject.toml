@@ -1,50 +1,29 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "dcs-landing-teacher-backend"
 version = "0.3.0"
 description = "DCS landing / carrier-arrestment review and grading tool (backend)"
 requires-python = ">=3.11"
-# License: MIT (see ../LICENSE at the repository root)
 license = "MIT"
 dependencies = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
-    "sqlalchemy>=2.0",
-    "alembic>=1.13",
-    "aiosqlite>=0.20",
-    "pydantic>=2.6",
-    "pydantic-settings>=2.2",
-    "httpx>=0.27",
+    "fastapi>=0.141",
+    "httpx2>=2.12",
+    "psycopg[binary]>=3.3",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.15",
+    "python-multipart>=0.0.32",
     "pyyaml>=6.0",
-    # multipart/form-data parsing for the ACMI file upload endpoint
-    "python-multipart>=0.0.9",
+    "sqlalchemy>=2.0",
+    "uvicorn[standard]>=0.52",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.4",
+    "aiosqlite>=0.22",
+    "basedpyright>=1.40",
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "ruff>=0.16",
 ]
-
-[tool.setuptools.packages.find]
-include = ["app*"]
-
-# Tuning YAMLs copied into the package by the image build (see
-# docker/backend.Dockerfile). Absent in a source checkout, where config/ is
-# read directly; present in the image, where it is the copy that an empty
-# /app/config bind mount cannot hide.
-[tool.setuptools.package-data]
-"app.grading" = ["defaults/*.yaml"]
-# Runway geometry captured from DCS, staged the same way. Undeclared data is
-# silently dropped from the wheel: the image built without this line had no
-# shipped geometry at all, and nothing said so -- production still had its own
-# swept cache, and every test passed the seed directory explicitly.
-# tests/test_packaged_config.py cross-checks this against the Dockerfile.
-"app.runways" = ["defaults/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -52,7 +31,7 @@ asyncio_mode = "auto"
 # Ensure the project root (backend/) is on sys.path so that tests can be
 # imported as a package ("from tests.helpers import ...") regardless of how
 # pytest is invoked (bare "pytest" vs "python -m pytest").
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100

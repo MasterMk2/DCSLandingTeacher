@@ -2,7 +2,7 @@
  * Pure coordinate-transform logic for the GCA (PAR) scope views and the
  * top-down track view. All functions are unit-testable without DOM.
  *
- * Backend units (see backend/app/grading/deviations.py):
+ * Backend units (see backend/src/app/grading/deviations.py):
  * - distance_to_go       : meters ahead of the touchdown point
  * - glideslope_deviation : meters above (+) / below (-) ideal slope
  * - centerline_deviation : meters right (+) of course
