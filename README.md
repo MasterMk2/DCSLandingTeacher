@@ -32,9 +32,18 @@ Tacview の ACMI データストリームから記録・評価し、ブラウザ
 
 ```mermaid
 flowchart LR
-    DCS[DCS Dedicated Server + Tacview] -- "ACMI TCP 31010" --> APP["FastAPI コンテナ<br/>(ingest → detect → grade)"]
-    APP --> DB[(SQLite<br/>Docker volume)]
-    APP -- "REST + WebSocket (/api)" --> UI[React Frontend<br/>FastAPI が静的配信]
+    BROWSER[Browser] --> PROXY
+    DCS["DCS Dedicated Server<br/>+<br/>Tacview"] -- "ACMI TCP" --> API
+    CONFIG["config/<br/>(grading.yaml, carriers.yaml)"] -. "read-only mount" .-> API
+
+    subgraph COMPOSE[Docker Compose]
+        direction LR
+        PROXY[Reverse proxy] --> UI["Frontend<br/>(React + nginx)"]
+        PROXY -- "REST + WebSocket" --> API["FastAPI<br/>(ingest → detect → grade)"]
+        API --> DB[("PostgreSQL<br/>postgres_data volume")]
+        MIGRATION["migration-job<br/>(Alembic)"] --> DB
+        MIGRATION -. "runs before API starts" .-> API
+    end
 ```
 
 本番（Docker）では **フロントエンドをビルドして FastAPI が静的配信する 1 コンテナ構成**が既定です。
