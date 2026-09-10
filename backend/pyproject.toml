@@ -39,6 +39,12 @@ include = ["app*"]
 # /app/config bind mount cannot hide.
 [tool.setuptools.package-data]
 "app.grading" = ["defaults/*.yaml"]
+# Runway geometry captured from DCS, staged the same way. Undeclared data is
+# silently dropped from the wheel: the image built without this line had no
+# shipped geometry at all, and nothing said so -- production still had its own
+# swept cache, and every test passed the seed directory explicitly.
+# tests/test_packaged_config.py cross-checks this against the Dockerfile.
+"app.runways" = ["defaults/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

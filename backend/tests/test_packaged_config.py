@@ -100,3 +100,40 @@ def test_the_image_build_copies_both_yamls_into_the_package() -> None:
     )
     pyproject = (REPO_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'defaults/*.yaml' in pyproject, "package-data must ship the staged copy"
+
+
+def test_everything_the_build_stages_into_the_package_is_declared() -> None:
+    """Staged but undeclared data is dropped from the wheel, in silence.
+
+    This shipped: ``COPY config/runways/ ./app/runways/defaults/`` was added to
+    the Dockerfile without the matching ``package-data`` entry, so the image
+    carried no runway geometry at all. Nothing failed -- every test passed the
+    seed directory explicitly, and the deployed server still had its own swept
+    cache to fall back on. The mistake is structural (add a COPY, forget the
+    declaration), so the check is too: read both files and compare.
+    """
+    import re
+    import tomllib
+
+    dockerfile = (REPO_ROOT / "docker" / "backend.Dockerfile").read_text(encoding="utf-8")
+    declared = tomllib.loads(
+        (REPO_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["setuptools"]["package-data"]
+
+    staged = re.findall(r"^COPY\s+(.+?)\s+\./app/(\w+)/defaults/\s*$", dockerfile, re.M)
+    assert staged, "no staged defaults found -- has the Dockerfile moved?"
+    for sources, package in staged:
+        suffixes = set()
+        for source in sources.split():
+            path = REPO_ROOT / source
+            if path.is_dir():
+                suffixes |= {p.suffix for p in path.iterdir() if p.is_file()}
+            else:
+                assert path.is_file(), f"{source} staged by the build does not exist"
+                suffixes.add(path.suffix)
+        patterns = declared.get(f"app.{package}", [])
+        for suffix in suffixes:
+            assert f"defaults/*{suffix}" in patterns, (
+                f"the build stages *{suffix} into app/{package}/defaults/ but "
+                f"package-data declares {patterns} -- the wheel will not carry it"
+            )
