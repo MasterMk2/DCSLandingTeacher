@@ -32,6 +32,12 @@ COPY backend/app ./app
 # Copied at build time from the single canonical copy in config/, so the two
 # cannot drift apart in git.
 COPY config/grading.yaml config/carriers.yaml ./app/grading/defaults/
+# Runway geometry captured from DCS, for the same reason and by the same route.
+# A sweep needs the map loaded on a DCS server, so a theatre nobody is flying
+# cannot be captured on demand -- these are the ones already captured, and they
+# are what lets an import of an old recording resolve at all. Inside the
+# package, where the empty /app/config mount cannot shadow them.
+COPY config/runways/ ./app/runways/defaults/
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels .
 
 # ---------------------------------------------------------------------------

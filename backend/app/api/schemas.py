@@ -171,3 +171,31 @@ class ImportStartResponse(BaseModel):
 
 class ImportJobListResponse(BaseModel):
     items: list[ImportJobOut]
+
+
+class TheatreOut(BaseModel):
+    """One map this server can grade land landings on."""
+
+    theatre: str
+    runways: int
+    airbases: int
+    #: "swept" (captured here), "shipped" (came with the build), "memory".
+    origin: str
+
+
+class RunwayInventoryResponse(BaseModel):
+    theatres: list[TheatreOut]
+    #: Theatres loaded on a DCS server right now, i.e. what can be swept.
+    running: list[str]
+    #: False when DCSServerBot is not configured: shipped geometry still
+    #: resolves, but nothing new can be captured.
+    can_sweep: bool
+
+
+class SweepResponse(BaseModel):
+    theatre: str | None = None
+    swept: bool
+    server: str | None = None
+    runways: int | None = None
+    airbases: int | None = None
+    reason: str | None = None

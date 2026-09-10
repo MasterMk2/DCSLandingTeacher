@@ -33,6 +33,7 @@ from app.models.migrations import run_migrations
 from app.pipeline import LandingPipeline
 from app.runways.dcssb import DcssbClient
 from app.runways.provider import RunwayProvider
+from app.runways.seeds import resolve_seed_dir
 
 logger = getLogger(__name__)
 
@@ -233,6 +234,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.multi_source_manager = multi_source_manager
         app.state.notifier = notifier
         app.state.pipeline = pipeline
+        app.state.runway_provider = runway_provider
         app.state.import_manager = import_manager
         # Expose the live grading config so operators/reload can read it back
         # (Issue #40).
@@ -350,14 +352,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
-    """Runway provider, or ``None`` when DCSServerBot is not configured.
+    """Runway provider, or ``None`` when there is no geometry source at all.
 
-    Without it land landings fall back to the touchdown-referenced
-    approximation, which is less accurate but needs no external service.
+    Without DCSServerBot nothing can be *swept*, but the geometry shipped with
+    the build still resolves every map it covers, so a provider is still worth
+    having: an import from a theatre captured earlier grades against the real
+    runway on a machine that has never talked to a DCS server. Only when there
+    is neither a bot nor any shipped geometry do land landings fall back to the
+    touchdown-referenced approximation.
     """
+    seed_dir = resolve_seed_dir(settings.runway_seed_dir)
     if not settings.dcssb_base_url:
-        logger.info("DCSSB not configured; land grading uses estimated geometry")
-        return None
+        if seed_dir is None:
+            logger.info("DCSSB not configured; land grading uses estimated geometry")
+            return None
+        logger.info("DCSSB not configured; using shipped runway geometry (%s)", seed_dir)
+        return RunwayProvider(None, settings.runway_cache_dir, seed_dir=seed_dir)
     client = DcssbClient(
         settings.dcssb_base_url,
         api_prefix=settings.dcssb_api_prefix,
@@ -370,6 +380,7 @@ def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
         client,
         settings.runway_cache_dir,
         server_name=settings.dcssb_server_name,
+        seed_dir=seed_dir,
     )
 
 

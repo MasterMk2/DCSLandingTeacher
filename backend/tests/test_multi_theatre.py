@@ -313,6 +313,183 @@ async def test_overlapping_maps_resolve_to_the_nearer_airfield(tmp_path) -> None
     assert matched.threshold_lat == pytest.approx(33.002)
 
 
+# --- geometry that ships with the build ---------------------------------------
+
+
+def _write_pool(directory, theatre: str, runways: list[Runway], version=None) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"runways-{theatre}.json").write_text(
+        json.dumps(
+            {
+                "version": CACHE_VERSION if version is None else version,
+                "theatre": theatre,
+                "runways": [r.as_dict() for r in runways],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_a_shipped_map_resolves_with_no_dcs_server_at_all(tmp_path) -> None:
+    """An import must not need the map to be loaded somewhere right now.
+
+    Sweeping requires the mission to be running (the terrain files are
+    encrypted and ``/airbase`` runs Lua in the loaded mission), so a recording
+    from a map nobody is flying could never be graded against a real runway.
+    Geometry captured once and shipped with the build closes that: no client,
+    no cache, and the landing still resolves.
+    """
+    seeds = tmp_path / "seeds"
+    _write_pool(seeds, "Nevada", _nellis())
+
+    provider = RunwayProvider(None, tmp_path / "cache", seed_dir=seeds)
+    left = next(r for r in _nellis() if r.name == "03L")
+    lat, lon = offset_position(
+        left.threshold_lat, left.threshold_lon, left.heading_deg, 300.0, 0.0
+    )
+
+    matched = await provider.resolve(lat, lon, GRID_HEADING)
+    assert matched is not None and matched.name == "03L"
+    assert [t["origin"] for t in provider.inventory()] == ["shipped"]
+
+
+async def test_a_local_sweep_wins_over_the_shipped_copy(tmp_path) -> None:
+    """Geometry swept on this server describes this server's DCS version."""
+    seeds, cache = tmp_path / "seeds", tmp_path / "cache"
+    shipped = Runway(
+        airbase="Nellis (shipped)",
+        name="03L",
+        threshold_lat=NELLIS_LAT,
+        threshold_lon=NELLIS_LON,
+        elevation_m=570.0,
+        heading_deg=GRID_HEADING,
+        length_m=3050.0,
+        width_m=45.0,
+    )
+    local = Runway(**{**shipped.__dict__, "airbase": "Nellis (swept here)"})
+    _write_pool(seeds, "Nevada", [shipped])
+    _write_pool(cache, "Nevada", [local])
+
+    provider = RunwayProvider(None, cache, seed_dir=seeds)
+    matched = await provider.resolve(NELLIS_LAT, NELLIS_LON, GRID_HEADING)
+
+    assert matched is not None and matched.airbase == "Nellis (swept here)"
+    assert [t["origin"] for t in provider.inventory()] == ["swept"]
+
+
+async def test_a_stale_cache_file_is_ignored_by_the_directory_scan(tmp_path) -> None:
+    """v1 geometry is ~5 deg rotated and must not be served from anywhere.
+
+    ``_load_cache`` rejected it, but the directory scan that ``resolve`` runs
+    first did not look at the version at all -- so the check that existed was
+    the one on the path nothing took.
+    """
+    cache = tmp_path / "cache"
+    _write_pool(cache, "Nevada", _nellis(), version=1)
+
+    provider = RunwayProvider(None, cache)
+    assert await provider.resolve(NELLIS_LAT, NELLIS_LON, GRID_HEADING) is None
+    assert provider.inventory() == []
+
+
+async def test_sweep_recaptures_a_theatre_that_is_already_cached(tmp_path) -> None:
+    """The automatic path never re-sweeps; a cache hit does not re-check.
+
+    So a map whose stored geometry is wrong (or was captured by an older
+    build) can only be fixed by asking for it explicitly.
+    """
+    cache = tmp_path / "cache"
+    _write_pool(cache, "Nevada", [])  # cached, and empty
+
+    bot = _FakeBot({"NTTR": "Nevada"}, runways={"Nevada": _nellis()})
+    provider = RunwayProvider(bot, cache)
+    assert await provider.runways_for("Nevada") == []  # cached: no sweep
+    assert bot.swept == []
+
+    result = await provider.sweep("Nevada")
+    assert result["swept"] is True and result["runways"] == 4
+    assert bot.swept == ["NTTR"]
+    assert await provider.resolve(NELLIS_LAT, NELLIS_LON, GRID_HEADING) is not None
+
+
+async def test_sweep_refuses_when_it_cannot_tell_which_map_is_meant(tmp_path) -> None:
+    bot = _FakeBot({"A": "Caucasus", "B": "Nevada"})
+    result = await RunwayProvider(bot, tmp_path).sweep()
+    assert result["swept"] is False and "several theatres" in result["reason"]
+
+
+async def test_export_round_trips_into_a_shipped_seed(tmp_path) -> None:
+    """What the export endpoint returns must be loadable as a seed verbatim."""
+    cache, seeds = tmp_path / "cache", tmp_path / "seeds"
+    _write_pool(cache, "Nevada", _nellis())
+    payload = RunwayProvider(None, cache).export("Nevada")
+    assert payload is not None
+
+    seeds.mkdir()
+    (seeds / "runways-Nevada.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    provider = RunwayProvider(None, tmp_path / "empty", seed_dir=seeds)
+    assert {r.name for r in await provider.runways_for("Nevada")} == {
+        "03L",
+        "21R",
+        "03R",
+        "21L",
+    }
+
+
+async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
+    """The operator path: see what is covered, then move a capture into git.
+
+    Exercised through the app so the wiring is proved too -- an inventory that
+    only works when the provider is handed in by a test proves nothing about a
+    server whose provider is built from settings.
+    """
+    import httpx
+
+    from app.api.main import create_app
+    from app.config import Settings
+
+    seeds = tmp_path / "seeds"
+    _write_pool(seeds, "Nevada", _nellis())
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+        acmi_enabled=False,
+        # No DCSServerBot at all: shipped geometry has to stand on its own.
+        dcssb_base_url="",
+        runway_cache_dir=str(tmp_path / "cache"),
+        runway_seed_dir=str(seeds),
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as http:
+            listing = await http.get("/api/v1/runways")
+            assert listing.status_code == 200
+            body = listing.json()
+            assert body["can_sweep"] is False and body["running"] == []
+            assert body["theatres"] == [
+                {
+                    "theatre": "Nevada",
+                    "runways": 4,
+                    "airbases": 1,
+                    "origin": "shipped",
+                }
+            ]
+
+            export = await http.get("/api/v1/runways/Nevada")
+            assert export.status_code == 200
+            assert {r["name"] for r in export.json()["runways"]} == {
+                "03L",
+                "21R",
+                "03R",
+                "21L",
+            }
+            assert (await http.get("/api/v1/runways/Syria")).status_code == 404
+
+
 # --- the row says where -------------------------------------------------------
 
 

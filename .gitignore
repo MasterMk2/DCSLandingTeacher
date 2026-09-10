@@ -50,3 +50,5 @@ Testdata/
 # hidden by a bind mount (docker/backend.Dockerfile). config/ stays the single
 # canonical copy in git; committing this one would let the two drift.
 backend/app/grading/defaults/
+# Staged from config/runways/ by the image build, same as the YAMLs above.
+backend/app/runways/defaults/

@@ -30,7 +30,10 @@ from app.api.schemas import (
     LandingSummary,
     RegradeRequest,
     RegradeResponse,
+    RunwayInventoryResponse,
     SourceInfo,
+    SweepResponse,
+    TheatreOut,
     TouchdownState,
 )
 from app.models.entities import DcsObject, Flight, ImportJobRow, Landing
@@ -371,6 +374,68 @@ async def reload_grading_config(request: Request) -> dict:
         "reloaded": True,
         "config_reload_total": request.app.state.config_reload_total,
     }
+
+
+def _runway_provider(request: Request):
+    provider = getattr(request.app.state, "runway_provider", None)
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="no runway geometry source configured",
+        )
+    return provider
+
+
+@protected_router.get("/runways", response_model=RunwayInventoryResponse)
+async def list_runway_theatres(request: Request) -> RunwayInventoryResponse:
+    """Which maps this server can grade against, and which can be captured now.
+
+    A theatre can only be swept while its map is loaded on a DCS server, so
+    ``running`` is the list of maps that are capturable *at this moment*;
+    everything in ``theatres`` already resolves whether or not anything is
+    running.
+    """
+    provider = _runway_provider(request)
+    return RunwayInventoryResponse(
+        theatres=[TheatreOut(**t) for t in provider.inventory()],
+        running=sorted(await provider.running_theatres()),
+        can_sweep=provider.enabled,
+    )
+
+
+@protected_router.post("/runways/sweep", response_model=SweepResponse)
+async def sweep_runways(
+    request: Request,
+    theatre: str | None = Query(
+        default=None,
+        description="Map to sweep; omitted = the only theatre currently running.",
+    ),
+) -> SweepResponse:
+    """Capture a running map's runway geometry now.
+
+    Otherwise geometry is only captured as a side effect of a landing on that
+    map, which means a map that is up right now but has nobody flying it stays
+    uncaptured -- and once it is unloaded there is no way to get it at all.
+
+    Paced against the DCS simulation thread (``DLT_DCSSB_REQUEST_SPACING_MS``),
+    so this request takes roughly 1.5 s per airbase: tens of seconds for a
+    large map. Requires the shared token.
+    """
+    return SweepResponse(**await _runway_provider(request).sweep(theatre))
+
+
+@protected_router.get("/runways/{theatre}")
+async def export_runways(request: Request, theatre: str) -> dict:
+    """The stored geometry for one map, in the on-disk cache format.
+
+    This is how a capture leaves the machine that made it: save the body as
+    ``config/runways/runways-<theatre>.json``, commit it, and every later build
+    resolves that map without needing the DCS server it came from.
+    """
+    payload = _runway_provider(request).export(theatre)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="theatre not cached")
+    return payload
 
 
 # ---------------------------------------------------------------------------

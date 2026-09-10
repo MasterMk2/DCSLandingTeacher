@@ -264,10 +264,37 @@ Islands など、どのマップでも同じ経路で動きます。
 - 解決できた滑走路は着陸行の「空港 / 空母」欄に `Nellis 03L` の形で入ります。
   推定ジオメトリで採点された着陸は空欄のままです（どこに降りたか分からないため）。
 
-DCSServerBot を使えない環境では、キャッシュファイルを手で置くこともできます。
+#### マップを1回だけ「押さえる」
+
+滑走路ジオメトリは **そのマップがロードされている間しか取れません**。terrain 側の
+`terrain.cfg.lua.pak.crypt` は暗号化されており、DCSServerBot の `/airbase` は
+ロード中のミッションに対して Lua を実行するためです。つまり誰も飛んでいないマップは
+その場では取得できず、**一度捕まえて同梱しておく**のが唯一の方法になります。
+
+そのための操作口があります（`DLT_AUTH_TOKEN` 設定時はトークンが必要）。
+
+```bash
+# 1) いま何が解決でき、いま何を捕まえられるか
+curl -s localhost:8000/api/v1/runways | jq
+# => {"theatres":[{"theatre":"Caucasus","runways":42,"airbases":21,"origin":"shipped"}],
+#     "running":["Nevada"], "can_sweep":true}
+
+# 2) 動いているうちに捕まえる（空港1つあたり約1.5秒。着陸が発生するのを待つ必要はない）
+curl -s -X POST 'localhost:8000/api/v1/runways/sweep?theatre=Nevada' | jq
+
+# 3) リポジトリに焼く → 以後どのビルドでも DCS サーバ無しで解決できる
+curl -s localhost:8000/api/v1/runways/Nevada > config/runways/runways-Nevada.json
+```
+
+`config/runways/` に置いた JSON はイメージビルド時にパッケージ内部
+（`app/runways/defaults/`）へ複製され、`/app/config` への空バインドマウントに
+潰されません（tuning YAML と同じ理屈・同じ経路）。読み込み順は
+**書き込み可能キャッシュ → 同梱シード**で、そのサーバで掃引した結果が常に優先されます。
+
+DCSServerBot が無い環境でも、この形式の JSON を置けば動きます。
 
 ```jsonc
-// cache/runways-Nevada.json
+// config/runways/runways-Nevada.json（cache/ に置いたものと同一形式）
 {
   "version": 2,          // CACHE_VERSION。古い版は無視され再掃引されます
   "theatre": "Nevada",
