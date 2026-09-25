@@ -12,7 +12,12 @@ license = "MIT"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
-    "sqlalchemy>=2.0",
+    # The asyncio extension needs greenlet. SQLAlchemy 2.0 pulled it in by
+    # itself; 2.1 (on PyPI since CI run 2026-09-25) only does so through the
+    # [asyncio] extra, and without it every import of sqlalchemy.ext.asyncio
+    # dies with "No module named 'greenlet'" -- in CI, and in a freshly built
+    # image, where the app would not even start.
+    "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "pydantic>=2.6",
