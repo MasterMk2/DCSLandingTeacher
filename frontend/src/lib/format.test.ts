@@ -152,5 +152,11 @@ describe("formatMetric", () => {
       "ブレイク最大バンク角（記録の Roll）",
     );
     expect(formatMetric("pattern_break_sustained_s", 6.4).text).toBe("6.4 s");
+    // 1% ルール: 目標は G、比は倍率。
+    expect(formatMetric("pattern_break_one_percent_rule_g", 3.03)).toEqual({
+      label: "1% ルールの目標 G（進入速度 kt ÷ 100、経験則）",
+      text: "3.03 G",
+    });
+    expect(formatMetric("pattern_break_max_g_to_one_percent", 0.96).text).toBe("0.96 倍");
   });
 });

@@ -128,7 +128,6 @@ def segment_approach(
     smoothing_s = float(settings.get("track_smoothing_s", 2.0))
     min_step_m = float(settings.get("track_min_step_m", 20.0))
     align_deg = float(settings.get("rollout_align_deg", 15.0))
-    initial_align_deg = float(settings.get("initial_align_deg", 20.0))
     downwind_cone_deg = float(settings.get("downwind_cone_deg", 60.0))
     downwind_max_turn_rate = float(
         settings.get("downwind_max_turn_rate_deg_s", 1.5)
@@ -173,27 +172,219 @@ def segment_approach(
     segments.downwind = [point.sample for point in run]
     if run:
         start = track.index(run[0])
-        segments.break_leg = _break_leg(track[:start], initial_align_deg)
+        segments.break_leg = _break_leg(track[:start], BreakBounds.from_settings(settings))
     return segments
 
 
-def _break_leg(
-    before_downwind: list[TrackPoint], initial_align_deg: float
-) -> list[DeviationSample]:
-    """The turn from the initial onto the downwind.
+@dataclass(frozen=True)
+class BreakBounds:
+    """What may still count as the break when walking back from the downwind.
 
-    Walk back from the downwind while the ground track is NOT pointing down
-    the landing direction; the moment it is, the initial has been reached
-    and the break is everything after it. Defining it by "still turning"
-    rather than by a heading band means it works whichever way the pattern
-    is flown and however wide the break is.
+    Read from ``pattern.*`` in the grading config; the defaults here are the
+    same numbers as ``config/grading.yaml`` and ``app.grading.config``.
     """
-    leg: list[TrackPoint] = []
+
+    #: Track within this of the landing direction is the initial, where the
+    #: break has not started yet.
+    initial_align_deg: float = 20.0
+    #: Below this track-angle rate (deg/s) the aircraft is not turning. The
+    #: same number the downwind finder uses for "stopped turning".
+    turn_rate_min_deg_s: float = 1.5
+    #: A non-turning stretch longer than this inside the leg ends it: the
+    #: break is one continuous turn, and whatever preceded a pause of this
+    #: length is a different manoeuvre (an angled initial, a spacing S-turn).
+    straight_tolerance_s: float = 5.0
+    #: Once the turn has reversed by this much against its own direction the
+    #: leg ends. Tolerates the wobble of a smoothed track angle, not an
+    #: opposite turn.
+    reverse_tolerance_deg: float = 15.0
+    #: A break is a 180 deg turn; more than this and the walk has run into
+    #: whatever orbit or spiral preceded it.
+    max_turn_deg: float = 210.0
+    #: Longest a break can take. 60 s is a full 180 at 3 deg/s, the gentlest
+    #: rate anyone flies a pattern at; a leg longer than that is not a break.
+    max_duration_s: float = 60.0
+    #: How far back from the downwind the break is looked for. Wider than
+    #: the break itself because pilots adjust after it -- a pause, a dogleg,
+    #: an overshoot correction -- before the track settles on the downwind.
+    lookback_s: float = 90.0
+    #: A turn of less than this is not a break (reported, not judged).
+    min_turn_deg: float = 90.0
+
+    @classmethod
+    def from_settings(cls, settings: dict[str, Any]) -> "BreakBounds":
+        bands = settings.get("pattern", {}) or {}
+        return cls(
+            initial_align_deg=float(settings.get("initial_align_deg", 20.0)),
+            turn_rate_min_deg_s=float(settings.get("downwind_max_turn_rate_deg_s", 1.5)),
+            straight_tolerance_s=float(bands.get("break_straight_tolerance_s", 3.0)),
+            reverse_tolerance_deg=float(bands.get("break_reverse_tolerance_deg", 15.0)),
+            max_turn_deg=float(bands.get("max_break_turn_deg", 210.0)),
+            max_duration_s=float(bands.get("max_break_s", 60.0)),
+            lookback_s=float(bands.get("break_lookback_s", 90.0)),
+            min_turn_deg=float(bands.get("min_break_turn_deg", 90.0)),
+        )
+
+
+@dataclass
+class TurnRun:
+    """One continuous turn in one direction: its points and heading change."""
+
+    points: list[TrackPoint]
+    change_deg: float
+
+    @property
+    def duration_s(self) -> float:
+        return self.points[-1].sample.time - self.points[0].sample.time
+
+
+def _step(earlier: TrackPoint, later: TrackPoint) -> tuple[float, float]:
+    """(signed heading change, |rate| deg/s) from ``earlier`` to ``later``."""
+    change = _wrap180(later.angle_deg - earlier.angle_deg)
+    dt = later.sample.time - earlier.sample.time
+    return change, (abs(change) / dt if dt > 0 else 0.0)
+
+
+def _turn_runs(points: list[TrackPoint], bounds: BreakBounds) -> list[TurnRun]:
+    """Split a stretch of track into continuous same-direction turns.
+
+    A run starts at the first turning step, absorbs pauses no longer than
+    ``straight_tolerance_s``, and ends at a longer pause or when the turn
+    reverses by more than ``reverse_tolerance_deg`` -- in which case the run
+    is cut back to where its heading change peaked and the reversal begins
+    a new run of its own. Straight points are trimmed off both ends, so a
+    run spans roll-in to roll-out.
+    """
+    runs: list[TurnRun] = []
+    current: list[TrackPoint] = []
+    accumulated = 0.0
+    direction = 0.0
+    peak = 0.0
+    peak_index = 0
+    straight_since: float | None = None
+
+    def close(upto: int | None = None) -> None:
+        nonlocal current, accumulated, direction, peak, peak_index, straight_since
+        run = current if upto is None else current[: upto + 1]
+        # Trim the straight tail: a pause that ended the run is not part of it.
+        while len(run) >= 2 and _step(run[-2], run[-1])[1] < bounds.turn_rate_min_deg_s:
+            run.pop()
+        if len(run) >= 2:
+            change = sum(_step(a, b)[0] for a, b in zip(run, run[1:]))
+            runs.append(TurnRun(run, change))
+        current = []
+        accumulated = direction = peak = 0.0
+        peak_index = 0
+        straight_since = None
+
+    for earlier, point in zip(points, points[1:]):
+        change, rate = _step(earlier, point)
+        if not current:
+            if rate < bounds.turn_rate_min_deg_s:
+                continue
+            current = [earlier, point]
+            accumulated = change
+            direction = 1.0 if change > 0 else -1.0
+            peak = abs(change)
+            peak_index = 1
+            continue
+        if rate < bounds.turn_rate_min_deg_s:
+            if straight_since is None:
+                straight_since = earlier.sample.time
+            if point.sample.time - straight_since > bounds.straight_tolerance_s:
+                close()
+                continue
+            current.append(point)
+            accumulated += change
+            continue
+        straight_since = None
+        accumulated += change
+        progress = direction * accumulated
+        if progress < peak - bounds.reverse_tolerance_deg:
+            # Turned back the other way: the break ended where the heading
+            # change peaked; what follows is a correction, a run of its own.
+            restart_from = current[peak_index]
+            close(peak_index)
+            current = [restart_from, point]
+            change, _ = _step(restart_from, point)
+            accumulated = change
+            direction = 1.0 if change > 0 else -1.0
+            peak = abs(change)
+            peak_index = 1
+            continue
+        current.append(point)
+        if progress > peak:
+            peak = progress
+            peak_index = len(current) - 1
+    if current:
+        close()
+    return runs
+
+
+def _break_leg(
+    before_downwind: list[TrackPoint], bounds: BreakBounds
+) -> list[DeviationSample]:
+    """The break: the last real turn before the downwind.
+
+    Looks back ``lookback_s`` from the downwind (or to the initial, i.e. a
+    straight stretch flown down the landing direction), splits that into
+    continuous same-direction turns (:func:`_turn_runs`) and takes the LAST
+    one that turned at least ``min_turn_deg``. A run longer than
+    ``max_turn_deg`` or ``max_duration_s`` is cut to its final part: an
+    orbit or a spiral is not a break, but its last half-turn onto the
+    downwind is the nearest thing to one. If no run turned enough, the last
+    run is reported anyway (so the picture shows it), and ``mark_judged``
+    keeps it out of the score.
+
+    Why "last turn of at least 90 deg" and not simply "everything after the
+    initial", which is what this did until 2026-09-25: a recording whose
+    initial was never flown down the runway heading -- a 45 deg entry, a
+    tactical initial, manoeuvring before joining -- had its "break" run back
+    to the start of the capture. Measured on this server's 725 judged
+    breaks: a 75 s "break" holding a 10.8 G turn 4.7 km from the runway,
+    entries "at 20,097 ft", heading changes of 500 deg. And why not "the last
+    continuous turn": a third of the real breaks here are flown in two
+    stages -- a 130-150 deg break, a pause or a dogleg, then a gentle turn
+    onto the downwind -- and the last turn is then the 30-40 deg adjustment,
+    not the break.
+    """
+    if not before_downwind:
+        return []
+    end_time = before_downwind[-1].sample.time
+    stretch: list[TrackPoint] = []
+    later: TrackPoint | None = None
     for point in reversed(before_downwind):
-        if abs(point.angle_deg) <= initial_align_deg:
+        if end_time - point.sample.time > bounds.lookback_s:
             break
-        leg.append(point)
-    return [point.sample for point in reversed(leg)]
+        rate = _step(point, later)[1] if later is not None else float("inf")
+        # The initial: pointing down the landing direction AND flying
+        # straight. A point still inside the alignment band but already
+        # turning is the roll-in, and belongs to the break.
+        if abs(point.angle_deg) <= bounds.initial_align_deg and rate < bounds.turn_rate_min_deg_s:
+            break
+        stretch.append(point)
+        later = point
+    stretch.reverse()
+
+    runs = _turn_runs(stretch, bounds)
+    if not runs:
+        return []
+    chosen = next(
+        (run for run in reversed(runs) if abs(run.change_deg) >= bounds.min_turn_deg),
+        # Nothing turned enough: report the biggest turn there was (a capture
+        # that starts mid-break, a two-stage join), so the picture still
+        # shows the nearest thing to a break. ``mark_judged`` keeps it out
+        # of the score.
+        max(runs, key=lambda run: abs(run.change_deg)),
+    )
+    points = chosen.points
+    # Cut an over-long run to its final part.
+    while len(points) > 2 and (
+        points[-1].sample.time - points[0].sample.time > bounds.max_duration_s
+        or abs(sum(_step(a, b)[0] for a, b in zip(points, points[1:]))) > bounds.max_turn_deg
+    ):
+        points = points[1:]
+    return [point.sample for point in points]
 
 
 def _wrap180(degrees: float) -> float:
@@ -383,10 +574,18 @@ def mark_judged(metrics: dict[str, Any], settings: dict[str, Any]) -> dict[str, 
     """
     bands = settings.get("pattern", {}) or {}
     break_duration = metrics.get("break_duration_s")
+    # A break is a turn of about 180 deg. A leg that only turned 40 deg onto
+    # the downwind (a 45 deg entry, a wide join) is reported but not judged:
+    # its altitude spread and its G describe a different manoeuvre.
+    turned = metrics.get("break_heading_change_deg")
+    turned_enough = (
+        turned is None or abs(turned) >= float(bands.get("min_break_turn_deg", 90.0))
+    )
     metrics["break_judged"] = bool(
         break_duration is not None
         and break_duration >= float(bands.get("min_break_s", 6.0))
         and metrics.get("break_altitude_spread_m") is not None
+        and turned_enough
     )
     downwind_duration = metrics.get("downwind_duration_s")
     metrics["downwind_judged"] = bool(
@@ -470,6 +669,10 @@ def pattern_metrics(
         "break_entry_agl_m": None,
         "break_heading_change_deg": None,
         "break_mean_turn_rate_deg_s": None,
+        # 「1% ルール」(進入速度 kt の 1% を G で引く、という経験則) の目標 G と、
+        # 実際のピークがその何倍だったか。参考値で採点しない。
+        "break_one_percent_rule_g": None,
+        "break_max_g_to_one_percent": None,
         # ブレイク開始位置 (滑走路軸上、+ = 基準点の手前 / - = 通り過ぎた後)。
         # 「ナンバーズで割ったか、デパーチャーエンドまで流したか」。
         "break_start_along_m": None,
@@ -567,6 +770,8 @@ def pattern_metrics(
     return mark_judged(metrics, settings or {})
 
 
+MS_TO_KT = 3600.0 / 1852.0
+
 #: G を「掛けている」とみなす下限: ピークの超過分 (n_max - 1) の半分以上。
 #: ロールイン・ロールアウトの 1 G 付近を除いて、定常部分の平均と変動を
 #: 見るための切り分け。
@@ -630,6 +835,17 @@ def break_kinematics(
     if speeds:
         out["break_entry_speed_ms"] = round(speeds[0], 2)
         out["break_exit_speed_ms"] = round(speeds[-1], 2)
+        # The "one per cent" rule of thumb: pull G equal to 1% of the entry
+        # airspeed in knots (350 kt -> 3.5 G). Community lore, not NATOPS,
+        # so it is reported as a reference next to the G actually pulled and
+        # never scored. Ground speed stands in for KIAS: at pattern height
+        # the two differ by a few per cent plus the wind. Meaningless below
+        # ~100 kt (helicopters, warbirds), so the ratio is left out there.
+        target = speeds[0] * MS_TO_KT / 100.0
+        out["break_one_percent_rule_g"] = round(target, 2)
+        peak = out.get("break_max_load_factor")
+        if peak is not None and target >= 1.0:
+            out["break_max_g_to_one_percent"] = round(peak / target, 2)
     if leg[0].agl is not None:
         out["break_entry_agl_m"] = round(leg[0].agl, 2)
     out["break_start_along_m"] = round(along_of(leg[0]), 1)

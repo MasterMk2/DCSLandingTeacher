@@ -105,6 +105,15 @@ _DEFAULTS: dict[str, Any] = {
         "pattern": {
             "min_downwind_s": 5.0,
             "min_break_s": 6.0,
+            # ブレイク脚の境界 (pattern.BreakBounds)。ダウンウィンドから遡って
+            # 「同じ向きに回り続けている間」だけをブレイクとし、直進・逆旋回・
+            # 210 度超・60 秒超で打ち切る。旋回量 90 度未満の脚は採点しない。
+            "max_break_s": 60.0,
+            "max_break_turn_deg": 210.0,
+            "min_break_turn_deg": 90.0,
+            "break_lookback_s": 90.0,
+            "break_straight_tolerance_s": 5.0,
+            "break_reverse_tolerance_deg": 15.0,
             # ダウンウィンド脚が実際に見つかったときだけオーバーヘッド扱い。
             "require_downwind": True,
             "break_altitude_spread_m": {"good": 30.0, "fair": 75.0, "poor": 180.0},
