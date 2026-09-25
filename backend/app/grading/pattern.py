@@ -447,6 +447,34 @@ def pattern_metrics(
         "break_samples": len(segments.break_leg),
         "break_start_time": None,
         "break_end_time": None,
+        # ブレイクの G。軌跡から導いた法線荷重倍数 (kinematics.py) で、
+        # 測定のみ・採点しない: 「何 G で回るべきか」は機体と部隊の流儀で
+        # 違い、ここには較正データが無い (abeam 距離と同じ扱い)。
+        #   max      : ピーク。
+        #   mean     : ブレイク区間全体の平均 (ロールイン・アウトを含む)。
+        #   sustained: G を掛けている部分 (ピークの半分以上) の平均と、
+        #              その部分の標準偏差 = 「G の変動」。滑らかに一定 G で
+        #              回れば小さく、操縦桿を出し入れすれば大きい。
+        "break_max_load_factor": None,
+        "break_mean_load_factor": None,
+        "break_sustained_load_factor": None,
+        "break_load_factor_std": None,
+        "break_sustained_s": None,
+        # 記録に Roll があれば、実際に取ったバンク角 (sustained 部分)。
+        "break_max_bank_deg": None,
+        "break_mean_bank_deg": None,
+        # 入口と出口: 何 kt で入って何 kt でダウンウィンドに出たか、
+        # 入った高度、どれだけ回ったか、平均旋回率。
+        "break_entry_speed_ms": None,
+        "break_exit_speed_ms": None,
+        "break_entry_agl_m": None,
+        "break_heading_change_deg": None,
+        "break_mean_turn_rate_deg_s": None,
+        # ブレイク開始位置 (滑走路軸上、+ = 基準点の手前 / - = 通り過ぎた後)。
+        # 「ナンバーズで割ったか、デパーチャーエンドまで流したか」。
+        "break_start_along_m": None,
+        # ベースターン (ダウンウィンド終了〜ロールアウト) のピーク G。
+        "base_max_load_factor": None,
         # 軌跡ビューが脚を色分けするための時刻 (ミッション時間、秒)。
         "rollout_time": segments.rollout_time,
         "downwind_start_time": None,
@@ -525,7 +553,97 @@ def pattern_metrics(
         agls = [s.agl for s in segments.break_leg if s.agl is not None]
         if len(agls) >= 2:
             metrics["break_altitude_spread_m"] = round(max(agls) - min(agls), 2)
+        metrics.update(break_kinematics(segments.break_leg, segments.track))
+
+    if segments.downwind and segments.rollout_time is not None:
+        base = [
+            s.load_factor
+            for s in analysis.samples
+            if s.load_factor is not None
+            and segments.downwind[-1].time < s.time <= segments.rollout_time
+        ]
+        if base:
+            metrics["base_max_load_factor"] = round(max(base), 2)
     return mark_judged(metrics, settings or {})
+
+
+#: G を「掛けている」とみなす下限: ピークの超過分 (n_max - 1) の半分以上。
+#: ロールイン・ロールアウトの 1 G 付近を除いて、定常部分の平均と変動を
+#: 見るための切り分け。
+SUSTAINED_LOAD_FRACTION = 0.5
+
+#: ACMI の Roll がこの範囲を超えていたら壊れている (実記録で地上滑走中に
+#: 13000 度前後の値が出ている)。バンク角の統計からは外す。
+MAX_SANE_ROLL_DEG = 180.0
+
+
+def _std(values: list[float]) -> float:
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
+
+
+def break_kinematics(
+    leg: list[DeviationSample], track: list[TrackPoint]
+) -> dict[str, Any]:
+    """ブレイク旋回の運動量 (G・バンク・速度・旋回量) を数値化する。
+
+    サンプルに ``load_factor`` が無ければ (kinematics を通していない
+    古い解析) G 系は全部 ``None`` のまま。呼び出し側は採点前に
+    :func:`app.grading.kinematics.annotate_kinematics` を通しておくこと。
+    """
+    out: dict[str, Any] = {}
+    if not leg:
+        return out
+    duration = leg[-1].time - leg[0].time
+
+    loads = [(s.time, s.load_factor) for s in leg if s.load_factor is not None]
+    if loads:
+        values = [n for _, n in loads]
+        peak = max(values)
+        out["break_max_load_factor"] = round(peak, 2)
+        out["break_mean_load_factor"] = round(sum(values) / len(values), 2)
+        floor = 1.0 + SUSTAINED_LOAD_FRACTION * (peak - 1.0)
+        sustained = [(t, n) for t, n in loads if n >= floor]
+        # 1 G ちょっとの「旋回」ではピークの半分という切り分けに意味が無い。
+        if peak >= 1.2 and len(sustained) >= 3:
+            sustained_values = [n for _, n in sustained]
+            out["break_sustained_load_factor"] = round(
+                sum(sustained_values) / len(sustained_values), 2
+            )
+            out["break_load_factor_std"] = round(_std(sustained_values), 3)
+            out["break_sustained_s"] = round(sustained[-1][0] - sustained[0][0], 1)
+            sustained_times = {t for t, _ in sustained}
+        else:
+            sustained_times = set()
+
+        banks = [
+            (s.time, abs(s.roll))
+            for s in leg
+            if s.roll is not None and abs(s.roll) <= MAX_SANE_ROLL_DEG
+        ]
+        if banks:
+            out["break_max_bank_deg"] = round(max(b for _, b in banks), 1)
+            held = [b for t, b in banks if t in sustained_times] or [b for _, b in banks]
+            out["break_mean_bank_deg"] = round(sum(held) / len(held), 1)
+
+    speeds = [s.speed for s in leg if s.speed is not None]
+    if speeds:
+        out["break_entry_speed_ms"] = round(speeds[0], 2)
+        out["break_exit_speed_ms"] = round(speeds[-1], 2)
+    if leg[0].agl is not None:
+        out["break_entry_agl_m"] = round(leg[0].agl, 2)
+    out["break_start_along_m"] = round(along_of(leg[0]), 1)
+
+    # 旋回量は対地トラック角の変化を足し上げる。端点の差だと 180 度前後で
+    # 折り返して符号が化ける。
+    in_leg = {id(s) for s in leg}
+    angles = [p.angle_deg for p in track if id(p.sample) in in_leg]
+    if len(angles) >= 2:
+        change = sum(_wrap180(b - a) for a, b in zip(angles, angles[1:]))
+        out["break_heading_change_deg"] = round(change, 1)
+        if duration > 0:
+            out["break_mean_turn_rate_deg_s"] = round(change / duration, 2)
+    return out
 
 
 def effective_approach_pattern(

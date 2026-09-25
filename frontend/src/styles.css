@@ -47,6 +47,10 @@
   --series-cl: #7f9bb5;
   --series-speed: #a08fae;
   --series-descent: #c08a6e;
+  /* 荷重倍数 (G) とバンク角。G はファイナル色 (真鍮) に近い暖色で、ブレイク
+     区間は --leg-break で上書きするので、平面図の脚の色と対応が付く。 */
+  --series-load: #c2a76c;
+  --series-bank: #8fb2c9;
   /* パターンの脚 — 4 本を色で見分けるので、色相は離したまま彩度だけ落とす。
      ファイナルはアクセント (真鍮)、接地後は破線 + muted で別扱い。 */
   --leg-entry: #8faa85;

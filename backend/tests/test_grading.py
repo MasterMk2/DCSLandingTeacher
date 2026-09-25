@@ -1920,3 +1920,92 @@ def test_a_hop_reports_insufficient_flight_even_when_coverage_is_also_short() ->
 
     assert result.metrics["ungraded_reason"] == "insufficient-flight"
     assert result.grade is None
+
+
+# ---------------------------------------------------------------------------
+# Break kinematics: the G actually pulled in the break, measured not scored
+# ---------------------------------------------------------------------------
+
+
+def test_break_g_is_read_off_the_turn() -> None:
+    """A 9 deg/s break at 90 m/s is a 1.75 G level turn:
+    n = sqrt(1 + (v * omega / g)^2). The circuit fixture integrates exactly
+    that, so the number the metrics report is checkable by hand."""
+    import math
+
+    from app.grading.kinematics import G0, annotate_kinematics
+    from app.grading.pattern import pattern_metrics, segment_approach
+
+    analysis = _circuit_with_curved_base(initial_s=20.0)
+    annotate_kinematics(analysis)
+    metrics = pattern_metrics(analysis, segment_approach(analysis, CONFIG.land_grading))
+
+    omega = math.radians(9.0)
+    expected = math.sqrt(1.0 + (90.0 * omega / G0) ** 2)
+    assert metrics["break_max_load_factor"] == pytest.approx(expected, rel=0.05)
+    assert metrics["break_sustained_load_factor"] == pytest.approx(expected, rel=0.05)
+    # A fixture turning at a constant rate holds constant G: no wobble.
+    assert metrics["break_load_factor_std"] < 0.05
+    assert metrics["break_sustained_s"] > 10.0
+    # The fixture's track angle sweeps through +168 deg (lateral grows
+    # positive: right-hand in this frame). The break LEG starts only once the
+    # track is initial_align_deg (20) off the initial and its angles are
+    # smoothed over 2 s, so the change summed over the leg is short of the
+    # full sweep -- but it is the turn, not a wrapped fragment of it.
+    assert 120.0 < metrics["break_heading_change_deg"] <= 170.0
+    assert metrics["break_mean_turn_rate_deg_s"] == pytest.approx(9.0, rel=0.25)
+    assert metrics["break_entry_speed_ms"] == pytest.approx(90.0)
+    assert metrics["break_entry_agl_m"] == pytest.approx(460.0, abs=1.0)
+    # The break starts once the aircraft has flown through the aiming point.
+    assert metrics["break_start_along_m"] < 0.0
+    # No Roll in the synthetic record: bank is not invented from the G.
+    assert metrics["break_max_bank_deg"] is None
+
+
+def test_break_g_reaches_the_grade_metrics_and_the_comment() -> None:
+    analysis = _circuit_with_curved_base(initial_s=20.0)
+    result = grade_land_landing(analysis, CONFIG)
+    assert result.metrics["pattern_break_max_load_factor"] == pytest.approx(1.75, abs=0.1)
+    assert "ブレイクは最大 1.8 G" in result.comment
+    assert "定常 1.8 G ±" in result.comment
+    # The G is evidence, not a score: the pattern sub-scores are unchanged.
+    pattern = next(c for c in result.components if c.name == "pattern")
+    assert set(pattern.evidence["sub_scores"]) <= {
+        "alignment", "break_altitude", "downwind_course", "downwind_altitude"
+    }
+
+
+def test_recorded_bank_is_reported_next_to_the_derived_g() -> None:
+    analysis = _circuit_with_curved_base(initial_s=20.0)
+    for sample in analysis.samples:
+        sample.roll = -55.0
+    # A corrupt attitude sample (seen in real recordings: Roll of 13000 deg
+    # on the ground) must not become the maximum bank.
+    analysis.samples[0].roll = 13605.0
+    metrics = grade_land_landing(analysis, CONFIG).metrics
+    assert metrics["pattern_break_max_bank_deg"] == pytest.approx(55.0)
+    assert metrics["pattern_break_mean_bank_deg"] == pytest.approx(55.0)
+
+
+def test_a_regrade_of_an_old_track_gains_the_g_series() -> None:
+    """Rows graded before the kinematics existed hold no load factors. A
+    re-grade derives them from the stored positions, so the chart and the
+    break metrics appear without re-parsing any ACMI."""
+    from app.grading.deviations import ApproachAnalysis
+
+    stored = _circuit_with_curved_base(initial_s=20.0).as_dict()
+    for row in stored["samples"]:
+        row.pop("load_factor")
+        row.pop("turn_rate_deg_s")
+    rebuilt = ApproachAnalysis.from_dict(stored)
+    assert all(s.load_factor is None for s in rebuilt.samples)
+    result = grade_land_landing(rebuilt, CONFIG)
+    assert result.metrics["pattern_break_max_load_factor"] is not None
+    served = rebuilt.as_dict()["samples"]
+    assert sum(1 for s in served if s["load_factor"] is not None) > len(served) // 2
+
+
+def test_a_straight_in_carries_a_one_g_series_and_no_break_metrics() -> None:
+    result = grade_land_landing(_straight_in_analysis(), CONFIG)
+    assert "pattern_break_max_load_factor" not in result.metrics
+    assert "ブレイク" not in result.comment

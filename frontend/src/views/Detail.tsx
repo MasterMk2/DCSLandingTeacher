@@ -331,7 +331,7 @@ export function Detail({ id, onBack }: DetailProps) {
       {track && track.samples.length > 0 && (
         <section className="no-print">
           <h2>時系列チャート</h2>
-          <TimeSeriesChart track={track} />
+          <TimeSeriesChart track={track} metrics={detail.metrics} />
         </section>
       )}
 

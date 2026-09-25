@@ -32,6 +32,10 @@ from app.grading.carriers import FlolsGeometry
 from app.runways.models import DEFAULT_AIMING_POINT_M, Runway
 
 
+def _optional_float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
 @dataclass
 class DeviationSample:
     time: float
@@ -53,6 +57,19 @@ class DeviationSample:
     #: pattern cannot be drawn from it. ``None`` on tracks recorded before
     #: this field existed.
     signed_distance_to_go: float | None = None
+    #: ACMI ``Roll`` / ``Pitch`` in degrees, as recorded. ``None`` on tracks
+    #: stored before they were carried through, and on sources that omit
+    #: attitude. Evidence for the break: the bank actually flown, next to
+    #: the load factor derived from the turn.
+    roll: float | None = None
+    pitch: float | None = None
+    #: Normal load factor (G) and ground-track turn rate (deg/s, right
+    #: positive) derived from the track by :mod:`app.grading.kinematics`.
+    #: Recomputed on every grade / re-grade, so a stored value always
+    #: reflects the current derivation rather than the one in force when the
+    #: row was first written.
+    load_factor: float | None = None
+    turn_rate_deg_s: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -79,6 +96,16 @@ class DeviationSample:
             "signed_distance_to_go": (
                 round(self.signed_distance_to_go, 2)
                 if self.signed_distance_to_go is not None
+                else None
+            ),
+            "roll": round(self.roll, 2) if self.roll is not None else None,
+            "pitch": round(self.pitch, 2) if self.pitch is not None else None,
+            "load_factor": (
+                round(self.load_factor, 3) if self.load_factor is not None else None
+            ),
+            "turn_rate_deg_s": (
+                round(self.turn_rate_deg_s, 2)
+                if self.turn_rate_deg_s is not None
                 else None
             ),
         }
@@ -205,6 +232,10 @@ class ApproachAnalysis:
                             if row.get("signed_distance_to_go") is not None
                             else None
                         ),
+                        roll=_optional_float(row.get("roll")),
+                        pitch=_optional_float(row.get("pitch")),
+                        load_factor=_optional_float(row.get("load_factor")),
+                        turn_rate_deg_s=_optional_float(row.get("turn_rate_deg_s")),
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:
@@ -552,6 +583,8 @@ def build_approach_analysis(
                 agl=agl,
                 distance_to_threshold=distance_to_threshold,
                 signed_distance_to_go=-along,
+                roll=sample.roll,
+                pitch=sample.pitch,
             )
         )
     return analysis

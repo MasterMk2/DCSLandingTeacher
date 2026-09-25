@@ -632,6 +632,8 @@ class TrackIngestor:
                         heading=source.heading,
                         aoa=source.aoa,
                         on_ground=source.on_ground,
+                        roll=source.roll,
+                        pitch=source.pitch,
                     ),
                 )
 

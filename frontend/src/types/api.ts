@@ -73,6 +73,15 @@ export interface DeviationSample {
    *  the reference point. Needed to plot the break / upwind leg, which
    *  `distance_to_go` folds onto the threshold line. Absent on older tracks. */
   signed_distance_to_go?: number | null;
+  /** Recorded attitude (ACMI Roll / Pitch, degrees). Absent on older tracks
+   *  and on sources that omit it. */
+  roll?: number | null;
+  pitch?: number | null;
+  /** Normal load factor (G) derived from the track; 1.0 in straight and
+   *  level flight, 1/cos(bank) in a level turn. */
+  load_factor?: number | null;
+  /** Ground-track turn rate, deg/s, right turn positive. */
+  turn_rate_deg_s?: number | null;
 }
 
 /** ApproachTrackOut. */

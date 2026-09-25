@@ -90,6 +90,12 @@ class TrackSample:
     heading: float | None = None
     aoa: float | None = None
     on_ground: bool | None = None
+    #: ACMI ``Roll`` / ``Pitch`` (degrees), carried through to the stored
+    #: approach track so a bank angle can be read off the record itself
+    #: instead of being inferred from the turn. DCS does export both
+    #: (measured: 517k of 563k track rows in a real recording carry Roll).
+    roll: float | None = None
+    pitch: float | None = None
 
 
 def _sample_time(sample: tuple[float, ...]) -> float:

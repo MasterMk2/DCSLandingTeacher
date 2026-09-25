@@ -129,4 +129,28 @@ describe("formatMetric", () => {
     const { text } = formatMetric("sub_scores", { alignment: 98.6 });
     expect(text).toBe('{"alignment":98.6}');
   });
+
+  it("labels the break kinematics and gives the load factor its unit", () => {
+    // 無次元の荷重倍数はキーに接尾辞が無い。"G" を付けないと「2.31」が
+    // 何の数字か分からない。
+    expect(formatMetric("pattern_break_max_load_factor", 2.312)).toEqual({
+      label: "ブレイク最大 G",
+      text: "2.31 G",
+    });
+    expect(formatMetric("break_load_factor_std", 0.084).text).toBe("0.08 G");
+    // 旋回率は "_s" で終わるが秒ではない。
+    expect(formatMetric("pattern_break_mean_turn_rate_deg_s", 8.66)).toEqual({
+      label: "ブレイク平均旋回率",
+      text: "8.7°/s",
+    });
+    expect(formatMetric("pattern_break_mean_turn_rate_deg_s", null).label).toBe(
+      "ブレイク平均旋回率",
+    );
+    expect(formatMetric("pattern_break_start_along_m", -926).text).toBe("-0.50 nm");
+    expect(formatMetric("pattern_break_entry_speed_ms", 154.3).text).toBe("300 kt");
+    expect(formatMetric("pattern_break_max_bank_deg", 63.4).label).toBe(
+      "ブレイク最大バンク角（記録の Roll）",
+    );
+    expect(formatMetric("pattern_break_sustained_s", 6.4).text).toBe("6.4 s");
+  });
 });

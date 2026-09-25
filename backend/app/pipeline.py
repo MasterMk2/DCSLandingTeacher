@@ -52,7 +52,11 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
 # 成績を付けない (min_flight_agl_m)。数 m 浮いて降りただけのヘリが
 # 降下率＋センターラインだけで 100/A になっていた。既存の着陸は再採点で
 # 反映される。
-GRADING_VERSION = "3"
+# 4 (2026-09-25): 軌跡から荷重倍数 (G) と旋回率を導いて approach_track の
+# 各サンプルに持たせ、ブレイクの G (ピーク・定常値・変動・バンク角・
+# 進入速度・旋回量) をパターンのメトリクスに出す。測定のみで点数は
+# 変えない --- 既存の着陸を再採点しても成績は動かず、数字が増えるだけ。
+GRADING_VERSION = "4"
 
 
 def _row_approach_pattern(
