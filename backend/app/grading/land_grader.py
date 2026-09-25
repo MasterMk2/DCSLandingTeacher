@@ -1231,5 +1231,9 @@ def _break_load_comment_parts(pattern: dict[str, Any]) -> list[str]:
     bank = pattern.get("break_max_bank_deg")
     if bank is not None:
         detail.append(f"バンク最大 {bank:.0f}°")
+    # 「速度の 1%」の経験則は目安として並べるだけ (採点しない)。
+    target = pattern.get("break_one_percent_rule_g")
+    if target is not None and pattern.get("break_max_g_to_one_percent") is not None:
+        detail.append(f"1% ルール目標 {target:.1f} G")
     suffix = f"（{'、'.join(detail)}）" if detail else ""
     return [f"ブレイクは最大 {peak:.1f} G{suffix}"]

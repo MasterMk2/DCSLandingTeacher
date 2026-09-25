@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.detection.detector import TrackSample, analyze_track
@@ -1967,7 +1969,8 @@ def test_break_g_reaches_the_grade_metrics_and_the_comment() -> None:
     result = grade_land_landing(analysis, CONFIG)
     assert result.metrics["pattern_break_max_load_factor"] == pytest.approx(1.75, abs=0.1)
     assert "ブレイクは最大 1.8 G" in result.comment
-    assert "定常 1.8 G ±" in result.comment
+    # The sustained mean sits right on 1.75 and rounds either way.
+    assert re.search(r"定常 1\.[78] G ±", result.comment)
     # The G is evidence, not a score: the pattern sub-scores are unchanged.
     pattern = next(c for c in result.components if c.name == "pattern")
     assert set(pattern.evidence["sub_scores"]) <= {
@@ -2009,3 +2012,183 @@ def test_a_straight_in_carries_a_one_g_series_and_no_break_metrics() -> None:
     result = grade_land_landing(_straight_in_analysis(), CONFIG)
     assert "pattern_break_max_load_factor" not in result.metrics
     assert "ブレイク" not in result.comment
+
+
+# ---------------------------------------------------------------------------
+# Where the break leg starts and ends (pattern.BreakBounds)
+# ---------------------------------------------------------------------------
+
+
+def _circuit_from_plan(
+    plan: list[tuple[float, float]],
+    *,
+    start_angle_deg: float = 0.0,
+    speed_ms: float = 90.0,
+    step_s: float = 0.25,
+    downwind_s: float = 15.0,
+    agl_m: float = 460.0,
+) -> "ApproachAnalysis":
+    """A circuit flown from a plan of ``(seconds, turn rate deg/s)`` legs.
+
+    The plan is everything BEFORE the downwind, starting on a track angle
+    of ``start_angle_deg`` (0 = the landing direction). A level downwind of
+    ``downwind_s`` follows at whatever angle the plan ended on, then a
+    descending base turn all the way round to final and a 20 s final. All
+    turns are integrated exactly, like :func:`_circuit_with_curved_base`,
+    so the break's duration and heading change are known to the test.
+    """
+    import math
+
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    angle = start_angle_deg
+    dtg = 0.0
+    lateral = 0.0
+    agl = agl_m
+    time = 0.0
+    samples: list[DeviationSample] = []
+
+    def add() -> None:
+        samples.append(
+            DeviationSample(
+                time=time,
+                distance_to_go=max(dtg, 0.0),
+                glideslope_deviation=None,
+                centerline_deviation=lateral,
+                speed=speed_ms,
+                agl=agl,
+                signed_distance_to_go=dtg,
+            )
+        )
+
+    def advance(track_angle: float) -> None:
+        nonlocal dtg, lateral
+        radians = math.radians(track_angle)
+        dtg -= speed_ms * step_s * math.cos(radians)
+        lateral += speed_ms * step_s * math.sin(radians)
+
+    for seconds, rate in plan:
+        for _ in range(int(round(seconds / step_s))):
+            add()
+            advance(angle)
+            angle += rate * step_s
+            time += step_s
+    for _ in range(int(downwind_s / step_s)):
+        add()
+        advance(angle)
+        time += step_s
+    # Base turn: keep turning the same way round to the landing direction.
+    remaining = (-angle) % 360.0
+    while remaining > 0.0:
+        add()
+        advance(angle)
+        turned = min(8.0 * step_s, remaining)
+        angle += turned
+        remaining -= turned
+        agl = max(agl - 3.0 * step_s, 60.0)
+        time += step_s
+    for _ in range(int(20.0 / step_s)):
+        add()
+        advance(angle)
+        agl = max(agl - 3.0 * step_s, 5.0)
+        time += step_s
+    touchdown_time = time
+    add()
+    return ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=speed_ms * 0.92,
+        touchdown_descent_rate_ms=1.6,
+        approach_pattern="overhead",
+        airframe="F-16C_50",
+        samples=samples,
+    )
+
+
+def _break_of(analysis: "ApproachAnalysis") -> dict:
+    from app.grading.kinematics import annotate_kinematics
+    from app.grading.pattern import pattern_metrics, segment_approach
+
+    annotate_kinematics(analysis)
+    return pattern_metrics(analysis, segment_approach(analysis, CONFIG.land_grading), CONFIG.land_grading)
+
+
+def test_a_two_stage_break_is_the_big_turn_not_the_adjustment() -> None:
+    """A third of the real breaks here are flown as a 130-150 deg break, a
+    pause, then a gentle turn onto the downwind. The break is the big turn;
+    the "last continuous turn" rule would have reported the 30 deg tail."""
+    circuit = _circuit_from_plan([(10.0, 0.0), (14.0, 10.0), (8.0, 0.0), (6.0, 5.0)])
+    metrics = _break_of(circuit)
+    assert metrics["break_judged"] is True
+    assert metrics["break_duration_s"] == pytest.approx(14.0, abs=2.5)
+    assert 125.0 <= metrics["break_heading_change_deg"] <= 150.0
+    # It started at the roll-in off the initial, ~10 s into the record.
+    assert metrics["break_start_time"] == pytest.approx(10.0, abs=2.5)
+
+
+def test_the_break_is_the_last_turn_of_at_least_ninety_degrees() -> None:
+    """A big turn, half a minute straight, a 50 deg adjustment onto the
+    downwind: the break is the big turn, and nothing before it counts."""
+    circuit = _circuit_from_plan([(12.0, 10.0), (30.0, 0.0), (5.0, 10.0)])
+    metrics = _break_of(circuit)
+    assert metrics["break_judged"] is True
+    assert 105.0 <= metrics["break_heading_change_deg"] <= 130.0
+    assert metrics["break_duration_s"] == pytest.approx(12.0, abs=2.5)
+    assert metrics["break_end_time"] < 16.0
+
+
+def test_a_spiral_onto_the_downwind_is_cut_to_its_last_half_turn() -> None:
+    """540 deg of spiral in 54 s: what is reported is the final ~210 deg,
+    never the whole orbit -- entries "at 20,097 ft" came from legs like it."""
+    circuit = _circuit_from_plan([(54.0, 10.0)])
+    metrics = _break_of(circuit)
+    assert metrics["break_judged"] is True
+    assert 150.0 <= abs(metrics["break_heading_change_deg"]) <= 210.0
+    assert metrics["break_duration_s"] <= 60.0
+
+
+def test_a_forty_five_degree_join_is_reported_but_not_judged() -> None:
+    # The straight run before the join is kept shorter than the downwind:
+    # at 135 deg it sits inside the downwind cone, and the leg finder takes
+    # the LONGEST non-turning run there as the downwind.
+    circuit = _circuit_from_plan([(10.0, 0.0), (9.0, 5.0)], start_angle_deg=135.0)
+    metrics = _break_of(circuit)
+    assert metrics["break_duration_s"] is not None
+    assert abs(metrics["break_heading_change_deg"]) < 90.0
+    assert metrics["break_judged"] is False
+    pattern = next(c for c in grade_land_landing(circuit, CONFIG).components if c.name == "pattern")
+    assert "break_altitude" not in pattern.evidence["sub_scores"]
+
+
+def test_a_capture_that_starts_mid_break_reports_the_bigger_turn_unjudged() -> None:
+    """Landing #56: the record begins with the aircraft already 77 deg into
+    its break. Neither remaining turn reaches 90 deg, so nothing is judged,
+    but the leg shown is the larger turn, not the 40 deg tail."""
+    circuit = _circuit_from_plan([(6.0, 10.0), (7.0, 0.0), (8.0, 5.0)], start_angle_deg=77.0)
+    metrics = _break_of(circuit)
+    assert metrics["break_judged"] is False
+    assert 45.0 <= metrics["break_heading_change_deg"] <= 70.0
+    assert metrics["break_duration_s"] == pytest.approx(6.0, abs=2.5)
+
+
+def test_the_one_percent_rule_is_reported_next_to_the_g_and_never_scored() -> None:
+    """Entry at 90 m/s is 175 kt, so the rule of thumb says 1.75 G; the
+    fixture's 10 deg/s break pulls exactly that."""
+    circuit = _circuit_from_plan([(10.0, 0.0), (17.0, 10.0)])
+    result = grade_land_landing(circuit, CONFIG)
+    metrics = result.metrics
+    assert metrics["pattern_break_one_percent_rule_g"] == pytest.approx(1.75, abs=0.02)
+    assert metrics["pattern_break_max_g_to_one_percent"] == pytest.approx(1.0, abs=0.12)
+    assert re.search(r"1% ルール目標 1\.[78] G", result.comment)
+    pattern = next(c for c in result.components if c.name == "pattern")
+    assert "one_percent" not in " ".join(pattern.evidence["sub_scores"])
+
+
+def test_the_one_percent_ratio_is_left_out_below_a_hundred_knots() -> None:
+    circuit = _circuit_from_plan([(10.0, 0.0), (17.0, 10.0)], speed_ms=40.0)
+    metrics = _break_of(circuit)
+    assert metrics["break_one_percent_rule_g"] == pytest.approx(0.78, abs=0.02)
+    assert metrics["break_max_g_to_one_percent"] is None

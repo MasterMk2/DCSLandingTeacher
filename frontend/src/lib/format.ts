@@ -62,8 +62,12 @@ export function formatMetric(key: string, value: unknown): { label: string; text
     return { label: metricLabel(key, stem), text };
   }
   // 荷重倍数はキーに単位接尾辞が無い (無次元)。"G" を付けて出す。
-  if (/load_factor/.test(key)) {
+  if (/load_factor|_rule_g$/.test(key)) {
     return { label: metricLabel(key, key), text: `${value.toFixed(2)} G` };
+  }
+  // 「最大 G ÷ 1% ルール目標」のような比。
+  if (/_to_one_percent$/.test(key)) {
+    return { label: metricLabel(key, key), text: `${value.toFixed(2)} 倍` };
   }
   // 旋回率 (deg/s)。"_s" の分岐より先に見ないと「4.0 s」と読まれる。
   if (key.endsWith("_deg_s")) {
@@ -352,6 +356,8 @@ const METRIC_LABELS: Record<string, string> = {
     break_mean_turn_rate_deg: "ブレイク平均旋回率",
     break_start_along: "ブレイク開始位置（+ = 基準点の手前）",
     base_max_load_factor: "ベースターン最大 G",
+    break_one_percent_rule_g: "1% ルールの目標 G（進入速度 kt ÷ 100、経験則）",
+    break_max_g_to_one_percent: "最大 G ÷ 1% ルール目標",
   }),
   sub_scores: "内訳スコア",
   pattern_rollout_offset: "旋回明けの軸ずれ（+ = 手前 / - = 突き抜け）",

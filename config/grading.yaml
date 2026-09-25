@@ -387,6 +387,37 @@ land_grading:
     require_downwind: true
     # Anything shorter than this is not a break turn, just a heading change.
     min_break_s: 6.0
+    # Where the break leg may reach when walking back from the downwind
+    # (app/grading/pattern.py, BreakBounds). The leg is the ONE continuous
+    # turn that ended on the downwind: it stops at the initial (track within
+    # initial_align_deg of the landing direction), at a pause in the turn
+    # longer than break_straight_tolerance_s, when the turn reverses by more
+    # than break_reverse_tolerance_deg, past max_break_turn_deg of heading
+    # change, or past max_break_s of flying.
+    #
+    # Until 2026-09-25 only the first stop existed, and a recording whose
+    # initial was never flown down the runway heading had its "break" run
+    # back to the start of the capture. Measured over this server's 725
+    # judged breaks: a 75 s "break" holding a 10.8 G turn 4.7 km out, an
+    # entry "at 20,097 ft", heading changes of 500 deg. 60 s is a full 180 at
+    # 3 deg/s, the gentlest pattern turn anyone flies; 210 deg leaves room
+    # for a downwind angled away from the reciprocal.
+    max_break_s: 60.0
+    max_break_turn_deg: 210.0
+    # How far back from the downwind the break is looked for. Wider than the
+    # break itself: a third of the real breaks here are flown in two stages
+    # (a 130-150 deg break, a pause or dogleg, then a gentle turn onto the
+    # downwind), and the break is the big turn, not the last one.
+    break_lookback_s: 90.0
+    # A pause in the turn up to this long stays inside the break; longer and
+    # the turn before it is a separate manoeuvre. Swept 3-15 s over the 872
+    # overhead recordings here: 607 -> 618 judged breaks, i.e. it barely
+    # matters, so it is set to forgive a brief hesitation and no more.
+    break_straight_tolerance_s: 5.0
+    break_reverse_tolerance_deg: 15.0
+    # A leg that turned less than this onto the downwind is not a break -- a
+    # 45 deg entry, a wide join -- and is reported but not judged.
+    min_break_turn_deg: 90.0
     # Height gained or lost during the break, which is supposed to be a
     # LEVEL 180 deg turn: whatever is lost here is what puts the downwind
     # off pattern altitude. Measured 19-294 m over this server's overhead
