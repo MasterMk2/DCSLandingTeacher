@@ -152,8 +152,9 @@ def test_annotate_fills_every_sample_it_can_and_recomputes_on_repeat() -> None:
     analysis = _analysis(times, positions)
     # A stale value from an older derivation must not survive.
     analysis.samples[_mid(times)].load_factor = 9.9
-    count = annotate_kinematics(analysis)
-    assert count >= len(times) - 4
+    report = annotate_kinematics(analysis)
+    assert report.annotated >= len(times) - 4
+    assert report.rejected == 0
     mid = analysis.samples[_mid(times)]
     assert mid.load_factor == pytest.approx(2.0, rel=0.02)
     assert mid.turn_rate_deg_s is not None and mid.turn_rate_deg_s > 0
@@ -193,6 +194,57 @@ def test_repeated_positions_from_partial_updates_are_skipped() -> None:
     ]
     assert loads
     assert max(loads) == pytest.approx(1.0 / math.cos(math.radians(45.0)), rel=0.05)
+
+
+def test_a_position_glitch_is_rejected_instead_of_read_as_g() -> None:
+    """Landing #599: three samples inside a 2 G turn belong to some other
+    trajectory (100 m below, 30 m along). Fitted as recorded they read as
+    9-12 G; rejected, the turn reads as the 2 G it was and the glitch
+    samples carry no value at all."""
+    times, positions = _track(bank_deg=60.0)
+    mid = _mid(times)
+    for i in (mid, mid + 1, mid + 2):
+        x, y, z = positions[i]
+        positions[i] = (x + 30.0, y, z - 100.0)
+    analysis = _analysis(times, positions)
+    report = annotate_kinematics(analysis)
+    assert report.rejected == 3
+    assert all(analysis.samples[i].load_factor is None for i in (mid, mid + 1, mid + 2))
+    loads = [s.load_factor for s in analysis.samples if s.load_factor is not None]
+    assert max(loads) == pytest.approx(2.0, rel=0.03)
+    assert min(loads) == pytest.approx(2.0, rel=0.03)
+
+
+def test_timestamp_jitter_is_not_rejected() -> None:
+    """The normal noise of a real recording is time-like: positions are true
+    but stamped a few tens of ms off (measured p99 ~0.05 s). At 100 m/s that
+    is metres of residual, well inside the tolerance, and the derived G must
+    stay honest without throwing samples away."""
+    rng = random.Random(7)
+    times, positions = _track(bank_deg=45.0, quantize_m=None)
+    jittered = [round(t + rng.uniform(-0.03, 0.03), 3) for t in times]
+    analysis = _analysis(jittered, positions)
+    report = annotate_kinematics(analysis)
+    assert report.rejected == 0
+    loads = [s.load_factor for s in analysis.samples if s.load_factor is not None]
+    expected = 1.0 / math.cos(math.radians(45.0))
+    off = sorted(abs(n - expected) / expected for n in loads)
+    # 90% of samples within 10%, none wildly off.
+    assert off[int(0.9 * len(off))] < 0.10
+    assert off[-1] < 0.5
+
+
+def test_a_single_frame_lag_at_high_speed_is_rejected() -> None:
+    """A sample whose position is one 0.2 s frame stale at 250 m/s sits 50 m
+    behind the trajectory: the commonest stutter in the stream."""
+    times, positions = _track(bank_deg=30.0, speed_ms=250.0)
+    mid = _mid(times)
+    positions[mid] = positions[mid - 1]
+    # _track de-duplication does not apply here; make it a near-duplicate.
+    x, y, z = positions[mid]
+    positions[mid] = (x + 0.5, y, z)
+    report = annotate_kinematics(_analysis(times, positions))
+    assert report.rejected == 1
 
 
 def test_bank_from_load_factor_inverts_the_level_turn_relation() -> None:

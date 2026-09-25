@@ -61,7 +61,10 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
 # 揃った点まで遡っていたので、角度付きイニシャルやパターン前の機動が
 # 丸ごと「ブレイク」になっていた。ブレイクの高度変動の採点対象が変わる
 # ので、再採点で点数が動く着陸がある (本番 872 件で判定対象 726 → 約 610)。
-GRADING_VERSION = "5"
+# 6 (2026-09-26): 位置の飛び (leave-one-out 残差が 10 m または 0.1 秒分を
+# 超えるサンプル) を G の導出から外す (kinematics.reject_position_outliers)。
+# 点数には触らない --- G は測定のみ --- が、G のピーク値と系列が変わる。
+GRADING_VERSION = "6"
 
 
 def _row_approach_pattern(

@@ -72,6 +72,37 @@ MIN_SPEED_MS = 5.0
 #: 限界 (9 G 級) より十分上に置いてある。
 MAX_PLAUSIBLE_LOAD_FACTOR = 15.0
 
+#: 位置の飛びの判定: そのサンプルを除いた前後 1 秒のフィットが予測する
+#: 位置から、記録の位置が ``max(OUTLIER_RESIDUAL_M, OUTLIER_RESIDUAL_S *
+#: 速度)`` より離れていれば外れ値として捨てる。
+#:
+#: 本番の 300 記録・264,305 サンプルで測った予測残差 (leave-one-out) は
+#: 速度に比例して広がる: p99 が 100 m/s 未満で 4.9 m、100-200 で 7.2 m、
+#: 200-300 で 11.4 m、300 超で 28 m。残差を速度で割ると p99 は 0.05-0.10 s
+#: に揃うので、正体は位置ではなく **タイムスタンプのジッター** (書かれた
+#: 時刻と位置の時刻が数十 ms ずれる) で、機体の運動が 2 次式から外れる分
+#: (10 G・200 m/s の旋回でも 3 次項は ~4 m) より大きい。
+#:
+#: なので閾値は時間で置く: 0.05 秒分 (p99 相当) を超える残差は記録の側の
+#: 問題 --- 1 フレーム丸ごと遅れた位置 (0.2 s = 140 m/s で 28 m)、別軌跡の
+#: 混入 (#599 では 93 m/s で 109 m = 1.2 s 分)、そして 200 m/s で 10 m 級の
+#: スタッターの塊 (#1433: 1 G → 10.7 G → 3 G → 9.6 G → 2 G が 2 秒の中に
+#: 並ぶ)。低速機で時間基準が数 m まで縮まないよう 10 m の床を置く (ヘリの
+#: p99.9 は 9.6 m)。
+#:
+#: 300 記録で振った結果 (除外率 / ブレイク最大 G の p99 / 最大):
+#: なし 0% / 10.81 / 12.52、0.10 s 0.15% / 10.05 / 12.14、
+#: 0.05 s 0.28% / 9.96 / 10.81、床 5 m + 0.05 s 0.83% / 9.96 / 10.81 だが
+#: 中央値が 2.71 → 2.62 と動く (正常な点まで捨て始める)。0.05 s / 10 m は
+#: 中央値を変えず (2.71 → 2.69) に飛びだけ落とす。
+OUTLIER_RESIDUAL_M = 10.0
+OUTLIER_RESIDUAL_S = 0.05
+
+#: 飛びは数サンプル続くことがあり (#599 は 4 点)、隣の飛んだ点に支えられて
+#: 残差が小さく見える点は 1 回目では残る。捨てたものを窓から外して残差を
+#: 測り直すのをこの回数まで繰り返す。
+OUTLIER_PASSES = 3
+
 
 @dataclass(frozen=True)
 class Kinematics:
@@ -79,6 +110,9 @@ class Kinematics:
 
     velocity: tuple[float, float, float]
     acceleration: tuple[float, float, float]
+    #: フィットが基準時刻に置く位置。記録上の位置との差が「予測残差」で、
+    #: 位置の飛びを見つけるのに使う (annotate_kinematics)。
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
     def speed(self) -> float:
@@ -136,14 +170,17 @@ def fit_kinematics(
     positions: list[tuple[float, float, float]],
     index: int,
     half_window_s: float = DEFAULT_HALF_WINDOW_S,
+    exclude: set[int] | frozenset[int] | None = None,
 ) -> Kinematics | None:
     """``index`` のサンプルにおける速度・加速度を局所 2 次フィットで求める。
 
     ``times`` は昇順であること。窓は ``times[index] +- half_window_s`` から
     始め、点が :data:`MIN_WINDOW_POINTS` に足りなければ
-    :data:`MAX_HALF_WINDOW_S` まで倍々に広げる。
+    :data:`MAX_HALF_WINDOW_S` まで倍々に広げる。``exclude`` の添字は窓から
+    外す (外れ値、または残差を測るために外す当のサンプル自身)。
     """
     t0 = times[index]
+    excluded = exclude or ()
     half = half_window_s
     while True:
         lo = index
@@ -152,18 +189,19 @@ def fit_kinematics(
         hi = index
         while hi + 1 < len(times) and times[hi + 1] - t0 <= half:
             hi += 1
-        if hi - lo + 1 >= MIN_WINDOW_POINTS:
+        members = [j for j in range(lo, hi + 1) if j not in excluded]
+        if len(members) >= MIN_WINDOW_POINTS:
             break
         if half >= MAX_HALF_WINDOW_S:
             return None
         half = min(MAX_HALF_WINDOW_S, half * 2.0)
-    if times[hi] - times[lo] < half_window_s:
+    if times[members[-1]] - times[members[0]] < half_window_s:
         return None
 
     # 正規方程式。基底は [1, tau, tau^2 / 2] なので 3 番目の係数がそのまま加速度。
     s = [0.0] * 5  # sum of tau^k, k = 0..4
     b = [[0.0, 0.0, 0.0] for _ in range(3)]  # per axis: sum of p * basis_k
-    for j in range(lo, hi + 1):
+    for j in members:
         tau = times[j] - t0
         tau2 = tau * tau
         basis = (1.0, tau, tau2 / 2.0)
@@ -185,9 +223,10 @@ def fit_kinematics(
     solved = [_solve3(matrix, b[axis]) for axis in range(3)]
     if any(coefficients is None for coefficients in solved):
         return None
+    position = tuple(coefficients[0] for coefficients in solved)  # type: ignore[index]
     velocity = tuple(coefficients[1] for coefficients in solved)  # type: ignore[index]
     acceleration = tuple(coefficients[2] for coefficients in solved)  # type: ignore[index]
-    return Kinematics(velocity, acceleration)  # type: ignore[arg-type]
+    return Kinematics(velocity, acceleration, position)  # type: ignore[arg-type]
 
 
 def _position_of(sample: "DeviationSample") -> tuple[float, float, float] | None:
@@ -211,9 +250,61 @@ def _position_of(sample: "DeviationSample") -> tuple[float, float, float] | None
     return (along, sample.centerline_deviation, sample.agl)
 
 
+def reject_position_outliers(
+    times: list[float],
+    positions: list[tuple[float, float, float]],
+    half_window_s: float = DEFAULT_HALF_WINDOW_S,
+    floor_m: float = OUTLIER_RESIDUAL_M,
+    tolerance_s: float = OUTLIER_RESIDUAL_S,
+    passes: int = OUTLIER_PASSES,
+) -> set[int]:
+    """位置の飛びの添字を返す。
+
+    各サンプルを、そのサンプルと既に捨てた点を除いた窓でフィットし、
+    予測位置との距離が ``max(floor_m, tolerance_s * 速度)`` を超えれば
+    捨てる。捨てた点を窓から外して測り直すのを ``passes`` 回まで
+    繰り返すので、数点続く飛びも順に剥がれる。
+    """
+    rejected: set[int] = set()
+    for _ in range(passes):
+        # Re-judge EVERY sample against windows that exclude the current
+        # rejects, the earlier rejects included. In the first pass a glitch
+        # drags the prediction for its clean neighbours off too, so they get
+        # flagged with it; once the glitch is out of their windows they fit
+        # again and come back. A reject whose window can no longer be fitted
+        # at all stays out: nothing shows it was fine.
+        found: set[int] = set()
+        for index in range(len(times)):
+            fit = fit_kinematics(
+                times, positions, index, half_window_s, exclude=rejected | {index}
+            )
+            if fit is None:
+                if index in rejected:
+                    found.add(index)
+                continue
+            threshold = max(floor_m, tolerance_s * fit.speed)
+            if math.dist(positions[index], fit.position) > threshold:
+                found.add(index)
+        if found == rejected:
+            break
+        rejected = found
+    return rejected
+
+
+@dataclass(frozen=True)
+class KinematicsReport:
+    """:func:`annotate_kinematics` の結果: 付けられた数と、捨てた数。"""
+
+    annotated: int
+    rejected: int
+
+    def __int__(self) -> int:
+        return self.annotated
+
+
 def annotate_kinematics(
     analysis: "ApproachAnalysis", half_window_s: float = DEFAULT_HALF_WINDOW_S
-) -> int:
+) -> KinematicsReport:
     """全サンプルの ``load_factor`` / ``turn_rate_deg_s`` を軌跡から埋める。
 
     既に値が入っていても **必ず計算し直す**。保存済みの値はそのとき使った
@@ -221,7 +312,9 @@ def annotate_kinematics(
     同じ画面に新旧の混じった数字が並ぶことを防ぐ唯一の方法。
     (旋回半径や G の閾値をここで判定はしない --- 採点は pattern 側。)
 
-    戻り値は荷重倍数を付けられたサンプル数。
+    位置の飛び (:func:`reject_position_outliers`) は窓から外し、その
+    サンプル自身の値は ``None`` のままにする。戻り値は付けられた数と
+    捨てた数。
     """
     samples = sorted(analysis.samples, key=lambda s: s.time)
     times: list[float] = []
@@ -247,9 +340,12 @@ def annotate_kinematics(
         owners.append(sample)
         previous = position
 
+    rejected = reject_position_outliers(times, positions, half_window_s)
     count = 0
     for index, sample in enumerate(owners):
-        kinematics = fit_kinematics(times, positions, index, half_window_s)
+        if index in rejected:
+            continue
+        kinematics = fit_kinematics(times, positions, index, half_window_s, exclude=rejected)
         if kinematics is None:
             continue
         load_factor = kinematics.load_factor
@@ -259,7 +355,7 @@ def annotate_kinematics(
         turn_rate = kinematics.turn_rate_deg_s
         if turn_rate is not None and abs(turn_rate) <= 90.0:
             sample.turn_rate_deg_s = round(turn_rate, 2)
-    return count
+    return KinematicsReport(annotated=count, rejected=len(rejected))
 
 
 def bank_from_load_factor(load_factor: float) -> float | None:

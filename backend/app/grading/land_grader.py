@@ -649,7 +649,7 @@ def grade_land_landing(
     settings = config.land_grading
     # 荷重倍数・旋回率は毎回軌跡から導き直す (保存値は使わない)。ブレイクの
     # G はここで付いたサンプル値から pattern 側が集計する。
-    annotate_kinematics(analysis)
+    kinematics = annotate_kinematics(analysis)
     segments = segment_approach(analysis, settings)
     # パターン判定は軌跡から決める。検出器のラベル (取り込み時にヘディング
     # 変化率だけで付けた見込み値) を信じると、長いファイナルへの旋回進入や
@@ -950,6 +950,9 @@ def grade_land_landing(
         "glideslope_reference": _reference_label(analysis),
         "glideslope_method": gs_method,
         "crosswind_crab_deg": analysis.crosswind_crab_deg,
+        # 位置の飛びとして G の導出から外したサンプル数。0 でなければ、その
+        # 記録の G 系列には穴があり、ピーク値は残った点だけから出ている。
+        "kinematics_rejected_samples": kinematics.rejected,
         "outcome": analysis.outcome,
         # 軌跡から決めたパターン。検出器のラベル (取り込み時の見込み) が
         # 違っていた場合はこちらが正で、呼び出し側が landings 行にも書き戻す。

@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app.grading.kinematics import fit_kinematics  # noqa: E402
+from app.grading.kinematics import fit_kinematics, reject_position_outliers  # noqa: E402
 
 M_PER_DEG_LAT = 111_320.0
 
@@ -56,6 +56,11 @@ def main() -> int:
     parser.add_argument("database", type=Path)
     parser.add_argument("--limit-objects", type=int, default=12)
     parser.add_argument("--half-window", type=float, default=1.0)
+    parser.add_argument(
+        "--no-outlier-rejection",
+        action="store_true",
+        help="fit every sample as recorded (what the derivation did before 2026-09-26)",
+    )
     args = parser.parse_args()
 
     con = sqlite3.connect(f"file:{args.database.as_posix()}?mode=ro", uri=True)
@@ -73,6 +78,7 @@ def main() -> int:
     ratios: list[float] = []
     per_name: dict[str, list[float]] = {}
     turning_total = 0
+    rejected_total = 0
     for object_id, name, _count in objects:
         rows = cur.execute(
             """
@@ -87,14 +93,22 @@ def main() -> int:
             continue
         times, positions = local_xyz([(r[0], r[1], r[2], r[3]) for r in rows])
         attitude = {r[0]: (r[4], r[5]) for r in rows}
+        rejected: set[int] = (
+            set()
+            if args.no_outlier_rejection
+            else reject_position_outliers(times, positions, args.half_window)
+        )
+        rejected_total += len(rejected)
         for index, t in enumerate(times):
+            if index in rejected:
+                continue
             roll, pitch = attitude.get(t, (None, None))
             if roll is None or pitch is None:
                 continue
             bank = abs(roll)
             if not (20.0 <= bank <= 80.0) or abs(pitch) > 10.0:
                 continue
-            kin = fit_kinematics(times, positions, index, args.half_window)
+            kin = fit_kinematics(times, positions, index, args.half_window, exclude=rejected)
             if kin is None or kin.load_factor is None:
                 continue
             # 水平旋回らしさ: 垂直速度が対気速度の 10% 未満。
@@ -115,6 +129,7 @@ def main() -> int:
         return ratios[min(len(ratios) - 1, int(p * len(ratios)))]
 
     print(f"level-turn samples compared: {len(ratios)} (of {turning_total} turning)")
+    print(f"position outliers rejected before fitting: {rejected_total}")
     print(
         f"n_kinematic / (1/cos roll): median {statistics.median(ratios):.3f}, "
         f"p10 {pct(0.10):.3f}, p90 {pct(0.90):.3f}, "
