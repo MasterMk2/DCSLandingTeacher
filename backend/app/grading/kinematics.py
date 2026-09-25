@@ -26,8 +26,8 @@ ACMI には加速度計の値は入っていない。DCS の Tacview エクス�
 
 計算できない条件 (``None``):
 
-- 窓の中に 5 点未満、または窓の時間幅が ``half_window_s`` 未満
-  (記録の切れ目、部分更新で位置が重複したサンプル)。
+- 窓を ``MAX_HALF_WINDOW_S`` まで広げても 5 点未満、または窓の時間幅が
+  ``half_window_s`` 未満 (記録の切れ目、部分更新で位置が重複したサンプル)。
 - 速度が ``MIN_SPEED_MS`` 未満 (進行方向が定義できない = ホバリング・
   地上停止)。
 - 高度 (``agl``) が無い、または滑走路軸上の位置が ``distance_to_go`` の
@@ -53,6 +53,11 @@ G0 = 9.80665
 #: フィット窓の片側幅 (秒)。両側で 2 秒 = 5 Hz なら 10 点。短いと量子化
 #: ノイズが加速度に乗り、長いとブレイクの G 立ち上がり (1-2 秒) が鈍る。
 DEFAULT_HALF_WINDOW_S = 1.0
+
+#: サンプルが疎な記録 (1 Hz のエクスポート、合成データ) では既定の窓に
+#: 点が足りない。その場合はここまで窓を広げてから諦める: 1 Hz なら
+#: ±2 秒で 5 点。広げた分だけ G の立ち上がりは鈍るが、無いよりは良い。
+MAX_HALF_WINDOW_S = 3.0
 
 #: 窓に最低限必要な点数。2 次 (3 係数) を当てるので 3 点で解けるが、
 #: それでは残差ゼロの当てはめになり平滑化の意味が無い。
@@ -134,17 +139,24 @@ def fit_kinematics(
 ) -> Kinematics | None:
     """``index`` のサンプルにおける速度・加速度を局所 2 次フィットで求める。
 
-    ``times`` は昇順であること。窓は ``times[index] +- half_window_s``。
+    ``times`` は昇順であること。窓は ``times[index] +- half_window_s`` から
+    始め、点が :data:`MIN_WINDOW_POINTS` に足りなければ
+    :data:`MAX_HALF_WINDOW_S` まで倍々に広げる。
     """
     t0 = times[index]
-    lo = index
-    while lo > 0 and t0 - times[lo - 1] <= half_window_s:
-        lo -= 1
-    hi = index
-    while hi + 1 < len(times) and times[hi + 1] - t0 <= half_window_s:
-        hi += 1
-    if hi - lo + 1 < MIN_WINDOW_POINTS:
-        return None
+    half = half_window_s
+    while True:
+        lo = index
+        while lo > 0 and t0 - times[lo - 1] <= half:
+            lo -= 1
+        hi = index
+        while hi + 1 < len(times) and times[hi + 1] - t0 <= half:
+            hi += 1
+        if hi - lo + 1 >= MIN_WINDOW_POINTS:
+            break
+        if half >= MAX_HALF_WINDOW_S:
+            return None
+        half = min(MAX_HALF_WINDOW_S, half * 2.0)
     if times[hi] - times[lo] < half_window_s:
         return None
 

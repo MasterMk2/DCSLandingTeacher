@@ -103,8 +103,19 @@ def test_quantisation_does_not_leak_into_the_acceleration() -> None:
 def test_too_few_points_or_too_short_a_window_yields_nothing() -> None:
     times, positions = _track(bank_deg=45.0, duration_s=0.6)
     assert fit_kinematics(times, positions, 1) is None
-    # Four points spanning a second is still below the point floor.
+    # Four points spanning a second is still below the point floor, however
+    # far the window is allowed to widen.
     assert fit_kinematics([0.0, 0.4, 0.8, 1.2], [(0, 0, 0)] * 4, 1) is None
+
+
+def test_a_sparse_one_hertz_track_widens_the_window_instead_of_giving_up() -> None:
+    """Some exports (and every synthetic fixture) sample at 1 Hz: three points
+    in the default +-1 s window. The fit widens to +-2 s and still reads the
+    turn, a little smoothed."""
+    times, positions = _track(bank_deg=60.0, step_s=1.0, jitter_s=0.0)
+    kin = fit_kinematics(times, positions, _mid(times))
+    assert kin is not None
+    assert kin.load_factor == pytest.approx(2.0, rel=0.05)
 
 
 def _analysis(
