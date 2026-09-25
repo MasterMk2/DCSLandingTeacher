@@ -86,8 +86,31 @@ describe("samplesToCsv", () => {
     ]);
     const lines = csv.split("\r\n");
     // 3700.25 m -> 2.0 nm, -12.5 m -> -41.01 ft, 3.2 m -> 10.5 ft,
-    // 72.4 m/s -> 140.73 kt, 195.1 m -> 640.09 ft.
-    expect(lines[1]).toBe("100.5,2,-41.01,10.5,140.73,,640.09");
+    // 72.4 m/s -> 140.73 kt, 195.1 m -> 640.09 ft. The kinematic columns
+    // are absent on this older-shaped row and stay empty.
+    expect(lines[1]).toBe("100.5,2,-41.01,10.5,140.73,,640.09,,,,");
+  });
+
+  it("passes the load factor, turn rate and attitude through unconverted", () => {
+    const csv = samplesToCsv([
+      {
+        time: 12,
+        distance_to_go: 0,
+        signed_distance_to_go: -1850,
+        speed: 120,
+        agl: 240,
+        load_factor: 2.31,
+        turn_rate_deg_s: 8.7,
+        roll: -63.4,
+        pitch: 2.1,
+      } as never,
+    ]);
+    const lines = csv.split("\r\n");
+    expect(lines[0]).toBe(
+      "time_s,distance_to_go_nm,glideslope_deviation_ft,centerline_deviation_ft," +
+        "speed_kt,aoa_deg,agl_ft,load_factor_g,turn_rate_deg_s,roll_deg,pitch_deg",
+    );
+    expect(lines[1]).toBe("12,0,,,233.26,,787.4,2.31,8.7,-63.4,2.1");
   });
 
   it("emits blanks for null deviation/altitude cells", () => {
@@ -103,6 +126,6 @@ describe("samplesToCsv", () => {
       },
     ]);
     const lines = csv.split("\r\n");
-    expect(lines[1]).toBe("1,0,,,,,");
+    expect(lines[1]).toBe("1,0,,,,,,,,,");
   });
 });

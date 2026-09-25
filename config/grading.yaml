@@ -420,6 +420,16 @@ land_grading:
     # Abeam distance is measured and shown in the evidence but NOT scored:
     # the "right" spacing differs per airframe and per squadron habit, and
     # there is no calibration data here to justify attaching points to it.
+    #
+    # The same goes for the G pulled in the break (break_max_load_factor,
+    # break_sustained_load_factor, break_load_factor_std, bank angle, entry
+    # speed, turn rate; see app/grading/kinematics.py and
+    # docs/grading-references.md). The manuals prescribe the break as a
+    # LEVEL turn and give bank angles (T-45: 70-80 deg AOB at 15 units;
+    # T-6: 45-60 deg), never a G figure -- and what a given DCS squadron
+    # flies is its own convention. So the G is derived from the track,
+    # shown next to the recorded Roll, and left unscored until there is a
+    # standard and data to judge it against.
   # Final letter grades by weighted score.
   letters:
     A: 90

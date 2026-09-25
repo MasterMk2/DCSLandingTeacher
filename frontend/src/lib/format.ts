@@ -58,8 +58,17 @@ export function formatMetric(key: string, value: unknown): { label: string; text
     // Strip the unit suffix here too: a metric that came back null still
     // has a Japanese label, and looking up only the full key printed the
     // raw "mean_path_angle_deg" next to a "-".
-    const stem = key.replace(/_(ms|fpm|m|deg|s)$/, "");
+    const stem = key.replace(/_(deg_s|ms|fpm|m|deg|s)$/, "");
     return { label: metricLabel(key, stem), text };
+  }
+  // 荷重倍数はキーに単位接尾辞が無い (無次元)。"G" を付けて出す。
+  if (/load_factor/.test(key)) {
+    return { label: metricLabel(key, key), text: `${value.toFixed(2)} G` };
+  }
+  // 旋回率 (deg/s)。"_s" の分岐より先に見ないと「4.0 s」と読まれる。
+  if (key.endsWith("_deg_s")) {
+    const stem = key.slice(0, -"_deg_s".length);
+    return { label: metricLabel(key, stem), text: `${value.toFixed(1)}°/s` };
   }
   if (key.endsWith("_ms")) {
     const stem = key.slice(0, -"_ms".length);
@@ -74,9 +83,9 @@ export function formatMetric(key: string, value: unknown): { label: string; text
   }
   if (key.endsWith("_m")) {
     const stem = key.slice(0, -"_m".length);
-    // パターンの離隔は海里で述べる: 1.5 nm を 9000 ft と言われても
-    // 飛んでいる側の感覚と結びつかない。
-    const text = /abeam/.test(stem)
+    // パターンの離隔とブレイク開始位置は海里で述べる: 1.5 nm を 9000 ft と
+    // 言われても飛んでいる側の感覚と結びつかない。
+    const text = /abeam|along/.test(stem)
       ? `${(value / 1852).toFixed(2)} nm`
       : `${Math.round(mToFt(value))} ft`;
     return { label: metricLabel(key, stem), text };
@@ -240,6 +249,17 @@ const METRIC_VALUE_JA: Record<string, string> = {
     "測れた項目だけでは判断できないため成績なし",
 };
 
+/** パターンのメトリクスは `pattern_` 付きで metrics に、素のキーで
+ *  evidence に載る。同じ日本語を二度書かないための展開。 */
+function withPatternPrefix(labels: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, label] of Object.entries(labels)) {
+    out[key] = label;
+    out[`pattern_${key}`] = label;
+  }
+  return out;
+}
+
 /** 評価メトリクスの日本語ラベル。無いキーは従来どおりキー名を出す。 */
 const METRIC_LABELS: Record<string, string> = {
   touchdown_descent_rate: "接地降下率",
@@ -315,6 +335,24 @@ const METRIC_LABELS: Record<string, string> = {
   pattern_break_duration: "ブレイクの長さ",
   pattern_break_samples: "ブレイクのサンプル数",
   pattern_break_judged: "ブレイクを採点したか",
+  // ブレイクの G (軌跡から導出。測定のみで採点はしない)
+  ...withPatternPrefix({
+    break_max_load_factor: "ブレイク最大 G",
+    break_mean_load_factor: "ブレイク平均 G（区間全体）",
+    break_sustained_load_factor: "ブレイク定常 G",
+    break_load_factor_std: "ブレイク G の変動（標準偏差）",
+    break_sustained: "G を掛けていた時間",
+    break_max_bank: "ブレイク最大バンク角（記録の Roll）",
+    break_mean_bank: "ブレイク平均バンク角（記録の Roll）",
+    break_entry_speed: "ブレイク進入速度",
+    break_exit_speed: "ブレイク出口速度（ダウンウィンド入り）",
+    break_entry_agl: "ブレイク進入高度",
+    break_heading_change: "ブレイク旋回量（+ = 右回り）",
+    break_mean_turn_rate: "ブレイク平均旋回率",
+    break_mean_turn_rate_deg: "ブレイク平均旋回率",
+    break_start_along: "ブレイク開始位置（+ = 基準点の手前）",
+    base_max_load_factor: "ベースターン最大 G",
+  }),
   sub_scores: "内訳スコア",
   pattern_rollout_offset: "旋回明けの軸ずれ（+ = 手前 / - = 突き抜け）",
   pattern_alignment_error: "旋回明けの軸ずれ量",

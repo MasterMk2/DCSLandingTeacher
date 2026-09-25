@@ -82,6 +82,10 @@ type SampleRow = {
   speed?: number | null;
   aoa?: number | null;
   agl?: number | null;
+  load_factor?: number | null;
+  turn_rate_deg_s?: number | null;
+  roll?: number | null;
+  pitch?: number | null;
 };
 
 const SAMPLE_HEADERS = [
@@ -92,6 +96,10 @@ const SAMPLE_HEADERS = [
   "speed_kt",
   "aoa_deg",
   "agl_ft",
+  "load_factor_g",
+  "turn_rate_deg_s",
+  "roll_deg",
+  "pitch_deg",
 ];
 
 /** Round to 2 decimals for readable CSV cells. */
@@ -114,6 +122,10 @@ export function samplesToCsv(samples: SampleRow[]): string {
       s.speed !== null && s.speed !== undefined ? round2(msToKnots(s.speed)) : "",
       s.aoa ?? "",
       s.agl !== null && s.agl !== undefined ? round2(mToFt(s.agl)) : "",
+      s.load_factor ?? "",
+      s.turn_rate_deg_s ?? "",
+      s.roll ?? "",
+      s.pitch ?? "",
     ]),
   );
 }

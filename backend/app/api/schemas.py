@@ -74,6 +74,13 @@ class DeviationSampleOut(BaseModel):
     #: Metres still to fly to the runway threshold (negative once over it);
     #: None when the landing was not resolved to a real runway.
     distance_to_threshold: float | None = None
+    #: Recorded attitude (ACMI Roll / Pitch, degrees); None on older tracks.
+    roll: float | None = None
+    pitch: float | None = None
+    #: Normal load factor (G) and ground-track turn rate (deg/s, right
+    #: positive) derived from the track (app.grading.kinematics).
+    load_factor: float | None = None
+    turn_rate_deg_s: float | None = None
 
 
 class ApproachTrackOut(BaseModel):

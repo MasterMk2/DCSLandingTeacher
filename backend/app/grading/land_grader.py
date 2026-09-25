@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.grading.deviations import ApproachAnalysis, DeviationSample
+from app.grading.kinematics import annotate_kinematics
 from app.grading.pattern import (
     ApproachSegments,
     effective_approach_pattern,
@@ -646,6 +647,9 @@ def grade_land_landing(
 ) -> LandGradeResult:
     """Grade a land landing; ``config`` is a :class:`GradingConfig`."""
     settings = config.land_grading
+    # 荷重倍数・旋回率は毎回軌跡から導き直す (保存値は使わない)。ブレイクの
+    # G はここで付いたサンプル値から pattern 側が集計する。
+    annotate_kinematics(analysis)
     segments = segment_approach(analysis, settings)
     # パターン判定は軌跡から決める。検出器のラベル (取り込み時にヘディング
     # 変化率だけで付けた見込み値) を信じると、長いファイナルへの旋回進入や
@@ -1205,4 +1209,27 @@ def _pattern_comment_parts(pattern: dict[str, Any] | None) -> list[str]:
                 f"ブレイク中に高度が {spread * M_TO_FT:.0f} ft 動いた"
                 "（水平旋回が基本）"
             )
+        parts.extend(_break_load_comment_parts(pattern))
     return parts
+
+
+def _break_load_comment_parts(pattern: dict[str, Any]) -> list[str]:
+    """ブレイクの G を事実として述べる (判定はしない)。
+
+    「何 G が正しいか」は機体と部隊の流儀で違い、較正データも無いので
+    良し悪しは言わない。ただ、掛けた G と、それが安定していたかどうかは
+    パイロットが自分で振り返るための数字なので講評に載せる。
+    """
+    peak = pattern.get("break_max_load_factor")
+    if peak is None:
+        return []
+    detail: list[str] = []
+    sustained = pattern.get("break_sustained_load_factor")
+    std = pattern.get("break_load_factor_std")
+    if sustained is not None and std is not None:
+        detail.append(f"定常 {sustained:.1f} G ± {std:.2f}")
+    bank = pattern.get("break_max_bank_deg")
+    if bank is not None:
+        detail.append(f"バンク最大 {bank:.0f}°")
+    suffix = f"（{'、'.join(detail)}）" if detail else ""
+    return [f"ブレイクは最大 {peak:.1f} G{suffix}"]

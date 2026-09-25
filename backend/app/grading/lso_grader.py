@@ -39,6 +39,7 @@ from typing import Any
 
 from app.grading.carriers import fallback_geometry_payload
 from app.grading.deviations import ApproachAnalysis, DeviationSample
+from app.grading.kinematics import annotate_kinematics
 
 
 @dataclass
@@ -319,6 +320,9 @@ def grade_carrier_approach(
     grades = settings["grades"]
     decision = settings["decision"]
 
+    # 荷重倍数・旋回率の系列を軌跡から付ける (グラフ・CSV 用。LSO の
+    # 判定には使っていない)。
+    annotate_kinematics(analysis)
     factors = _detect_factors(analysis, settings)
     majors = [f for f in factors if f.severity == "major"]
 

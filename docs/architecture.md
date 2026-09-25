@@ -35,6 +35,8 @@ flowchart LR
 | [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
 | [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与。BURBLE のみヒューリスティック検出（下記「BURBLE 検出について」） |
 | [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
+| [`grading/pattern.py`](../backend/app/grading/pattern.py) | 対地トラックによる進入の区間分割（イニシャル / ブレイク / ダウンウィンド / ベース / ファイナル）と、オーバーヘッドパターン固有のメトリクス（旋回明けの軸ずれ、ダウンウィンド方位・高度、ブレイクの高度変動と **G・バンク角・進入速度・旋回量**）。G 系は測定のみで採点しない |
+| [`grading/kinematics.py`](../backend/app/grading/kinematics.py) | 進入軌跡（滑走路座標系の位置 ~5 Hz）の局所 2 次フィットから速度・加速度を導き、法線荷重倍数（G）と旋回率を各サンプルに付ける。ACMI に加速度計の値は無いのでここで導く。採点・再採点のたびに計算し直す。実記録の Roll との突き合わせは [`grading-references.md`](grading-references.md) を参照 |
 | [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
 | [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別 FLOLS ジオメトリ、Issue #3）の読み込みと解決。未知の艦はタッチダウン基準の近似へフォールバック。**収録値は未検証の推定値**であり、実データでの検証が残っている |
 | [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）も担当 |
@@ -81,7 +83,7 @@ flowchart LR
 | `views/Detail.tsx` | 個別着陸の詳細ビュー |
 | `components/GcaScope.tsx` | GCA（PAR）スコープ風ビュー（方位角・仰角スコープ）。幾何計算は `lib/gcaGeometry.ts` |
 | `components/TopDownTrack.tsx` | トップダウン軌跡ビュー |
-| `components/TimeSeriesChart.tsx` | 時系列チャート（recharts） |
+| `components/TimeSeriesChart.tsx` | 時系列チャート（recharts）: 偏差・速度・降下率に加え、荷重倍数（G）とバンク角。ブレイク区間の G は別色で重ねる |
 | `components/LandingTable.tsx` / `FilterBar.tsx` / `GradeSummary.tsx` | 一覧・フィルタ・グレード集約 |
 | `api/client.ts` / `api/ws.ts` | REST クライアントと自動再接続付き WebSocket クライアント |
 | `lib/csv.ts` | CSV エクスポート |
