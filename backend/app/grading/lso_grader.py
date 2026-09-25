@@ -322,7 +322,7 @@ def grade_carrier_approach(
 
     # 荷重倍数・旋回率の系列を軌跡から付ける (グラフ・CSV 用。LSO の
     # 判定には使っていない)。
-    annotate_kinematics(analysis)
+    kinematics = annotate_kinematics(analysis)
     factors = _detect_factors(analysis, settings)
     majors = [f for f in factors if f.severity == "major"]
 
@@ -366,6 +366,8 @@ def grade_carrier_approach(
         "course_deg": round(analysis.course_deg, 2),
         "major_factor_count": len(majors),
         "factor_names": names,
+        # 位置の飛びとして G の導出から外したサンプル数 (land_grader と同じ)。
+        "kinematics_rejected_samples": kinematics.rejected,
         # Which FLOLS geometry produced this grade (Issue #3): the resolved
         # per-carrier entry or the legacy touchdown-referenced fallback.
         "flols_geometry": (

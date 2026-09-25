@@ -158,5 +158,9 @@ describe("formatMetric", () => {
       text: "3.03 G",
     });
     expect(formatMetric("pattern_break_max_g_to_one_percent", 0.96).text).toBe("0.96 倍");
+    expect(formatMetric("kinematics_rejected_samples", 7)).toEqual({
+      label: "位置の飛びとして G の算出から外したサンプル数",
+      text: "7",
+    });
   });
 });

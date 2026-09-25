@@ -286,6 +286,7 @@ const METRIC_LABELS: Record<string, string> = {
   mean_signed_glideslope_deviation: "平均偏差（+ = 高い）",
   mean_path_angle: "飛んだ経路角",
   crosswind_crab: "クラブ角（接地ヘディング − 対地トラック）",
+  kinematics_rejected_samples: "位置の飛びとして G の算出から外したサンプル数",
   path_angle_spread: "直線からの浮き沈み",
   aim_offset: "狙点のずれ（+ = 接地点より手前）",
   glideslope: "基準スロープ",
