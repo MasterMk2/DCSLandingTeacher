@@ -41,7 +41,8 @@ flowchart LR
 | [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
 | [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別の着艦区域ジオメトリ、Issue #3）の読み込みと解決。米空母の値は MOOSE AIRBOSS から（アングルドデッキは左舷へ 9.14°、グライドスロープの終点は 3 番ワイヤーの 2 m 上）。**このサーバの実トラップでは未検証**（`validated: false`） |
 | [`grading/deviations.py`](../backend/app/grading/deviations.py) | 進入区間の偏差（残距離・グライドスロープ偏差・横ずれ）。空母は **甲板と一緒に動く座標系**: 各サンプル時刻の艦位置・艦首方位から目標ワイヤーを置き直し、高さは甲板から測る（Tacview の AGL は海面基準なので使わない）。G の導出用に、接地時刻で固定した地面座標（`fixed_along` / `fixed_lateral`）も併せて持つ |
-| [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）も担当 |
+| [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）と、生の航跡からの作り直し（rebuild）も担当 |
+| [`rebuild.py`](../backend/app/rebuild.py) | 保存済みの着陸を DB の生の航跡（`tracks`）から作り直すための読み戻し。機体のサンプル・同じフライトの全空母・地面基準（最寄りの艦か静的オブジェクト）をライブ取り込みと同じ形で組み立て、今の検出器が切り出したイベントのうち保存時刻 ±2 秒のものだけを同じ着陸とみなす |
 | [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸レコードには進入区間の生サンプルも JSON 保存（FR-7 再評価要件）。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
 | [`api/routes.py`](../backend/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
 | [`api/notifier.py`](../backend/app/api/notifier.py) | WebSocket 接続管理・着陸通知のブロードキャスト |
@@ -113,6 +114,7 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 | GET | `/api/landings` | 一覧（フィルタ・ページング） |
 | GET | `/api/landings/{id}` | 詳細（ファクター・進入サンプル含む） |
 | POST | `/api/landings/{id}/regrade` | 現在の閾値で再評価 |
+| POST | `/api/landings/{id}/rebuild` | 生の航跡から検出・採点をやり直す（409: `NO_RAW_TRACK` / `NOT_AN_AIRCRAFT` / `REBUILD_NO_MATCH` / `NO_TOUCHDOWN_TIME`、行は変えない） |
 | POST | `/api/import` | ACMI ファイルインポート（multipart、バックグラウンドジョブ。認証対象） |
 | GET | `/api/imports` / `/api/imports/{id}` | インポートジョブの一覧・進捗（認証対象） |
 | WebSocket | `/api/ws/landings` | 着陸通知＋インポート完了通知（`ping` → `pong`） |

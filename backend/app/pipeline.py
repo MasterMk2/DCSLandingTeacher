@@ -27,7 +27,7 @@ from app.grading.land_grader import LandGradeResult, grade_land_landing
 from app.grading.lso_grader import LsoGradeResult, grade_carrier_approach
 from app.grading.pattern import effective_approach_pattern
 from app.ingest import LandingContext
-from app.models.entities import DcsObject, Landing
+from app.models.entities import DcsObject, Flight, Landing
 
 logger = getLogger(__name__)
 
@@ -119,6 +119,55 @@ def _venue_name(event: LandingEvent, analysis: ApproachAnalysis) -> str | None:
     if event.kind == "carrier":
         return event.carrier_name
     return _runway_venue(analysis)
+
+
+def _write_graded_event(
+    landing: Landing,
+    event: LandingEvent,
+    analysis: ApproachAnalysis,
+    result: LandGradeResult | LsoGradeResult,
+    score: float | None,
+) -> str | None:
+    """Overwrite a stored row with a fresh detection + grade of it.
+
+    Shared by the provisional -> final confirmation and by the rebuild from
+    raw tracks: both re-detect the landing, so both have to refresh
+    everything the detection decides, not just the grade. Returns the venue
+    name written.
+    """
+    landing.kind = event.kind
+    landing.outcome = event.outcome
+    landing.outcome_status = "final"
+    # The touchdown itself moves between analyses: bounces absorbed after the
+    # first report shift it to the last contact of the sequence, and a
+    # re-detection may place the contact a sample apart. Refresh everything
+    # derived from it, or the row keeps describing a different instant.
+    touchdown = event.touchdown
+    landing.touchdown_time = touchdown.time
+    landing.latitude = touchdown.latitude
+    landing.longitude = touchdown.longitude
+    landing.altitude = touchdown.altitude
+    landing.heading = touchdown.heading
+    landing.speed = touchdown.speed
+    landing.descent_rate = touchdown.descent_rate_ms
+    landing.grade = result.grade
+    landing.score = score
+    landing.comment = result.comment
+    landing.factors = result.factors_payload()
+    landing.metrics = dict(result.metrics)
+    landing.approach_track = analysis.as_dict()
+    landing.approach_pattern = _row_approach_pattern(event, result)
+    # The touchdown moved, so the runway may have too -- but never clear a
+    # venue we already had: a re-resolve that comes back empty (the sweep
+    # expired, the bot went away) is missing information, not evidence the
+    # airfield changed.
+    venue_name = _venue_name(event, analysis) or landing.venue_name
+    landing.venue_name = venue_name
+    if not landing.airframe and analysis.airframe:
+        landing.airframe = analysis.airframe
+    landing.grading_version = GRADING_VERSION
+    landing.graded_at = _utcnow()
+    return venue_name
 
 
 def _touchdown_epoch(
@@ -225,36 +274,7 @@ class LandingPipeline:
                     "cannot finalize landing #%d: row disappeared", landing_id
                 )
                 return
-            landing.kind = event.kind
-            landing.outcome = event.outcome
-            landing.outcome_status = "final"
-            # The touchdown itself moves between the provisional and final
-            # analysis: bounces absorbed after the first report shift it to
-            # the last contact of the sequence. Refresh everything derived
-            # from it, or the row keeps describing the first bounce.
-            touchdown = event.touchdown
-            landing.touchdown_time = touchdown.time
-            landing.latitude = touchdown.latitude
-            landing.longitude = touchdown.longitude
-            landing.altitude = touchdown.altitude
-            landing.heading = touchdown.heading
-            landing.speed = touchdown.speed
-            landing.descent_rate = touchdown.descent_rate_ms
-            landing.grade = result.grade
-            landing.score = score
-            landing.comment = result.comment
-            landing.factors = result.factors_payload()
-            landing.metrics = dict(result.metrics)
-            landing.approach_track = analysis.as_dict()
-            landing.approach_pattern = _row_approach_pattern(event, result)
-            # The touchdown moved, so the runway may have too -- but never
-            # clear a venue we already had: a re-resolve that comes back
-            # empty (the sweep expired, the bot went away) is missing
-            # information, not evidence the airfield changed.
-            venue_name = _venue_name(event, analysis) or landing.venue_name
-            landing.venue_name = venue_name
-            landing.grading_version = GRADING_VERSION
-            landing.graded_at = _utcnow()
+            venue_name = _write_graded_event(landing, event, analysis, result, score)
             await session.commit()
 
         if self._notifier is not None:
@@ -500,6 +520,134 @@ class LandingPipeline:
             "factors": result.factors_payload(),
             "metrics": dict(result.metrics),
             "approach_pattern": approach_pattern,
+        }
+
+    async def rebuild(self, landing: Landing) -> dict[str, Any]:
+        """Detect and grade a stored landing again from the raw ``tracks``.
+
+        Unlike :meth:`regrade`, nothing stored on the row is re-used: the
+        aircraft's samples (and those of every carrier in the flight) are
+        read back from ``tracks`` around the touchdown, the current detector
+        cuts the approach again with today's windows and frames, and the
+        result replaces the row, down to which ship it names -- which is how
+        a carrier trap recorded with a 60 s window gets the rest of its
+        Case I back (see :mod:`app.rebuild`).
+
+        Raises :class:`~app.api.errors.AppError` (409) when the raw samples
+        are gone or no longer contain a landing at the stored time -- e.g.
+        the objects that hit the water beside a ship and were once stored as
+        "carrier landings", which today's detector rejects.
+        """
+        from app.api.errors import AppError
+        from app.detection.classify import ObjectClass, classify_object_type
+        from app.detection.detector import analyze_track
+        from app.rebuild import (
+            REBUILD_MARGIN_S,
+            ground_altitude_at,
+            load_flight_carriers,
+            load_track_samples,
+            pick_event,
+        )
+
+        if landing.touchdown_time is None:
+            raise AppError(409, "NO_TOUCHDOWN_TIME", "landing has no touchdown time")
+        detection = self._config.to_detection_config()
+        touchdown_time = landing.touchdown_time
+        start = touchdown_time - REBUILD_MARGIN_S - max(
+            detection.approach_window_s,
+            detection.land_approach_window_s,
+            detection.carrier_approach_window_s,
+        )
+        end = touchdown_time + REBUILD_MARGIN_S
+        async with self._session_factory() as session:
+            aircraft = await session.get(DcsObject, landing.object_id)
+            flight = await session.get(Flight, landing.flight_id)
+            samples = await load_track_samples(session, landing.object_id, start, end)
+            # Every ship live ingest was tracking, not just the one the row
+            # names: which deck is under the aircraft is the detector's call.
+            ships = await load_flight_carriers(session, landing.flight_id, start, end)
+            carriers = {obj_id: state for obj_id, (_, state) in ships.items()}
+            ground_altitude = None
+            if samples:
+                at_touchdown = min(samples, key=lambda s: abs(s.time - touchdown_time))
+                ground_altitude = await ground_altitude_at(
+                    session, landing.flight_id, at_touchdown, carriers.values()
+                )
+        if aircraft is None or not samples:
+            raise AppError(
+                409,
+                "NO_RAW_TRACK",
+                f"no raw track samples for landing #{landing.id} "
+                f"between t={start:.1f} and t={end:.1f}",
+            )
+        # Live ingest only runs detection for aircraft (a leading "Air+"): an
+        # ejected pilot is Ground+Light+Human+Air+Parachutist, and rows like
+        # that were stored as landings before the classifier was fixed. Both
+        # landings in the local real recording are such rows. Re-cutting
+        # them would re-create exactly the row the classifier now refuses,
+        # so refuse here too and leave the row as it is. (If the ACMI id was
+        # later reused by a non-aircraft, this refuses a real landing: the
+        # safe failure -- nothing is written.)
+        if classify_object_type(aircraft.type) != ObjectClass.AIRCRAFT:
+            raise AppError(
+                409,
+                "NOT_AN_AIRCRAFT",
+                f"landing #{landing.id} belongs to {aircraft.type!r}, "
+                "which live ingest does not treat as an aircraft",
+            )
+        event = pick_event(
+            analyze_track(
+                samples,
+                ground_altitude,
+                carriers,
+                config=detection,
+                deck_altitude_for=self.deck_altitude_for,
+            ),
+            touchdown_time,
+        )
+        if event is None:
+            raise AppError(
+                409,
+                "REBUILD_NO_MATCH",
+                f"the raw track of landing #{landing.id} holds no landing at "
+                f"t={touchdown_time:.1f}; the row was left unchanged",
+            )
+        carrier_row_id = (
+            ships[event.carrier_obj_id][0] if event.carrier_obj_id in ships else None
+        )
+        context = LandingContext(
+            flight_id=landing.flight_id,
+            acmi_object_id=aircraft.acmi_id,
+            pilot=landing.pilot or aircraft.pilot,
+            airframe=landing.airframe or aircraft.name,
+            event=event,
+            object_row_id=landing.object_id,
+            carrier_row_id=carrier_row_id,
+            source_id=landing.source_id,
+            flight_reference_time=flight.reference_time if flight else None,
+        )
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
+        async with self._session_factory() as session:
+            row = await session.merge(landing)
+            _write_graded_event(row, event, analysis, result, score)
+            row.carrier_object_id = carrier_row_id
+            await session.commit()
+            approach_pattern = row.approach_pattern
+        return {
+            "id": landing.id,
+            "grade": result.grade,
+            "score": score,
+            "comment": result.comment,
+            "factors": result.factors_payload(),
+            "metrics": dict(result.metrics),
+            "approach_pattern": approach_pattern,
+            "kind": event.kind,
+            "outcome": event.outcome,
+            "touchdown_time": event.touchdown.time,
+            "approach_samples": len(analysis.samples),
+            "approach_start_time": (
+                analysis.samples[0].time if analysis.samples else None
+            ),
         }
 
     # ------------------------------------------------------------------

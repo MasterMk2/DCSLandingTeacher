@@ -29,6 +29,7 @@ from app.api.schemas import (
     LandingDetail,
     LandingListResponse,
     LandingSummary,
+    RebuildResponse,
     RegradeRequest,
     RegradeResponse,
     RunwayInventoryResponse,
@@ -374,6 +375,33 @@ async def regrade_landing(
     overrides = body.overrides if body is not None else None
     payload = await pipeline.regrade(landing, overrides=overrides)
     return RegradeResponse(**payload)
+
+
+@protected_router.post("/landings/{landing_id}/rebuild", response_model=RebuildResponse)
+async def rebuild_landing(
+    landing_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> RebuildResponse:
+    """Detect and grade a stored landing again from its raw track.
+
+    A regrade re-reads the approach the row stored; this re-cuts it from the
+    ``tracks`` table with the current detector, so a landing stored with an
+    older window or frame (a carrier trap with only its last 60 s) comes
+    back whole. 409 when the raw samples are gone or hold no landing at the
+    stored time -- the row is then left exactly as it was.
+    """
+    result = await session.execute(select(Landing).where(Landing.id == landing_id))
+    landing = result.scalar_one_or_none()
+    if landing is None:
+        raise HTTPException(status_code=404, detail="landing not found")
+
+    pipeline = getattr(request.app.state, "pipeline", None)
+    if pipeline is None:
+        raise AppError(503, "PIPELINE_UNAVAILABLE", "grading pipeline unavailable")
+
+    payload = await pipeline.rebuild(landing)
+    return RebuildResponse(**payload)
 
 
 @protected_router.post("/config/reload")

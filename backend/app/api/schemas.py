@@ -135,6 +135,20 @@ class RegradeResponse(BaseModel):
     approach_pattern: str | None = None
 
 
+class RebuildResponse(RegradeResponse):
+    """A landing detected and graded again from the raw ``tracks`` table."""
+
+    #: What the detector decides afresh -- these can change on a rebuild,
+    #: unlike on a regrade.
+    kind: str | None = None
+    outcome: str | None = None
+    touchdown_time: float | None = None
+    #: How much of the approach the new cut holds (a carrier trap stored with
+    #: a 60 s window comes back with its whole Case I).
+    approach_samples: int = 0
+    approach_start_time: float | None = None
+
+
 class LandingDetail(LandingSummary):
     """Full evaluation + approach track for one landing."""
 

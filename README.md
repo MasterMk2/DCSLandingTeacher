@@ -162,6 +162,7 @@ alembic upgrade head     # 未適用マイグレーションの適用
 | GET | `/api/landings` | 着陸履歴一覧（`player` / `airframe` / `venue` / `kind` / `grade` / `outcome` / `date_from` / `date_to` / `limit` / `offset` でフィルタ・ページング） |
 | GET | `/api/landings/{id}` | 個別着陸の詳細（グレード、ファクター、進入軌跡サンプル、接地状態） |
 | POST | `/api/landings/{id}/regrade` | 保存済み進入データに対し現在の閾値で再評価 |
+| POST | `/api/landings/{id}/rebuild` | DB に残っている生の航跡から検出・切り出し・採点をやり直す（保存時刻に着陸が見つからなければ 409 で行はそのまま） |
 | POST | `/api/import` | ACMI ファイルのインポート（multipart、バックグラウンド処理。ジョブ ID を即時返却） |
 | GET | `/api/imports` | インポートジョブの一覧（新しい順） |
 | GET | `/api/imports/{id}` | インポートジョブの進捗・結果サマリ |
@@ -387,6 +388,13 @@ land_grading:
 
 編集後は該当着陸に `POST /api/landings/{id}/regrade` を送ると、保存済みの
 進入データに対して新しい閾値で再評価されます（生データは FR-7 により DB に保存されています）。
+
+再評価は保存済みの進入を読み直すだけなので、切り出す範囲や検出そのものが
+変わったとき（例: 2026-09-26 に空母の取り込みを 60 秒から 300 秒に広げた変更）は
+`POST /api/v1/landings/{id}/rebuild` で DB に残っている生の航跡から切り出し直します
+（詳細は [`docs/grading-references.md`](docs/grading-references.md) §1）。全件を今の版に
+揃えるには `python scripts/refresh-landings.py --base http://127.0.0.1:8000/api/v1`
+で下見し、`--apply` を付けて流します（空母は作り直し、それ以外は再評価）。
 
 ## 開発
 
