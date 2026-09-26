@@ -6,16 +6,54 @@ carries the columns the future detection/grading tasks will populate.
 
 from __future__ import annotations
 
+import json
+import zlib
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    DDL,
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    String,
+    event,
+)
+from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
 from app.models.base import Base
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class CompressedJSON(TypeDecorator):
+    """JSON stored zlib-compressed in a BLOB.
+
+    For the approach tracks: a few hundred KB of JSON each, which zlib
+    shrinks about sevenfold (724 MB -> 106 MB on 1,723 synthetic tracks
+    shaped like real ones).
+    """
+
+    impl = LargeBinary
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> bytes | None:
+        if value is None:
+            return None
+        return zlib.compress(json.dumps(value).encode("utf-8"), 6)
+
+    def process_result_value(self, value: bytes | None, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return json.loads(zlib.decompress(value))
 
 
 class Flight(Base):
@@ -136,8 +174,16 @@ class Landing(Base):
     factors: Mapped[list | None] = mapped_column(JSON, nullable=True)
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # Raw approach segment + computed deviations, kept for re-evaluation (FR-7)
-    approach_track: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Raw approach segment + computed deviations, kept for re-evaluation
+    # (FR-7). Lives in its own table (LandingTrack); ``approach_track`` reads
+    # and writes it as if it were a column. Loaded with the landing unless a
+    # query opts out -- the list does (raiseload), since it never shows it.
+    track: Mapped[LandingTrack | None] = relationship(
+        lazy="selectin", cascade="all, delete-orphan", uselist=False
+    )
+    approach_track = association_proxy(
+        "track", "approach_track", creator=lambda value: LandingTrack(approach_track=value)
+    )
 
     # Approach pattern classification: "overhead" | "straight_in" | "unknown"
     approach_pattern: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -163,6 +209,37 @@ class Landing(Base):
     graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LandingTrack(Base):
+    """One landing's stored approach track, compressed.
+
+    Out of ``landings`` because a big value in the middle of a row is read
+    whenever a column after it is: SQLite reaches a later column by walking
+    the row's overflow pages, and ``created_at``, ``source_id``, ``pilot``
+    and ``airframe`` -- what the list sorts and filters on -- all came after
+    ``approach_track``. With 1,723 tracks of ~300 KB (synthetic, measured)
+    the list's count and page queries took 320 ms and 960 ms; with the track
+    in this table, 1.5 ms and 1 ms.
+    """
+
+    __tablename__ = "landing_tracks"
+
+    landing_id: Mapped[int] = mapped_column(
+        ForeignKey("landings.id", ondelete="CASCADE"), primary_key=True
+    )
+    approach_track: Mapped[Any] = mapped_column(CompressedJSON, nullable=True)
+
+
+#: SQLite does not enforce foreign keys here (no ``PRAGMA foreign_keys``), and
+#: landings are also deleted in bulk (the import cleanup). A deleted landing's
+#: id is reused by the next insert, which would then collide with the track
+#: left behind -- so the track goes with the landing, however it is deleted.
+LANDING_TRACK_TRIGGER = (
+    "CREATE TRIGGER IF NOT EXISTS landings_delete_track AFTER DELETE ON landings "
+    "BEGIN DELETE FROM landing_tracks WHERE landing_id = OLD.id; END"
+)
+event.listen(LandingTrack.__table__, "after_create", DDL(LANDING_TRACK_TRIGGER))
 
 
 class ImportJobRow(Base):

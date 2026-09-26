@@ -92,17 +92,18 @@ def keep_windows(
 
 
 def _schema(connection: sqlite3.Connection) -> tuple[list[tuple[str, str]], list[str]]:
-    """(table name, CREATE TABLE) pairs and CREATE INDEX statements, verbatim."""
+    """(table name, CREATE TABLE) pairs, and the CREATE INDEX / CREATE TRIGGER
+    statements to run once the data is in -- all verbatim."""
     rows = connection.execute(
         "SELECT type, name, sql FROM sqlite_master "
         "WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
     ).fetchall()
     tables = [(name, sql) for type_, name, sql in rows if type_ == "table"]
-    indexes = [sql for type_, _name, sql in rows if type_ == "index"]
-    others = [name for type_, name, _sql in rows if type_ not in ("table", "index")]
+    after_copy = [sql for type_, _name, sql in rows if type_ in ("index", "trigger")]
+    others = [name for type_, name, _sql in rows if type_ not in ("table", "index", "trigger")]
     if others:
-        raise CompactError(f"unexpected schema objects (views/triggers?): {others}")
-    return tables, indexes
+        raise CompactError(f"unexpected schema objects (views?): {others}")
+    return tables, after_copy
 
 
 def compact(source: Path, *, swap: bool, out=sys.stdout) -> Path:
@@ -119,7 +120,7 @@ def compact(source: Path, *, swap: bool, out=sys.stdout) -> Path:
         busy, _log, _done = src.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         if busy:
             raise CompactError("the database is in use: stop the application first")
-        tables, indexes = _schema(src)
+        tables, after_copy = _schema(src)
         names = [name for name, _ in tables]
         if "tracks" not in names or "landings" not in names:
             raise CompactError(f"{source} is not a DCS Landing Teacher database")
@@ -160,7 +161,7 @@ def compact(source: Path, *, swap: bool, out=sys.stdout) -> Path:
 
     dest = sqlite3.connect(target, isolation_level=None)
     try:
-        for sql in indexes:
+        for sql in after_copy:
             dest.execute(sql)
         after = {name: dest.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
                  for name in names}
