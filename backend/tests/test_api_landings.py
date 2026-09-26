@@ -112,6 +112,33 @@ async def test_list_landings_filters_and_paging(client) -> None:
     assert response.status_code == 200
 
 
+async def test_the_list_does_not_read_the_approach_tracks(client) -> None:
+    """A list row never shows the approach, and each one is hundreds of KB
+    of JSON: the page query must leave the column out (it used to load and
+    parse up to 200 of them per page)."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    http, app = client
+    await seed_landing(app.state.session_factory, app.state.pipeline)
+    statements: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", _capture)
+    try:
+        response = await http.get("/api/v1/landings")
+    finally:
+        event.remove(Engine, "before_cursor_execute", _capture)
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    page = [s for s in statements if "FROM landings" in s and "LIMIT" in s]
+    assert page, statements
+    assert all("approach_track" not in s for s in page)
+
+
 async def test_get_landing_detail_includes_approach_track(client) -> None:
     http, app = client
     landing_id = await seed_landing(

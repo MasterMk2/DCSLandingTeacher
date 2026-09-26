@@ -163,6 +163,8 @@ alembic upgrade head     # 未適用マイグレーションの適用
 | GET | `/api/landings/{id}` | 個別着陸の詳細（グレード、ファクター、進入軌跡サンプル、接地状態） |
 | POST | `/api/landings/{id}/regrade` | 保存済み進入データに対し現在の閾値で再評価 |
 | POST | `/api/landings/{id}/rebuild` | DB に残っている生の航跡から検出・切り出し・採点をやり直す（保存時刻に着陸が見つからなければ 409 で行はそのまま） |
+| GET | `/api/v1/flights` | 記録済みの ACMI セッションの一覧と着陸数 |
+| POST | `/api/v1/flights/{id}/rescan` | そのセッションの生の航跡から、記録されていない着陸を探す（既定は下見、`?apply=true` で記録） |
 | POST | `/api/import` | ACMI ファイルのインポート（multipart、バックグラウンド処理。ジョブ ID を即時返却） |
 | GET | `/api/imports` | インポートジョブの一覧（新しい順） |
 | GET | `/api/imports/{id}` | インポートジョブの進捗・結果サマリ |
@@ -395,6 +397,13 @@ land_grading:
 （詳細は [`docs/grading-references.md`](docs/grading-references.md) §1）。全件を今の版に
 揃えるには `python scripts/refresh-landings.py --base http://127.0.0.1:8000/api/v1`
 で下見し、`--apply` を付けて流します（空母は作り直し、それ以外は再評価）。
+
+生の航跡は、着陸ごとにその前後（初接地の 420 秒前〜接地の 120 秒後）の機体と、
+着艦ならその艦、それに静的オブジェクトだけを DB に残します。作り直しに要るのはそこだけで、以前のように
+全オブジェクトの全更新を書き続けると DB が際限なく大きくなるためです（本番は約 11 GB に
+達しました）。それより前に記録した DB を縮める手順（取りこぼした着陸の洗い直し →
+`python -m app.compact`）は [`docs/architecture.md`](docs/architecture.md) の
+「生の航跡の保持」にあります。
 
 ## 開発
 

@@ -234,12 +234,14 @@ class ImportJobManager:
         notifier: Any | None = None,
         sample_buffer_s: float = 600.0,
         detection_config: DetectionConfig | None = None,
+        keep_all_tracks: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._pipeline = pipeline
         self._notifier = notifier
         self._sample_buffer_s = sample_buffer_s
         self._detection_config = detection_config
+        self._keep_all_tracks = keep_all_tracks
         self._jobs: dict[str, ImportJob] = {}
         # SQLite only supports one writer at a time; running two imports (or
         # an import alongside the live stream) concurrently makes both sides
@@ -393,6 +395,7 @@ class ImportJobManager:
             source_id=import_source_id(job.id),
             detection_config=self._detection_config,
             deck_altitude_for=self._pipeline.deck_altitude_for,
+            keep_all_tracks=self._keep_all_tracks,
         )
         holder.append(
             _DuplicateGuard(job, self._session_factory, self._pipeline, ingestor)

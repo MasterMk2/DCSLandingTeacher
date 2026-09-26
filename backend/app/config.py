@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # estimates; see the comments in config/carriers.yaml.
     carriers_config_path: str = "config/carriers.yaml"
 
+    # Raw track retention (app/retention.py). By default the ingestor writes
+    # an aircraft's samples only around its landings, plus the ship it landed
+    # on over the same span, and every static. True writes every sample of every
+    # object -- missiles and shells included -- which is what grew the
+    # production database past 11 GB; only for a session recorded on purpose
+    # as validation data. Applies to live sources and to file imports.
+    keep_all_tracks: bool = False
+
     # Apply Alembic migrations automatically at startup (Issue #7). When
     # disabled, the legacy create_all bootstrap is used instead (dev mode).
     migrations_on_startup: bool = True

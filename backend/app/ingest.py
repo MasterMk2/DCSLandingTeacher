@@ -1,5 +1,12 @@
 """Ingest pipeline: ACMI parser events -> ORM entities -> SQLite.
 
+Raw track samples are NOT all persisted (see :mod:`app.retention`): an
+aircraft's samples are held in memory and written only around its landings,
+together with the samples of the ship it landed on over the same span; statics are
+written as they come; weapons, shells, chaff and ground units not at all.
+``keep_all_tracks`` restores the old write-everything behaviour for a
+session recorded on purpose as validation data.
+
 Lines are parsed incrementally and persisted in batches: a single session is
 reused across events and committed once ``max_batch_size`` pending writes
 have accumulated, ``max_batch_age_s`` seconds have passed since the batch's
@@ -28,8 +35,10 @@ airborne. New landing events are forwarded to the optional
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
+from itertools import chain
 from logging import getLogger
 from typing import Any
 
@@ -56,8 +65,37 @@ from app.detection.detector import (
 )
 from app.detection.geometry import haversine_m
 from app.models.entities import DcsObject, Flight, Track
+from app.retention import retention_history_s, retention_window
 
 logger = getLogger(__name__)
+
+#: Column order of a raw track row as the ingestor holds it in memory. A
+#: tuple rather than the column dict: an aircraft's history is ~3,000 rows,
+#: and a dict per row costs about twice the memory.
+TRACK_COLUMNS: tuple[str, ...] = (
+    "flight_id",
+    "object_id",
+    "mission_time",
+    "latitude",
+    "longitude",
+    "altitude",
+    "u",
+    "v",
+    "roll",
+    "pitch",
+    "yaw",
+    "heading",
+    "speed",
+    "on_ground",
+    "agl",
+    "aoa",
+)
+_ROW_TIME = TRACK_COLUMNS.index("mission_time")
+
+#: Retained rows kept queued while commits keep failing, at most (roughly 100
+#: landings' worth). A failed batch no longer drops them; this bounds how
+#: much memory an unwritable database can make the ingestor hold.
+MAX_PENDING_RETAINED_ROWS = 200_000
 
 #: Radius (m) within which a static object / carrier is used as the ground
 #: elevation reference for WOW estimation.
@@ -156,6 +194,82 @@ def reject_impossible_position(
     return replace(sample, latitude=None, longitude=None)
 
 
+def deck_altitude_under(
+    sample: TrackSample,
+    carriers: Iterable[CarrierState],
+    deck_altitude_for: DeckAltitudeResolver | None,
+    proximity_m: float,
+) -> float | None:
+    """Deck altitude (MSL) under ``sample``, or ``None`` if not over a ship.
+
+    The detection gate's O(1)-ish answer for a single sample, rather than
+    the whole-buffer sweep :func:`app.detection.detector._reference_surfaces`
+    does. ``None`` whenever the deck height is unknown, so the gate falls
+    back to the terrain-referenced test. Shared with the rescan of old raw
+    tracks (app/rescan.py), which has to ask the gate's question the gate's
+    way to find the contacts live ingest would have analysed.
+    """
+    if deck_altitude_for is None:
+        return None
+    if sample.latitude is None or sample.longitude is None:
+        return None
+    best: float | None = None
+    best_distance = proximity_m
+    for carrier in carriers:
+        deck = deck_altitude_for(carrier)
+        if deck is None:
+            continue
+        position = carrier.position_at(sample.time)
+        if position is None:
+            continue
+        distance = haversine_m(sample.latitude, sample.longitude, position[0], position[1])
+        if distance <= best_distance:
+            best = (carrier.altitude_at(sample.time) or 0.0) + deck
+            best_distance = distance
+    return best
+
+
+def nearest_ground_reference(
+    latitude: float | None,
+    longitude: float | None,
+    positions: Iterable[tuple[float, float, float]],
+) -> float | None:
+    """Altitude of the nearest ``(lat, lon, alt)`` within ``GROUND_REFERENCE_RADIUS_M``.
+
+    ``positions`` are the carriers' and statics' latest known positions,
+    carriers first (a static at the same distance wins, as it always has).
+    """
+    if latitude is None or longitude is None:
+        return None
+    best: float | None = None
+    best_distance = GROUND_REFERENCE_RADIUS_M
+    for lat, lon, alt in positions:
+        distance = haversine_m(latitude, longitude, lat, lon)
+        if distance <= best_distance:
+            best_distance = distance
+            best = alt
+    return best
+
+
+def gate_wow(
+    sample: TrackSample,
+    deck_altitude: float | None,
+    ground_reference: Callable[[], float | None],
+    config: DetectionConfig,
+) -> bool | None:
+    """The detection gate's weight-on-wheels estimate for one sample.
+
+    Over a ship the surface is the deck and Tacview's (sea-referenced) AGL is
+    not trusted. The nearest ship/static is only consulted when the sample
+    itself carries neither AGL nor OnGround, hence the callable.
+    """
+    if deck_altitude is not None:
+        return is_on_deck(sample, deck_altitude, config, trust_sample_agl=False)
+    if sample.on_ground is None and sample.agl is None:
+        return is_on_deck(sample, ground_reference(), config, trust_sample_agl=True)
+    return is_on_deck(sample, None, config, trust_sample_agl=True)
+
+
 @dataclass
 class LandingContext:
     """Everything the grading pipeline needs about one detected landing.
@@ -223,6 +337,7 @@ class TrackIngestor:
         source_id: str = "default",
         detection_config: DetectionConfig | None = None,
         deck_altitude_for: DeckAltitudeResolver | None = None,
+        keep_all_tracks: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._max_batch_size = max(1, max_batch_size)
@@ -284,6 +399,24 @@ class TrackIngestor:
         #: is when the recording session started and is what actually
         #: distinguishes them.
         self._session_signature: tuple[str, str] | None = None
+
+        # --- raw track retention (app/retention.py) ------------------------
+        #: Write every sample of every object, as before retention existed.
+        self._keep_all_tracks = keep_all_tracks
+        #: acmi id -> recent raw rows (``TRACK_COLUMNS`` tuples, oldest
+        #: first) of each aircraft and carrier, long enough to write a whole
+        #: landing window once the stream has passed its end.
+        self._raw_history: dict[str, deque[tuple[Any, ...]]] = {}
+        self._raw_history_s = retention_history_s(self._detection_config)
+        #: acmi id -> retention windows ``(start, end)`` still to be written,
+        #: merged and sorted.
+        self._retention_windows: dict[str, list[tuple[float, float]]] = {}
+        #: acmi id -> mission time of the newest raw row already written, so
+        #: overlapping windows (a touch-and-go series) never write a row twice.
+        self._retained_through: dict[str, float] = {}
+        #: Retained rows (column dicts) staged but not yet committed; they
+        #: survive a failed batch (see _stage_rows).
+        self._pending_retained: list[dict[str, Any]] = []
 
     @property
     def parser(self) -> AcmiParser:
@@ -355,7 +488,11 @@ class TrackIngestor:
         await self._flush(force=True)
 
     async def close(self) -> None:
-        """Flush pending writes and release the session."""
+        """Write what the landing windows hold, flush, and release the session."""
+        self._stage_all_retention_windows()
+        if self._pending_retained:
+            # Left over from a failed batch, with no session open to retry in.
+            self._get_session()
         await self._flush(force=True)
 
     # ------------------------------------------------------------------
@@ -383,7 +520,8 @@ class TrackIngestor:
         self._batch_opened_at = None
         # The batch's samples were never committed; dropping them matches the
         # pre-#47 ORM behaviour where the discarded session took its pending
-        # objects with it.
+        # objects with it. Retained landing rows are kept for the next batch:
+        # nothing else holds them any more (see _stage_rows).
         self._pending_tracks.clear()
         if session is None:
             return
@@ -422,6 +560,7 @@ class TrackIngestor:
         self._batch_opened_at = None
         dirty_last_seen = self._dirty_last_seen
         pending_tracks = self._pending_tracks
+        retained = len(self._pending_retained)
         try:
             # Track samples as one executemany INSERT instead of one ORM
             # object per line (Issue #47): the ORM unit-of-work state per
@@ -430,7 +569,9 @@ class TrackIngestor:
             # quadratic scan.
             if pending_tracks:
                 self._pending_tracks = []
-                await session.execute(insert(Track), pending_tracks)
+            rows = pending_tracks + self._pending_retained[:retained]
+            if rows:
+                await session.execute(insert(Track), rows)
             # Deferred object last_seen stamps (Issue #47): one executemany
             # UPDATE for every touched object of the batch instead of one
             # statement per update line. Built on the Core table object: the
@@ -453,6 +594,7 @@ class TrackIngestor:
             raise
         else:
             dirty_last_seen.clear()
+            del self._pending_retained[:retained]
         finally:
             await session.close()
 
@@ -549,15 +691,18 @@ class TrackIngestor:
             self._dirty_last_seen[object_row_id] = source.last_seen
 
         track = self._build_track(flight_id, object_row_id, source, event.time)
+        obj_class = classify_object_type(source.type) if source is not None else None
         if track is not None:
-            self._pending_tracks.append(track)
-            self._pending += 1
+            self._keep_track(event.obj_id, obj_class, track)
         await self._flush()
 
         if source is not None:
             self._update_detection_state(event.obj_id, source)
-            if classify_object_type(source.type) == ObjectClass.AIRCRAFT:
+            if obj_class == ObjectClass.AIRCRAFT:
                 await self._maybe_detect_landing(event.obj_id)
+        if self._retention_windows:
+            now = self._session_time_high
+            await self._write_retention_windows(event.time if now is None else now)
 
     async def _handle_remove(self, event: ObjectRemoveEvent) -> None:
         object_row_id = self._object_row_ids.get(event.obj_id)
@@ -577,6 +722,137 @@ class TrackIngestor:
             classify_object_type(dcs_object.type) == ObjectClass.AIRCRAFT
         ):
             await self._maybe_detect_landing(event.obj_id, force_final=True)
+        # Nothing more of this object will arrive: write what its windows
+        # have, and free the ACMI id's history for whatever claims it next.
+        self._stage_retention_windows(event.obj_id, due_by=None)
+        self._raw_history.pop(event.obj_id, None)
+        self._retained_through.pop(event.obj_id, None)
+        await self._flush()
+
+    # ------------------------------------------------------------------
+    # Raw track retention (app/retention.py)
+    # ------------------------------------------------------------------
+
+    def _keep_track(
+        self, obj_id: str, obj_class: ObjectClass | None, track: tuple[Any, ...]
+    ) -> None:
+        """Route one raw row: write it now, hold it for a window, or drop it."""
+        if self._keep_all_tracks or obj_class == ObjectClass.STATIC:
+            # Statics barely update, and the rebuild's ground reference reads
+            # where each one last stood.
+            self._pending_tracks.append(dict(zip(TRACK_COLUMNS, track)))
+            self._pending += 1
+            return
+        if obj_class not in (ObjectClass.AIRCRAFT, ObjectClass.CARRIER):
+            # Weapons, shells, chaff, ground units: nothing reads them.
+            return
+        history = self._raw_history.get(obj_id)
+        if history is None:
+            history = self._raw_history[obj_id] = deque()
+        history.append(track)
+        cutoff = track[_ROW_TIME] - self._raw_history_s
+        windows = self._retention_windows.get(obj_id)
+        while history and history[0][_ROW_TIME] < cutoff:
+            old = history.popleft()
+            # A window still open when its start leaves the history -- the
+            # ship of a deck that keeps taking traps less than two minutes
+            # apart, each one pushing the merged window's end further out --
+            # has its rows written on the way out instead of lost.
+            if windows and any(start <= old[_ROW_TIME] <= end for start, end in windows):
+                if old[_ROW_TIME] > self._retained_through.get(obj_id, float("-inf")):
+                    self._stage_rows(obj_id, [old])
+
+    def _retain_landing(self, obj_id: str, landing: LandingEvent) -> None:
+        """Mark the raw span of ``landing`` for writing: the aircraft's, and
+        its ship's when it landed on one.
+
+        Only the ship the landing names (see app/retention.py for why). Called
+        on every analysis of the landing: the touchdown walks forward as
+        bounces are absorbed, and the window follows it.
+        """
+        if self._keep_all_tracks:
+            return
+        start, end = retention_window(
+            landing.first_contact_time, landing.touchdown.time, self._detection_config
+        )
+        targets = [obj_id] + ([landing.carrier_obj_id] if landing.carrier_obj_id else [])
+        for target in targets:
+            windows = self._retention_windows.setdefault(target, [])
+            merged_start, merged_end = start, end
+            kept: list[tuple[float, float]] = []
+            for window in windows:
+                if window[1] < merged_start or window[0] > merged_end:
+                    kept.append(window)
+                else:
+                    merged_start = min(merged_start, window[0])
+                    merged_end = max(merged_end, window[1])
+            kept.append((merged_start, merged_end))
+            kept.sort()
+            self._retention_windows[target] = kept
+
+    def _stage_retention_windows(self, obj_id: str, *, due_by: float | None) -> None:
+        """Queue the held rows of ``obj_id``'s windows that end by ``due_by``.
+
+        ``due_by=None`` writes every window now with whatever the history
+        holds: the object is gone, the session is rotating, or the ingestor
+        is closing, so no more of it is coming.
+        """
+        windows = self._retention_windows.get(obj_id)
+        if not windows:
+            return
+        due = [w for w in windows if due_by is None or w[1] <= due_by]
+        if not due:
+            return
+        remaining = [w for w in windows if w not in due]
+        if remaining:
+            self._retention_windows[obj_id] = remaining
+        else:
+            del self._retention_windows[obj_id]
+        history = self._raw_history.get(obj_id)
+        if not history:
+            return
+        written_through = self._retained_through.get(obj_id, float("-inf"))
+        rows = [
+            row
+            for row in history
+            if row[_ROW_TIME] > written_through
+            and any(start <= row[_ROW_TIME] <= end for start, end in due)
+        ]
+        if rows:
+            self._stage_rows(obj_id, rows)
+
+    def _stage_rows(self, obj_id: str, rows: list[tuple[Any, ...]]) -> None:
+        """Queue retained rows (oldest first) for the next commit.
+
+        They go to ``_pending_retained``, not ``_pending_tracks``: a failed
+        batch drops the latter, and these rows are already gone from the
+        window and the history, so dropping them would lose the landing's
+        raw data for good. They leave the queue only once committed.
+        """
+        # Open the batch first: a landing pass has just committed and closed
+        # it, and _flush() has nothing to commit into without a session.
+        self._get_session()
+        self._pending_retained.extend(dict(zip(TRACK_COLUMNS, row)) for row in rows)
+        self._pending += len(rows)
+        self._retained_through[obj_id] = rows[-1][_ROW_TIME]
+        overflow = len(self._pending_retained) - MAX_PENDING_RETAINED_ROWS
+        if overflow > 0:
+            # Only while the database keeps refusing writes; bound the memory.
+            del self._pending_retained[:overflow]
+            logger.warning(
+                "dropped %d retained track rows: the database has refused writes "
+                "for too long", overflow
+            )
+
+    async def _write_retention_windows(self, now: float) -> None:
+        """Write every window the stream has passed the end of."""
+        for obj_id in list(self._retention_windows):
+            self._stage_retention_windows(obj_id, due_by=now)
+        await self._flush()
+
+    def _stage_all_retention_windows(self) -> None:
+        for obj_id in list(self._retention_windows):
+            self._stage_retention_windows(obj_id, due_by=None)
 
     # ------------------------------------------------------------------
     # Session rotation (mission restart handling)
@@ -644,7 +920,12 @@ class TrackIngestor:
         session gets fresh rows with correct identity and first_seen.
         """
         logger.warning("ACMI session restart detected (%s); rotating", reason)
+        # The previous mission's windows get what they hold; their tails are
+        # not coming.
+        self._stage_all_retention_windows()
         await self._flush(force=True)
+        self._raw_history.clear()
+        self._retained_through.clear()
         self._flight_id = None
         self._object_row_ids.clear()
         self._object_meta.clear()
@@ -718,34 +999,15 @@ class TrackIngestor:
                 )
 
     def _gate_deck_altitude(self, sample: TrackSample) -> float | None:
-        """Deck altitude (MSL) under ``sample``, or ``None`` if not over a ship.
-
-        Only used by the detection gate, which needs an O(1)-ish answer for a
-        single sample rather than the whole-buffer sweep
-        :func:`app.detection.detector._reference_surfaces` does. Returns
-        ``None`` whenever the deck height is unknown, so the gate falls back
-        to the terrain-referenced test it has always used.
-        """
-        if self._deck_altitude_for is None or not self._carrier_states:
+        """Deck altitude (MSL) under ``sample``; see :func:`deck_altitude_under`."""
+        if not self._carrier_states:
             return None
-        if sample.latitude is None or sample.longitude is None:
-            return None
-        best: float | None = None
-        best_distance = self._detection_config.carrier_proximity_m
-        for carrier in self._carrier_states.values():
-            deck = self._deck_altitude_for(carrier)
-            if deck is None:
-                continue
-            position = carrier.position_at(sample.time)
-            if position is None:
-                continue
-            distance = haversine_m(
-                sample.latitude, sample.longitude, position[0], position[1]
-            )
-            if distance <= best_distance:
-                best = (carrier.altitude_at(sample.time) or 0.0) + deck
-                best_distance = distance
-        return best
+        return deck_altitude_under(
+            sample,
+            self._carrier_states.values(),
+            self._deck_altitude_for,
+            self._detection_config.carrier_proximity_m,
+        )
 
     #: Minimum baseline (s) for the two-point ground-speed estimate below.
     #: ACMI partial updates that omit T=lon|lat frequently repeat the last
@@ -796,24 +1058,18 @@ class TrackIngestor:
         self, latitude: float | None, longitude: float | None
     ) -> float | None:
         """Elevation of the nearest carrier deck / static within range."""
-        best: float | None = None
-        best_distance = GROUND_REFERENCE_RADIUS_M
-        if latitude is None or longitude is None:
-            return None
-        for state in self._carrier_states.values():
-            if not state.samples:
-                continue
-            t, lat, lon, alt, *_ = state.samples[-1]
-            distance = haversine_m(latitude, longitude, lat, lon)
-            if distance <= best_distance:
-                best_distance = distance
-                best = alt
-        for lat, lon, alt in self._static_positions.values():
-            distance = haversine_m(latitude, longitude, lat, lon)
-            if distance <= best_distance:
-                best_distance = distance
-                best = alt
-        return best
+        return nearest_ground_reference(
+            latitude,
+            longitude,
+            chain(
+                (
+                    state.samples[-1][1:4]
+                    for state in self._carrier_states.values()
+                    if state.samples
+                ),
+                self._static_positions.values(),
+            ),
+        )
 
     async def _maybe_detect_landing(
         self, obj_id: str, *, force_final: bool = False
@@ -846,23 +1102,11 @@ class TrackIngestor:
         # deck", and the deck-aware pass behind it never runs. Deck-
         # referencing every sample and then never reaching the code that uses
         # it is how this shipped inert.
-        deck = self._gate_deck_altitude(last)
-        if deck is not None:
-            gate_ground_altitude = deck
-            trust_sample_agl = False
-        elif last.on_ground is None and last.agl is None:
-            gate_ground_altitude = self._ground_altitude_for(
-                last.latitude, last.longitude
-            )
-            trust_sample_agl = True
-        else:
-            gate_ground_altitude = None
-            trust_sample_agl = True
-        wow_now = is_on_deck(
+        wow_now = gate_wow(
             last,
-            gate_ground_altitude,
+            self._gate_deck_altitude(last),
+            lambda: self._ground_altitude_for(last.latitude, last.longitude),
             self._detection_config,
-            trust_sample_agl=trust_sample_agl,
         )
         wow_before = self._last_wow.get(obj_id)
         self._last_wow[obj_id] = wow_now
@@ -891,6 +1135,8 @@ class TrackIngestor:
         if not events:
             self._settle_provisional_state(obj_id)
             return
+        for landing in events:
+            self._retain_landing(obj_id, landing)
 
         # Landing events are rare; commit pending ingest writes first so the
         # grading pipeline can open its own write transaction without
@@ -1043,12 +1289,14 @@ class TrackIngestor:
         object_row_id: int,
         source: AcmiObject | None,
         mission_time: float,
-    ) -> dict[str, Any] | None:
-        """One track sample as a plain column dict for executemany INSERT.
+    ) -> tuple[Any, ...] | None:
+        """One raw track row, as a ``TRACK_COLUMNS`` tuple.
 
         The ORM ``Track`` instance was dropped for the bulk write path
         (Issue #47): samples arrive at tens of lines per second and the ORM
-        unit-of-work bookkeeping per instance outweighed the SQL itself.
+        unit-of-work bookkeeping per instance outweighed the SQL itself. The
+        rows that do get written become column dicts for one executemany
+        INSERT at flush time.
         """
         if not isinstance(source, AcmiObject):
             return None
@@ -1064,21 +1312,21 @@ class TrackIngestor:
         )
         if not has_position:
             return None
-        return {
-            "flight_id": flight_id,
-            "object_id": object_row_id,
-            "mission_time": mission_time,
-            "latitude": source.latitude,
-            "longitude": source.longitude,
-            "altitude": source.altitude,
-            "u": source.u,
-            "v": source.v,
-            "roll": source.roll,
-            "pitch": source.pitch,
-            "yaw": source.yaw,
-            "heading": source.heading,
-            "speed": source.speed,
-            "on_ground": source.on_ground,
-            "agl": source.agl,
-            "aoa": source.aoa,
-        }
+        return (
+            flight_id,
+            object_row_id,
+            mission_time,
+            source.latitude,
+            source.longitude,
+            source.altitude,
+            source.u,
+            source.v,
+            source.roll,
+            source.pitch,
+            source.yaw,
+            source.heading,
+            source.speed,
+            source.on_ground,
+            source.agl,
+            source.aoa,
+        )
