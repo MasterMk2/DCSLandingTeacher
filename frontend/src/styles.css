@@ -1293,9 +1293,25 @@ main {
 .pattern-leg-base { stroke: var(--leg-base); }
 .pattern-leg-final { stroke: var(--accent); }
 .pattern-leg-rollout { stroke: var(--text-dim); stroke-dasharray: 4 4; }
+/* An earlier pass the record reaches back over (a carrier wave-off). */
+.pattern-leg-prior { stroke: var(--text-dim); stroke-dasharray: 2 5; opacity: 0.6; }
 
 .pattern-start {
   fill: var(--text);
+}
+
+/* The carrier's hull along its heading (ship-frame plan view). */
+.pattern-ship {
+  stroke: var(--text-dim);
+  stroke-width: 7;
+  opacity: 0.8;
+}
+
+/* Case I checkpoints (kiss-off, abeam, 90, wake, groove start). */
+.pattern-mark-dot {
+  fill: var(--bg-panel);
+  stroke: var(--text);
+  stroke-width: 1.4;
 }
 
 .pattern-scalebar {
@@ -1333,6 +1349,7 @@ main {
 .pattern-legend-swatch.pattern-leg-base { border-top-color: var(--leg-base); }
 .pattern-legend-swatch.pattern-leg-final { border-top-color: var(--accent); }
 .pattern-legend-swatch.pattern-leg-rollout { border-top-color: var(--text-dim); }
+.pattern-legend-swatch.pattern-leg-prior { border-top-color: var(--text-dim); border-top-style: dotted; }
 
 .pattern-downwind-ideal {
   stroke: var(--text-dim);

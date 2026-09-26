@@ -232,14 +232,15 @@ def test_approach_window_respects_distance_limit() -> None:
     assert min(times) >= -70.0
 
 
-def test_land_approach_captures_the_pattern_not_just_the_final() -> None:
-    """Land landings must capture far enough back to hold the circuit.
+def test_approach_captures_the_pattern_not_just_the_final() -> None:
+    """Both kinds must capture far enough back to hold the circuit.
 
-    The pattern is what the overhead grading judges, and it does not fit in
-    the carrier-sized 60 s / 2 nm cut: a fighter circuit at 1.5 nm abeam is
-    already ~4.5 km from the touchdown point. Carrier passes keep the short
-    window -- there is no pattern there and the LSO grader never looks past
-    the last few seconds.
+    The pattern does not fit in a 60 s / 2 nm cut: a fighter circuit at
+    1.5 nm abeam is already ~4.5 km from the touchdown point. Carrier passes
+    used to keep that short window on the theory that "there is no pattern
+    there" -- but a Case I recovery is an overhead pattern, and from the
+    break (the kiss-off) to the trap is 1.5-2 minutes, so not one stored
+    trap contained its break. The carrier must now reach back as far.
     """
     samples = make_approach_samples(duration_before_s=120)
 
@@ -254,7 +255,10 @@ def test_land_approach_captures_the_pattern_not_just_the_final() -> None:
     )
     assert len(carrier) == 1
     assert carrier[0].kind == "carrier"
-    assert min(s.time for s in carrier[0].approach) >= -70.0
+    # The whole 120 s is inside 300 s / 8 nm (8400 m at 70 m/s).
+    assert min(s.time for s in carrier[0].approach) == -120.0
+    # ...and the ship's own track travels with the event, covering it.
+    assert carrier[0].carrier_track
 
 
 def test_bounce_sequence_keeps_a_stable_identity_as_it_is_absorbed() -> None:

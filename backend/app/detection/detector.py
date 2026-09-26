@@ -26,10 +26,10 @@ Outcome classification:
 - otherwise (ground dwell >= ``full_stop_dwell_s``, or track ends on deck):
   ``full_stop``.
 
-The final-approach segment is cut backwards from touchdown up to
-``approach_window_s`` / ``approach_distance_m`` (2 nm; land landings use
-the longer ``land_approach_*`` pair so the pattern fits), plus a short
-post-touchdown tail for context.
+The approach segment is cut backwards from touchdown up to the longer of
+``approach_window_s`` / ``approach_distance_m`` (2 nm) and the per-kind pair
+(``land_approach_*`` / ``carrier_approach_*``) so the whole pattern fits,
+plus a short post-touchdown tail for context.
 """
 
 from __future__ import annotations
@@ -62,13 +62,22 @@ class DetectionConfig:
     #: Land landings capture further back than the ~2 nm final: the graded
     #: pattern (break -> downwind -> base) simply does not fit in 60 s.
     #: A fighter circuit at 1.5 nm abeam sits ~4.5 km from the touchdown
-    #: point, i.e. outside the carrier-sized radius above, and the initial
-    #: that precedes the break runs 3-5 nm out -- 3 nm cut it off mid-leg
-    #: (landing #54's capture stopped dead at 5.77 km). Carrier passes keep
-    #: the short window: there is no pattern to capture and the LSO grader
-    #: only ever looks at the last seconds.
+    #: point, and the initial that precedes the break runs 3-5 nm out --
+    #: 3 nm cut it off mid-leg (landing #54's capture stopped dead at 5.77 km).
     land_approach_window_s: float = 300.0
     land_approach_distance_m: float = 14816.0  # 8 nm
+    #: Carrier passes need the same reach, and for the same reason. They used
+    #: to keep the 60 s / 2 nm above on the theory that "there is no pattern
+    #: to capture" -- but a Case I recovery IS an overhead pattern: initial 3
+    #: nm astern, the break (the lead's kiss-off) at or ahead of the bow, a
+    #: 600 ft downwind 1.1-1.3 nm abeam, the 180 and the groove. From the
+    #: kiss-off to the trap is ~1.5-2 minutes, so the 60 s capture began
+    #: somewhere in the 180 and not one stored trap contained its break. The
+    #: distance is measured from the touchdown point on the ground, and the
+    #: ship steams ~2 km in that time, so the initial sits ~5.5 km + that
+    #: behind it -- well inside 8 nm.
+    carrier_approach_window_s: float = 300.0
+    carrier_approach_distance_m: float = 14816.0  # 8 nm
     #: Extra horizontal slack when walking backwards along the approach.
     approach_distance_margin_m: float = 500.0
     #: Seconds of post-touchdown samples kept in the stored approach track.
@@ -145,6 +154,22 @@ class CarrierState:
 
     def position_at(self, time: float) -> tuple[float, float] | None:
         return interpolate_position(self.samples, time)
+
+    def window(
+        self, start: float, end: float
+    ) -> list[tuple[float, float, float, float, float, float]]:
+        """Copy of the samples that cover ``[start, end]``.
+
+        One sample either side of the window is included so interpolation at
+        its edges is not a clamp. A copy, because the landing event outlives
+        this state: the rolling retention keeps trimming it while the
+        pipeline grades.
+        """
+        if not self.samples:
+            return []
+        lo = max(bisect_right(self.samples, start, key=_sample_time) - 1, 0)
+        hi = bisect_right(self.samples, end, key=_sample_time) + 1
+        return list(self.samples[lo:hi])
 
     def heading_at(self, time: float) -> float | None:
         if not self.samples:
@@ -231,6 +256,16 @@ class LandingEvent:
     carrier_longitude: float | None = None
     carrier_altitude_m: float | None = None
     carrier_heading_deg: float | None = None
+    #: The ship's own track over the approach: ``(time, lat, lon, altitude,
+    #: heading_deg, speed)`` tuples as :class:`CarrierState` holds them. The
+    #: deck moves -- ~15 m/s, i.e. ~2 km over a Case I pattern -- so a grade
+    #: referenced to where the ramp was at the touchdown instant puts every
+    #: earlier sample in the wrong place: at 15 m/s a sample 3 s out already
+    #: reads ~2.8 m low on a 3.5 deg glideslope, and the break is kilometres
+    #: off. The grader re-positions the deck at every sample time from this.
+    carrier_track: list[tuple[float, float, float, float, float, float]] = field(
+        default_factory=list
+    )
     #: True once the outcome can no longer change (climb-out observed, or
     #: the full-stop dwell has elapsed). Live monitoring should only report
     #: finalized events; offline analysis always yields finalized events.
@@ -566,6 +601,9 @@ def _cut_approach(
     if kind == "land":
         window_s = max(window_s, config.land_approach_window_s)
         distance_m = max(distance_m, config.land_approach_distance_m)
+    elif kind == "carrier":
+        window_s = max(window_s, config.carrier_approach_window_s)
+        distance_m = max(distance_m, config.carrier_approach_distance_m)
     start_index = touchdown_index
     limit_time = touchdown.time - window_s
     for j in range(touchdown_index - 1, -1, -1):
@@ -720,6 +758,8 @@ def analyze_track(
                 event.carrier_latitude, event.carrier_longitude = pos
             event.carrier_altitude_m = carrier.altitude_at(touchdown.time)
             event.carrier_heading_deg = carrier.heading_at(touchdown.time)
+            if approach:
+                event.carrier_track = carrier.window(approach[0].time, approach[-1].time)
         if carrier is not None:
             event.ship_relative = to_ship_relative(approach, carrier, touchdown, config)
         events.append(event)

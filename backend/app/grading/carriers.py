@@ -33,13 +33,23 @@ class FlolsGeometry:
     Coordinates follow the conventions documented in
     ``config/carriers.yaml``:
 
-    - ``deck_altitude_m``          : landing-area deck height above sea level.
+    - ``deck_altitude_m``          : landing-area deck height above the ship's
+      own ACMI altitude (DCS ships sit at the waterline, ~0 m).
     - ``ramp_along_m``             : meters forward (+ bow) of the ship's
-      ACMI position.
-    - ``ramp_lateral_m``           : meters right (+) of the ship heading.
+      ACMI position to the stern end of the landing-area centreline.
+    - ``ramp_lateral_m``           : meters right (+, starboard) of the ship
+      heading to the same point.
     - ``glideslope_deg``           : FLOLS glideslope angle.
     - ``landing_course_offset_deg``: landing course bearing relative to the
-      ship heading.
+      ship heading; negative = angled to port (every angled deck).
+    - ``touchdown_target_m``       : distance from the ramp along the landing
+      course to where the glideslope ends (the target wire). ``0`` = the
+      glideslope is anchored at the ramp itself, which is what every stored
+      analysis written before this field existed was graded against.
+    - ``reference_height_m``       : height of the aircraft's ACMI reference
+      point above the deck when it sits on it; the glideslope ends this far
+      up. ``0`` for the same legacy reason.
+    - ``landing_area_length_m``    : display only.
     - ``beam_width_m``             : informational FLOLS beam width.
     - ``validated``                : whether geometry was validated with real data.
     """
@@ -52,6 +62,9 @@ class FlolsGeometry:
     landing_course_offset_deg: float
     beam_width_m: float | None = None
     validated: bool = False
+    touchdown_target_m: float = 0.0
+    reference_height_m: float = 0.0
+    landing_area_length_m: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +76,9 @@ class FlolsGeometry:
             "ramp_lateral_m": self.ramp_lateral_m,
             "glideslope_deg": self.glideslope_deg,
             "landing_course_offset_deg": self.landing_course_offset_deg,
+            "touchdown_target_m": self.touchdown_target_m,
+            "reference_height_m": self.reference_height_m,
+            "landing_area_length_m": self.landing_area_length_m,
             "beam_width_m": self.beam_width_m,
         }
 
@@ -75,13 +91,16 @@ class FlolsGeometry:
             ramp_lateral_m=float(data["ramp_lateral_m"]),
             glideslope_deg=float(data["glideslope_deg"]),
             landing_course_offset_deg=float(data["landing_course_offset_deg"]),
-            beam_width_m=(
-                float(data["beam_width_m"])
-                if data.get("beam_width_m") is not None
-                else None
-            ),
+            beam_width_m=_optional(data.get("beam_width_m")),
             validated=bool(data.get("validated", False)),
+            touchdown_target_m=float(data.get("touchdown_target_m") or 0.0),
+            reference_height_m=float(data.get("reference_height_m") or 0.0),
+            landing_area_length_m=_optional(data.get("landing_area_length_m")),
         )
+
+
+def _optional(value: Any) -> float | None:
+    return float(value) if value is not None else None
 
 
 def fallback_geometry_payload() -> dict[str, Any]:
@@ -148,6 +167,15 @@ def load_carrier_geometry_book(path: str | Path | None = None) -> CarrierGeometr
         raise ValueError(f"carrier config must be a mapping: {target}")
 
     defaults = data.get("defaults") or {}
+
+    def field(raw: dict[str, Any], name: str, fallback: Any) -> Any:
+        """The entry's own value, else the file's ``defaults``, else ``fallback``."""
+        if raw.get(name) is not None:
+            return raw[name]
+        if defaults.get(name) is not None:
+            return defaults[name]
+        return fallback
+
     entries: dict[str, tuple[list[str], list[str], FlolsGeometry]] = {}
     for key, raw in (data.get("carriers") or {}).items():
         if not isinstance(raw, dict):
@@ -157,20 +185,15 @@ def load_carrier_geometry_book(path: str | Path | None = None) -> CarrierGeometr
             deck_altitude_m=float(raw["deck_altitude_m"]),
             ramp_along_m=float(raw["ramp_along_m"]),
             ramp_lateral_m=float(raw["ramp_lateral_m"]),
-            glideslope_deg=float(raw.get("glideslope_deg", defaults.get("glideslope_deg", 3.5))),
-            landing_course_offset_deg=float(
-                raw.get("landing_course_offset_deg", defaults.get("landing_course_offset_deg", 9.0))
-            ),
-            beam_width_m=(
-                float(raw["beam_width_m"])
-                if raw.get("beam_width_m") is not None
-                else (
-                    float(defaults["beam_width_m"])
-                    if defaults.get("beam_width_m") is not None
-                    else None
-                )
-            ),
+            glideslope_deg=float(field(raw, "glideslope_deg", 3.5)),
+            # A file that states neither gets an axial deck. The fallback used
+            # to be +9, an angled deck to STARBOARD, which no ship has.
+            landing_course_offset_deg=float(field(raw, "landing_course_offset_deg", 0.0)),
+            beam_width_m=_optional(field(raw, "beam_width_m", None)),
             validated=bool(raw.get("validated", False)),
+            touchdown_target_m=float(field(raw, "touchdown_target_m", 0.0)),
+            reference_height_m=float(field(raw, "reference_height_m", 0.0)),
+            landing_area_length_m=_optional(field(raw, "landing_area_length_m", None)),
         )
         entries[str(key)] = (
             [str(p) for p in raw.get("name_patterns", [])],

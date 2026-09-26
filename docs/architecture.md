@@ -34,12 +34,15 @@ flowchart LR
 | [`api/imports.py`](../backend/app/api/imports.py) | インポート REST エンドポイント（認証対象）: `POST /api/import`、`GET /api/imports`、`GET /api/imports/{id}` |
 | [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
 | [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与。BURBLE のみヒューリスティック検出（下記「BURBLE 検出について」） |
+| [`grading/carrier_pattern.py`](../backend/app/grading/carrier_pattern.py) | 空母 Case I パターンの読み取り（測定と講評のみ）。着艦区域の座標系を艦自身の座標系（x = 艦首方向、y = 右舷）へ剛体変換し、陸上のパターン解析（`pattern.py`）でブレイク（キスオフ）とダウンウィンドを切り出したうえで、アビーム・90・ウェイク・グルーブ時間・接地時の沈下（フレアの有無）を測る |
 | [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
 | [`grading/pattern.py`](../backend/app/grading/pattern.py) | 対地トラックによる進入の区間分割（イニシャル / ブレイク / ダウンウィンド / ベース / ファイナル）と、オーバーヘッドパターン固有のメトリクス（旋回明けの軸ずれ、ダウンウィンド方位・高度、ブレイクの高度変動と **G・バンク角・進入速度・旋回量**）。G 系は測定のみで採点しない |
 | [`grading/kinematics.py`](../backend/app/grading/kinematics.py) | 進入軌跡（滑走路座標系の位置 ~5 Hz）の局所 2 次フィットから速度・加速度を導き、法線荷重倍数（G）と旋回率を各サンプルに付ける。ACMI に加速度計の値は無いのでここで導く。採点・再採点のたびに計算し直す。実記録の Roll との突き合わせは [`grading-references.md`](grading-references.md) を参照 |
 | [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
-| [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別 FLOLS ジオメトリ、Issue #3）の読み込みと解決。未知の艦はタッチダウン基準の近似へフォールバック。**収録値は未検証の推定値**であり、実データでの検証が残っている |
-| [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）も担当 |
+| [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別の着艦区域ジオメトリ、Issue #3）の読み込みと解決。米空母の値は MOOSE AIRBOSS から（アングルドデッキは左舷へ 9.14°、グライドスロープの終点は 3 番ワイヤーの 2 m 上）。**このサーバの実トラップでは未検証**（`validated: false`） |
+| [`grading/deviations.py`](../backend/app/grading/deviations.py) | 進入区間の偏差（残距離・グライドスロープ偏差・横ずれ）。空母は **甲板と一緒に動く座標系**: 各サンプル時刻の艦位置・艦首方位から目標ワイヤーを置き直し、高さは甲板から測る（Tacview の AGL は海面基準なので使わない）。G の導出用に、接地時刻で固定した地面座標（`fixed_along` / `fixed_lateral`）も併せて持つ |
+| [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）と、生の航跡からの作り直し（rebuild）も担当 |
+| [`rebuild.py`](../backend/app/rebuild.py) | 保存済みの着陸を DB の生の航跡（`tracks`）から作り直すための読み戻し。機体のサンプル・同じフライトの全空母・地面基準（最寄りの艦か静的オブジェクト）をライブ取り込みと同じ形で組み立て、今の検出器が切り出したイベントのうち保存時刻 ±2 秒のものだけを同じ着陸とみなす |
 | [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸レコードには進入区間の生サンプルも JSON 保存（FR-7 再評価要件）。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
 | [`api/routes.py`](../backend/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
 | [`api/notifier.py`](../backend/app/api/notifier.py) | WebSocket 接続管理・着陸通知のブロードキャスト |
@@ -49,7 +52,8 @@ flowchart LR
 
 1. `AcmiStreamClient` が Tacview へ接続し、受信行を `TrackIngestor.handle_line` へ渡す
 2. パーサが時刻・オブジェクト状態を更新し、ingestor が機体別バッファへ追記する
-3. 検出器が接地（WOW）を検出すると、最終進入区間（既定 60 秒 / 2 nm）を切り出す
+3. 検出器が接地（WOW）を検出すると、進入区間を切り出す（陸上・空母とも既定 300 秒 / 8 nm。
+   空母は Case I のブレイク＝キスオフまで入るように。空母のイベントは艦自身の航跡も持つ）
 4. パイプラインが空母/陸地を判定して対応グレーダで採点し、SQLite に保存
 5. `LandingNotifier` が接続中の全 WebSocket クライアントへ `{"type": "landing", ...}` を送信。
    タッチダウン直後は outcome 未確定のため `outcome_status: "provisional"` として即時通知し、
@@ -110,6 +114,7 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 | GET | `/api/landings` | 一覧（フィルタ・ページング） |
 | GET | `/api/landings/{id}` | 詳細（ファクター・進入サンプル含む） |
 | POST | `/api/landings/{id}/regrade` | 現在の閾値で再評価 |
+| POST | `/api/landings/{id}/rebuild` | 生の航跡から検出・採点をやり直す（409: `NO_RAW_TRACK` / `NOT_AN_AIRCRAFT` / `REBUILD_NO_MATCH` / `NO_TOUCHDOWN_TIME`、行は変えない） |
 | POST | `/api/import` | ACMI ファイルインポート（multipart、バックグラウンドジョブ。認証対象） |
 | GET | `/api/imports` / `/api/imports/{id}` | インポートジョブの一覧・進捗（認証対象） |
 | WebSocket | `/api/ws/landings` | 着陸通知＋インポート完了通知（`ping` → `pong`） |
@@ -145,9 +150,13 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 YAML（[`config/grading.yaml`](../config/grading.yaml)、
 [`config/carriers.yaml`](../config/carriers.yaml)）で外部化されている。一覧は [`.env.example`](../.env.example) 参照。
 
-> `config/carriers.yaml` の艦別 FLOLS ジオメトリ（Issue #3）の数値は
-> **出典不明の推定値・仮置き値**である。実データ（DCS 内での計測等）による
-> 検証が完了するまで、グレード結果を絶対評価として扱わないこと。
+> `config/carriers.yaml` の艦別ジオメトリ（Issue #3）は、米空母（ニミッツ級
+> スーパーキャリア / Stennis / Forrestal）については 2026-09-26 に MOOSE AIRBOSS の
+> 値（甲板高とアングルドデッキ角は DCS 本体のデータファイルを出典とする）へ
+> 取り直した。それ以前の値はアングルドデッキが右舷向き（+9°）で、ランプも左舷に
+> 置かれていた。いずれも **このサーバの実トラップでは未検証**（`validated: false`）
+> なので、検証が済むまでグレード結果を絶対評価として扱わないこと。クズネツォフは
+> 出典の無い推定値のまま（向きの符号だけ左舷に揃えた）。
 
 ## CI
 

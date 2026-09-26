@@ -82,6 +82,16 @@ export interface DeviationSample {
   load_factor?: number | null;
   /** Ground-track turn rate, deg/s, right turn positive. */
   turn_rate_deg_s?: number | null;
+  /** Carrier tracks referenced to the moving deck only: position in the
+   *  earth-fixed frame the load factor was derived in. */
+  fixed_along?: number | null;
+  fixed_lateral?: number | null;
+  /** Carrier tracks referenced to the moving deck only: metres forward (+)
+   *  of the ship's ACMI position and to starboard (+). Computed by the API,
+   *  so a Case I pattern can be drawn up the ship's heading (BRC) rather
+   *  than along the angled deck the other fields are measured on. */
+  ship_along?: number | null;
+  ship_lateral?: number | null;
 }
 
 /** ApproachTrackOut. */
