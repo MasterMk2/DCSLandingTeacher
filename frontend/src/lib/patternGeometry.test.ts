@@ -3,6 +3,7 @@ import {
   alongOf,
   downwindGuide,
   hasPlanViewShape,
+  inShipFrame,
   legAt,
   legRuns,
   M_PER_NM,
@@ -32,6 +33,30 @@ describe("alongOf", () => {
 
   it("falls back to the clamped value for tracks recorded before it existed", () => {
     expect(alongOf(sample(0, -800, 0, false))).toBe(0);
+  });
+});
+
+describe("inShipFrame", () => {
+  it("draws a carrier track in the ship's own frame, astern down the page", () => {
+    const [s] = inShipFrame([
+      { ...sample(0, 500, 12), ship_along: -1200, ship_lateral: -2084 },
+    ]);
+    // 1200 m astern is 1200 m "to go"; the downwind stays to port.
+    expect(alongOf(s)).toBe(1200);
+    expect(s.centerline_deviation).toBe(-2084);
+  });
+
+  it("never mixes two frames in one picture", () => {
+    const mixed = [
+      { ...sample(0, 500, 12), ship_along: -1200, ship_lateral: -2084 },
+      sample(1, 400, 10),
+    ];
+    expect(inShipFrame(mixed)).toBe(mixed);
+  });
+
+  it("leaves land tracks untouched", () => {
+    const land = [sample(0, 500, 12), sample(1, 400, 10)];
+    expect(inShipFrame(land)).toBe(land);
   });
 });
 
@@ -105,6 +130,15 @@ describe("legAt", () => {
     expect(legAt(30, times)).toBe("base");
     expect(legAt(50, times)).toBe("final");
     expect(legAt(70, times)).toBe("rollout");
+  });
+
+  it("sets apart the earlier pass a wave-off leaves in the record", () => {
+    // No deck contact stops the capture after a wave-off, so the record holds
+    // the waved-off pass too; it is not part of this circuit's entry.
+    const waveoff = { ...times, priorEnd: -30 };
+    expect(legAt(-40, waveoff)).toBe("prior");
+    expect(legAt(-5, waveoff)).toBe("entry");
+    expect(legAt(10, waveoff)).toBe("downwind");
   });
 
   it("calls everything final when the backend reported no pattern", () => {

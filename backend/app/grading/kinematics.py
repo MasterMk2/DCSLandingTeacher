@@ -236,9 +236,18 @@ def _position_of(sample: "DeviationSample") -> tuple[float, float, float] | None
     古い記録では基準点より先 (ブレイク・アップウィンド) が全部同じ x に
     潰れている。そこで微分すると「一瞬で止まった」ように見えるので、
     クランプに掛かった点は位置不明として扱う。
+
+    空母のサンプルは甲板と一緒に動く座標系で記録されているので、微分には
+    接地時刻で固定した地面座標 (``fixed_along`` / ``fixed_lateral``) を使う。
+    動く座標系のまま微分すると、艦が旋回していれば見かけの力 (コリオリ)
+    が G に乗る。高さは甲板からの高さのまま使う: 艦の ACMI 高度は喫水線
+    付近でほぼ一定という前提 (甲板上の機体が 22.0 m MSL と記録されている
+    ことと整合) で、艦の上下動があればそれは G に入る。
     """
     if sample.agl is None:
         return None
+    if sample.fixed_along is not None and sample.fixed_lateral is not None:
+        return (sample.fixed_along, sample.fixed_lateral, sample.agl)
     if sample.signed_distance_to_go is not None:
         along = -sample.signed_distance_to_go
     elif sample.distance_to_go > 0.0:

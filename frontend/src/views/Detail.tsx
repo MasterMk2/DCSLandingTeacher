@@ -200,9 +200,13 @@ export function Detail({ id, onBack }: DetailProps) {
                         を「パターン軌跡」と呼ぶと、描かれていない脚を探す
                         ことになる。実際に描けるものの名前を出す。 */}
                     <h4 className="pattern-heading">
-                      {detail.metrics?.["pattern_downwind_judged"] === true
-                        ? "パターン軌跡"
-                        : "進入軌跡（平面図）"}
+                      {detail.metrics?.["pattern_downwind_judged"] !== true
+                        ? "進入軌跡（平面図）"
+                        : detail.kind !== "carrier"
+                          ? "パターン軌跡"
+                          : detail.metrics?.["pattern_entry"] === "turn"
+                            ? "周回パターン（艦基準）"
+                            : "Case I パターン（艦基準、キスオフ〜グルーブ）"}
                     </h4>
                     <PatternTrack track={track} metrics={detail.metrics} />
                   </>

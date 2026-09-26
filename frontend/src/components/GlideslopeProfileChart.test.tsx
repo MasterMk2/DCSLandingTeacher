@@ -37,6 +37,46 @@ function track(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe("GlideslopeProfileChart, carrier", () => {
+  const movingDeck = { frame: "moving_deck", reference_height_m: 2 };
+
+  it("calls the final the groove and measures to the target wire", () => {
+    const { container } = render(
+      <GlideslopeProfileChart
+        track={track({ kind: "carrier", geometry: movingDeck })}
+        metrics={{ pattern_rollout_time: 80 }}
+      />,
+    );
+    expect(container.textContent).toContain("グルーブ開始");
+    expect(container.textContent).toContain("目標ワイヤー");
+    expect(container.textContent).not.toContain("ベース→ファイナル");
+  });
+
+  it("keeps the old wording for carrier rows stored before the deck was tracked", () => {
+    // No `frame`: ramp- or touchdown-referenced, sea-referenced height. Saying
+    // "target wire, height above the deck" about those would be false.
+    const { container } = render(
+      <GlideslopeProfileChart
+        track={track({ kind: "carrier", geometry: { key: "stennis", landing_course_offset_deg: 9 } })}
+        metrics={{ pattern_rollout_time: 80 }}
+      />,
+    );
+    expect(container.textContent).not.toContain("目標ワイヤー");
+    expect(container.textContent).toContain("接地点までの距離");
+  });
+
+  it("ends the ideal glideslope where the deck's glideslope ends: 2 m up", async () => {
+    const { buildProfilePoints } = await import("./GlideslopeProfileChart");
+    const atWire = { time: 100, distance_to_go: 0, agl: 2 };
+    const [carrierEnd] = buildProfilePoints(
+      track({ kind: "carrier", geometry: movingDeck, samples: [atWire] }) as never,
+    );
+    const [landEnd] = buildProfilePoints(track({ samples: [atWire] }) as never);
+    expect(carrierEnd.ideal_ft).toBeCloseTo(2 / 0.3048, 3);
+    expect(landEnd.ideal_ft).toBe(0);
+  });
+});
+
 describe("GlideslopeProfileChart", () => {
   it("mounts with every axis its lines reference", () => {
     const { container } = render(

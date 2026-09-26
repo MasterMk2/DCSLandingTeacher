@@ -37,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.grading.carrier_pattern import analyze_carrier_pattern
 from app.grading.carriers import fallback_geometry_payload
 from app.grading.deviations import ApproachAnalysis, DeviationSample
 from app.grading.kinematics import annotate_kinematics
@@ -118,7 +119,12 @@ def _detect_factors(
             )
 
     # --- speed at touchdown: FAST / SLOW -----------------------------------
-    speeds = [s.speed for s in analysis.samples if s.speed is not None]
+    # Against the speed held over the approach BEFORE the touchdown, not the
+    # mean of every stored sample: that also took in the arrestment tail
+    # after it, and -- once the capture reached back to the initial -- a
+    # 350 kt run-in (see ``approach_speed_window_s`` in grading.yaml).
+    speed_window_s = float(settings.get("approach_speed_window_s", 60.0))
+    speeds = [s.speed for s in analysis.window(speed_window_s) if s.speed is not None]
     mean_speed = _mean(speeds)
     ratio = (
         analysis.touchdown_speed_ms / mean_speed
@@ -139,6 +145,7 @@ def _detect_factors(
                         "mean_approach_speed_ms": round(mean_speed, 2),
                         "speed_ratio": round(ratio, 3),
                         "threshold_ratio": threshold,
+                        "window_s": speed_window_s,
                         "description": fast_cfg.get("description", ""),
                         "details": fast_cfg.get("details", ""),
                     },
@@ -156,6 +163,7 @@ def _detect_factors(
                         "mean_approach_speed_ms": round(mean_speed, 2),
                         "speed_ratio": round(ratio, 3),
                         "threshold_ratio": threshold,
+                        "window_s": speed_window_s,
                         "description": slow_cfg.get("description", ""),
                         "details": slow_cfg.get("details", ""),
                     },
@@ -320,18 +328,20 @@ def grade_carrier_approach(
     grades = settings["grades"]
     decision = settings["decision"]
 
-    # 荷重倍数・旋回率の系列を軌跡から付ける (グラフ・CSV 用。LSO の
-    # 判定には使っていない)。
+    # 荷重倍数・旋回率の系列を軌跡から付ける (グラフ・CSV とブレイクの G 用。
+    # LSO の判定には使っていない)。
     kinematics = annotate_kinematics(analysis)
     factors = _detect_factors(analysis, settings)
     majors = [f for f in factors if f.severity == "major"]
 
+    # 講評は陸上と同じく日本語。グレードの一文を先に置き、パターン
+    # (キスオフ〜グルーブ) と接地の事実を後ろに続ける。
     grade = grades["ok"]
-    comment = "On centerline, on glidepath, on speed."
+    comment = "センターライン・グライドスロープ・速度とも適正な進入。"
 
     if analysis.outcome == "bolter":
         grade = grades["no_grade"]
-        comment = "Bolter: no arrestment."
+        comment = "ボルター（ワイヤーを捕捉できず）。"
     else:
         deep_low_threshold = decision.get("cut_low_gs_deviation_m")
         deep_low = any(
@@ -345,19 +355,31 @@ def grade_carrier_approach(
 
         if deep_low and decision.get("cut_if_severe_low", True):
             grade = grades["cut"]
-            comment = "Dangerously low at the ramp; wave-off."
+            comment = "ランプで危険なほど低い: ウェーブオフ相当。"
         elif len(majors) >= cut_major_count:
             grade = grades["cut"]
-            comment = "Multiple major deviations; unsafe pass."
+            comment = "大きな逸脱が複数あり、安全でない進入。"
         elif len(majors) == ok_paren_count:
             grade = grades["ok_paren"]
-            comment = "Fair pass with significant deviations."
+            comment = "大きな逸脱が 2 つある進入（Fair）。"
         elif len(majors) == 1:
             grade = grades["ok_minus"]
-            comment = "Safe pass with a deviation to fix."
+            comment = "安全だが、直すべき逸脱が 1 つある進入。"
         elif any(f.severity == "minor" for f in factors):
             grade = grades["ok"]
-            comment = "Good pass with minor deviations."
+            comment = "小さな逸脱のある良好な進入。"
+
+    # Case I パターン: 測定と講評だけ。グレードは上で決まっている。
+    pattern = analyze_carrier_pattern(
+        analysis, config.land_grading, settings.get("pattern", {}) or {}
+    )
+    if pattern is not None:
+        comment += "、".join(pattern.comment_parts) + ("。" if pattern.comment_parts else "")
+    elif analysis.geometry is not None:
+        comment += (
+            "この記録は艦を接地時刻で止めた旧形式（接地前 60 秒のみ）のため、"
+            "パターン（ブレイク〜グルーブ）は解析していません。"
+        )
 
     names = ", ".join(f.name for f in factors) or "no factors"
     metrics = {
@@ -366,6 +388,12 @@ def grade_carrier_approach(
         "course_deg": round(analysis.course_deg, 2),
         "major_factor_count": len(majors),
         "factor_names": names,
+        # 甲板と一緒に動く座標系で測ったか (旧形式は接地時刻で止めていた)。
+        "deck_frame": (
+            None
+            if analysis.geometry is None
+            else analysis.geometry.get("frame") or "frozen_at_touchdown"
+        ),
         # 位置の飛びとして G の導出から外したサンプル数 (land_grader と同じ)。
         "kinematics_rejected_samples": kinematics.rejected,
         # Which FLOLS geometry produced this grade (Issue #3): the resolved
@@ -400,5 +428,20 @@ def grade_carrier_approach(
             if analysis.geometry is None
             else ("validated" if analysis.geometry.get("validated") else "unvalidated")
         ),
+        # 軌跡から決めた進入パターン (Case I なら overhead)。パターンを
+        # 読めない記録では検出器のラベルのまま。
+        "approach_pattern": (
+            pattern.approach_pattern if pattern is not None else analysis.approach_pattern
+        ),
     }
+    if pattern is not None:
+        # 接地の沈下はパターンではなくパスの事実なので、接頭辞なしで出す。
+        for key in (
+            "touchdown_descent_rate_fpm",
+            "groove_descent_rate_fpm",
+            "ramp_descent_rate_fpm",
+            "ramp_sink_ratio",
+        ):
+            metrics[key] = pattern.metrics.pop(key, None)
+        metrics.update({f"pattern_{k}": v for k, v in pattern.metrics.items()})
     return LsoGradeResult(grade=grade, factors=factors, comment=comment, metrics=metrics)

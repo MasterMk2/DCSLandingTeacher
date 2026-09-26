@@ -7,14 +7,19 @@ per-sample:
 - ``glideslope_deviation``: meters above (+) / below (-) the ideal slope,
 - ``centerline_deviation``: signed lateral offset, right of course (+).
 
-Two reference frames exist (Issue #3):
+Reference frames (Issue #3):
 
-- With resolved per-carrier FLOLS geometry the deviations are referenced to
-  the RAMP (FLOLS datum on the angled deck): origin = ship position plus
-  ramp offsets at the touchdown instant, course = ship heading + angled-deck
-  offset, AGL measured against the deck altitude, slope from the geometry.
-- Without it (unknown carrier) the legacy approximation applies: everything
-  is referenced to the touchdown point itself.
+- Carrier with resolved geometry and the ship's own track: a frame that
+  MOVES WITH THE DECK. At every sample time the ship is re-positioned from
+  its track, the glideslope's end point (the target wire, a reference
+  height above the deck) is placed on the angled deck, and the aircraft is
+  expressed relative to that: course = ship heading + angled-deck offset,
+  AGL = height above the deck. What an LSO and the FLOLS see.
+- Carrier with geometry but no ship track (analyses built by hand): the
+  same, frozen at the touchdown instant.
+- A resolved runway: the aiming point and the published heading.
+- Nothing resolved: the legacy approximation, referenced to the touchdown
+  point itself.
 
 All positions are projected onto a local tangent plane via
 :func:`app.detection.geometry.transform_to_frame`.
@@ -23,13 +28,26 @@ All positions are projected onto a local tangent plane via
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.detection.detector import LandingEvent, TrackSample
-from app.detection.geometry import haversine_m, offset_position, transform_to_frame
+from app.detection.geometry import (
+    haversine_m,
+    interpolate_position,
+    offset_position,
+    transform_to_frame,
+)
 from app.grading.carriers import FlolsGeometry
 from app.runways.models import DEFAULT_AIMING_POINT_M, Runway
+
+#: ``geometry["frame"]`` of a carrier analysis referenced to the moving deck.
+#: Analyses without it were written before the deck was tracked: they sit in
+#: a frame frozen at the touchdown instant (and, before 2026-09-26, on an
+#: angled deck pointing the wrong way), so nothing that reads the pattern
+#: relative to the ship can be computed from them.
+MOVING_DECK_FRAME = "moving_deck"
 
 
 def _optional_float(value: Any) -> float | None:
@@ -70,6 +88,16 @@ class DeviationSample:
     #: row was first written.
     load_factor: float | None = None
     turn_rate_deg_s: float | None = None
+    #: Position in an EARTH-FIXED copy of the frame (the moving-deck frame
+    #: frozen at the touchdown instant), carrier samples only. The fields
+    #: above follow the deck, which is right for everything measured against
+    #: the ship and wrong for kinematics: a turning ship makes that frame
+    #: rotate, and differentiating in it adds Coriolis terms to the G
+    #: (~0.5 G per deg/s of ship turn at pattern speeds). ``None`` wherever
+    #: the frame above is already earth-fixed (land, and every carrier track
+    #: stored before the deck was tracked).
+    fixed_along: float | None = None
+    fixed_lateral: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -107,6 +135,12 @@ class DeviationSample:
                 round(self.turn_rate_deg_s, 2)
                 if self.turn_rate_deg_s is not None
                 else None
+            ),
+            "fixed_along": (
+                round(self.fixed_along, 2) if self.fixed_along is not None else None
+            ),
+            "fixed_lateral": (
+                round(self.fixed_lateral, 2) if self.fixed_lateral is not None else None
             ),
         }
 
@@ -236,6 +270,8 @@ class ApproachAnalysis:
                         pitch=_optional_float(row.get("pitch")),
                         load_factor=_optional_float(row.get("load_factor")),
                         turn_rate_deg_s=_optional_float(row.get("turn_rate_deg_s")),
+                        fixed_along=_optional_float(row.get("fixed_along")),
+                        fixed_lateral=_optional_float(row.get("fixed_lateral")),
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:
@@ -435,6 +471,179 @@ def estimate_course_deg(
     return 0.0
 
 
+@dataclass(frozen=True)
+class ShipPose:
+    """Where the ship was, and which way it pointed, at one instant."""
+
+    latitude: float
+    longitude: float
+    altitude: float
+    heading_deg: float
+
+
+def ship_pose_at(
+    track: list[tuple[float, float, float, float, float, float]], time: float
+) -> ShipPose | None:
+    """Interpolate a :class:`~app.detection.detector.CarrierState` track.
+
+    Heading is interpolated along the shorter way round, not stepped: a ship
+    turning 1 deg/s between 0.5 s updates would otherwise swing the whole
+    frame by half a degree at every sample, which is 20 m at 2.5 km.
+    """
+    if not track:
+        return None
+    position = interpolate_position(track, time)
+    if position is None:
+        return None
+    index = bisect_right(track, time, key=lambda row: row[0])
+    if index <= 0:
+        altitude, heading = track[0][3], track[0][4]
+    elif index >= len(track):
+        altitude, heading = track[-1][3], track[-1][4]
+    else:
+        t0, _, _, alt0, hdg0, _ = track[index - 1]
+        t1, _, _, alt1, hdg1, _ = track[index]
+        frac = (time - t0) / (t1 - t0) if t1 > t0 else 0.0
+        altitude = alt0 + (alt1 - alt0) * frac
+        heading = (hdg0 + _angular_diff(hdg1, hdg0) * frac) % 360.0
+    return ShipPose(position[0], position[1], altitude, heading)
+
+
+def glideslope_end(
+    pose: ShipPose, geometry: FlolsGeometry
+) -> tuple[float, float, float]:
+    """``(lat, lon, course_deg)`` of the glideslope's end point on this deck.
+
+    The ramp (stern end of the landing area) is placed from the ship's
+    position and heading, then the target wire ``touchdown_target_m`` further
+    along the landing course.
+    """
+    course = (pose.heading_deg + geometry.landing_course_offset_deg) % 360.0
+    ramp_lat, ramp_lon = offset_position(
+        pose.latitude,
+        pose.longitude,
+        pose.heading_deg,
+        geometry.ramp_along_m,
+        geometry.ramp_lateral_m,
+    )
+    end_lat, end_lon = offset_position(
+        ramp_lat, ramp_lon, course, geometry.touchdown_target_m, 0.0
+    )
+    return end_lat, end_lon, course
+
+
+def _ship_motion(
+    track: list[tuple[float, float, float, float, float, float]],
+) -> tuple[float | None, float]:
+    """Mean ground speed (m/s) and total heading change (deg) of the ship.
+
+    Reported with the analysis so a reader can see the deck was steady: the
+    Case I pattern is flown relative to a ship steaming a constant course,
+    and one that turned under it is a different exercise.
+    """
+    if len(track) < 2:
+        return None, 0.0
+    distance = sum(
+        haversine_m(a[1], a[2], b[1], b[2]) for a, b in zip(track, track[1:])
+    )
+    span = track[-1][0] - track[0][0]
+    turned = sum(_angular_diff(b[4], a[4]) for a, b in zip(track, track[1:]))
+    return (distance / span if span > 0 else None), turned
+
+
+def _moving_deck_analysis(
+    event: LandingEvent,
+    geometry: FlolsGeometry,
+    airframe: str | None,
+) -> ApproachAnalysis:
+    """Deviations against a deck that moves under the approach.
+
+    Each sample is placed relative to where the glideslope's end point was
+    AT THAT SAMPLE'S TIME. Freezing the deck at the touchdown instant -- what
+    this did until 2026-09-26 -- is harmless for the last second and wrong
+    for everything before it: a ship making 15 m/s is 45 m further on 3 s
+    before the trap, which reads 2.8 m "low" on a 3.5 deg ball, and 2 km on
+    by the time of the break.
+
+    The height is always altitude minus the deck: Tacview's own AGL is
+    measured to the sea and reads ~20 m on the flight deck.
+    """
+    touchdown = event.touchdown
+    track = event.carrier_track
+    tan_slope = math.tan(math.radians(geometry.glideslope_deg))
+
+    at_touchdown = ship_pose_at(track, touchdown.time)
+    assert at_touchdown is not None  # caller checked the track is non-empty
+    fixed_lat, fixed_lon, fixed_course = glideslope_end(at_touchdown, geometry)
+    ship_speed, ship_turn = _ship_motion(track)
+
+    payload = geometry.as_dict()
+    payload.update(
+        {
+            "frame": MOVING_DECK_FRAME,
+            "ship_heading_deg": round(at_touchdown.heading_deg, 2),
+            "ship_altitude_m": round(at_touchdown.altitude, 2),
+            "ship_speed_ms": round(ship_speed, 2) if ship_speed is not None else None,
+            "ship_heading_change_deg": round(ship_turn, 1),
+        }
+    )
+    analysis = ApproachAnalysis(
+        kind=event.kind,
+        outcome=event.outcome,
+        glideslope_deg=geometry.glideslope_deg,
+        course_deg=fixed_course,
+        touchdown_time=touchdown.time,
+        touchdown_speed_ms=touchdown.speed,
+        touchdown_descent_rate_ms=touchdown.descent_rate_ms,
+        geometry=payload,
+        approach_pattern=event.approach_pattern,
+        airframe=airframe,
+    )
+    for sample in event.approach:
+        if sample.latitude is None or sample.longitude is None:
+            continue
+        pose = ship_pose_at(track, sample.time)
+        if pose is None:
+            continue
+        end_lat, end_lon, course = glideslope_end(pose, geometry)
+        along, lateral = transform_to_frame(
+            sample.latitude, sample.longitude, end_lat, end_lon, course
+        )
+        fixed_along, fixed_lateral = transform_to_frame(
+            sample.latitude, sample.longitude, fixed_lat, fixed_lon, fixed_course
+        )
+        agl = (
+            sample.altitude - (pose.altitude + geometry.deck_altitude_m)
+            if sample.altitude is not None
+            else None
+        )
+        distance_to_go = max(0.0, -along)
+        gs_dev = (
+            agl - geometry.reference_height_m - distance_to_go * tan_slope
+            if agl is not None
+            else None
+        )
+        analysis.samples.append(
+            DeviationSample(
+                time=sample.time,
+                distance_to_go=distance_to_go,
+                glideslope_deviation=gs_dev,
+                centerline_deviation=lateral,
+                speed=sample.speed,
+                aoa=sample.aoa,
+                agl=agl,
+                # The ramp is the landing area's threshold.
+                distance_to_threshold=-along - geometry.touchdown_target_m,
+                signed_distance_to_go=-along,
+                roll=sample.roll,
+                pitch=sample.pitch,
+                fixed_along=fixed_along,
+                fixed_lateral=fixed_lateral,
+            )
+        )
+    return analysis
+
+
 def build_approach_analysis(
     event: LandingEvent,
     glideslope_deg: float,
@@ -446,12 +655,12 @@ def build_approach_analysis(
 ) -> ApproachAnalysis:
     """Compute the deviation time series for one detected landing event.
 
-    With ``geometry`` (Issue #3) the deviations are referenced to the
-    carrier's FLOLS ramp: the origin is the ramp position at the touchdown
-    instant (ship position + along/lateral offsets), the course is the ship
-    heading plus the angled-deck offset, AGL is measured against the deck
-    altitude from the geometry and the slope angle comes from the geometry
-    as well.
+    With ``geometry`` (Issue #3) and the ship's track on the event, the
+    deviations are referenced to the moving deck
+    (:func:`_moving_deck_analysis`). With ``geometry`` alone the same frame
+    is frozen at the touchdown instant: origin at the glideslope's end on the
+    deck, course = ship heading plus the angled-deck offset, AGL against the
+    deck, slope from the geometry.
 
     With ``runway`` (land landings) the origin is the runway's *aiming
     point* -- ``aiming_point_m`` past the threshold -- and the course is the
@@ -465,6 +674,9 @@ def build_approach_analysis(
     referenced to the touchdown point and a course estimated from it.
     """
     touchdown = event.touchdown
+    if geometry is not None and event.kind == "carrier" and event.carrier_track:
+        return _moving_deck_analysis(event, geometry, airframe)
+
     threshold_along: float | None = None
     # Walk the stabilized-final ground track once for land landings (Issue
     # #47): the course estimate below and the crosswind-crab readout both
@@ -474,21 +686,24 @@ def build_approach_analysis(
         stabilized_track = _stabilized_track_course(
             event.approach, touchdown_time=touchdown.time
         )
+    # Over a deck, Tacview's AGL is height above the SEA (~20 m standing on
+    # a Nimitz), so it is never "height above the landing surface" there.
+    trust_sample_agl = not (touchdown.surface_is_deck or geometry is not None)
+    reference_height = 0.0
 
     if geometry is not None and event.carrier_latitude is not None:
-        course = (
-            (event.carrier_heading_deg or 0.0) + geometry.landing_course_offset_deg
-        ) % 360.0
-        ref_lat, ref_lon = offset_position(
+        pose = ShipPose(
             event.carrier_latitude,
             event.carrier_longitude,
+            event.carrier_altitude_m or 0.0,
             event.carrier_heading_deg or 0.0,
-            geometry.ramp_along_m,
-            geometry.ramp_lateral_m,
         )
-        deck_elevation: float | None = geometry.deck_altitude_m
+        ref_lat, ref_lon, course = glideslope_end(pose, geometry)
+        deck_elevation: float | None = pose.altitude + geometry.deck_altitude_m
         slope_deg = geometry.glideslope_deg
         geometry_payload = geometry.as_dict()
+        reference_height = geometry.reference_height_m
+        threshold_along = geometry.touchdown_target_m
     elif runway is not None:
         course = runway.heading_deg
         ref_lat, ref_lon = runway.aiming_point(aiming_point_m)
@@ -564,14 +779,18 @@ def build_approach_analysis(
             # over a valley or a ridge on final it does not describe the
             # aircraft's position relative to the landing surface at all.
             agl = sample.altitude - deck_elevation
-        elif sample.agl is not None:
+        elif trust_sample_agl and sample.agl is not None:
             agl = sample.agl
         elif sample.altitude is not None and deck_elevation is not None:
             agl = sample.altitude - deck_elevation
         else:
             agl = None
 
-        gs_dev = agl - (distance_to_go * tan_slope) if agl is not None else None
+        gs_dev = (
+            agl - reference_height - (distance_to_go * tan_slope)
+            if agl is not None
+            else None
+        )
         analysis.samples.append(
             DeviationSample(
                 time=sample.time,

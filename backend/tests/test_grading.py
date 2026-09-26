@@ -779,6 +779,68 @@ def test_fighter_touchdown_is_not_judged_by_transport_bands() -> None:
     assert default_rate.score < fighter_rate.score
 
 
+def test_carrier_jets_are_not_marked_down_for_an_fclp_touchdown() -> None:
+    """艦載機はフレアしない接地が前提: FCLP の ~716 fpm は「良好」。
+
+    A Hornet on-speed (~135 kt) down a 3 deg glideslope with no flare
+    touches at 135 * 101.3 * tan 3 deg = 716 fpm -- the carrier technique,
+    flown ashore as field carrier landing practice, on gear designed for
+    ~24 ft/s. On the fighter bands that scored 47 and read "hard".
+    """
+    fclp = 716.0 / (60.0 / 0.3048)
+    hornet = grade_land_landing(
+        _pattern_analysis(touchdown_descent_ms=fclp, airframe="FA-18C_hornet"), CONFIG
+    )
+    viper = grade_land_landing(
+        _pattern_analysis(touchdown_descent_ms=fclp, airframe="F-16C_50"), CONFIG
+    )
+    hornet_rate = next(c for c in hornet.components if c.name == "descent_rate")
+    viper_rate = next(c for c in viper.components if c.name == "descent_rate")
+
+    assert hornet_rate.evidence["airframe_class"] == "carrier"
+    assert hornet_rate.evidence["verdict"] == "good"
+    assert hornet_rate.score > 80
+    # The land-based fighter is still judged as one: it is meant to flare.
+    assert viper_rate.evidence["airframe_class"] == "fighter"
+    assert viper_rate.score < 55
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("FA-18C_hornet", "carrier"),
+        ("F-14B", "carrier"),
+        ("F-14A-135-GR", "carrier"),
+        # Su-33 contains the fighter token "Su-3": the carrier class must be
+        # asked first, in the code defaults too (production reads those).
+        ("Su-33", "carrier"),
+        ("F-16C_50", "fighter"),
+        ("Su-27", "fighter"),
+        ("AV8BNA", "fighter"),
+        ("F4U-1D", "default"),
+        ("UH-1H", "helicopter"),
+    ],
+)
+def test_airframe_classes_put_carrier_jets_first(name: str, expected: str) -> None:
+    from app.grading.config import GradingConfig
+    from app.grading.land_grader import airframe_class
+
+    for config in (CONFIG, GradingConfig({})):
+        classes = config.land_grading["airframe_classes"]
+        assert airframe_class(name, classes) == expected, (name, config)
+
+
+def test_the_carrier_band_never_scores_below_the_fighter_band() -> None:
+    """Moving an airframe to the carrier class can only raise its score."""
+    from app.grading.land_grader import _descent_rate_score
+
+    bands = CONFIG.land_grading["descent_rate_fpm"]
+    for fpm in range(0, 2600, 5):
+        carrier, _ = _descent_rate_score(float(fpm), bands["carrier"])
+        fighter, _ = _descent_rate_score(float(fpm), bands["fighter"])
+        assert carrier >= fighter - 1e-9, fpm
+
+
 def test_descent_rate_score_is_continuous_across_bands() -> None:
     """A step function makes two indistinguishable landings differ by 25
     points because one crossed a threshold by 1 fpm."""

@@ -64,7 +64,7 @@ export function rolloutDistanceNm(
   return mToNm(best);
 }
 
-interface ProfilePoint {
+export interface ProfilePoint {
   distance_nm: number;       // Distance to touchdown in NM
   agl_ft: number | null;     // Actual AGL in feet (height above deck)
   ideal_ft: number | null;   // Ideal glideslope altitude in feet
@@ -91,9 +91,33 @@ function niceAxis(maxValue: number, intervals = 4): { max: number; ticks: number
   };
 }
 
-function buildProfilePoints(track: ApproachTrack): ProfilePoint[] {
+/** Height (ft) the glideslope ends at above the landing surface.
+ *
+ * Zero on land. On a carrier the FLOLS glidepath ends at the target wire a
+ * couple of metres up -- the aircraft's reference point sits that high when
+ * its wheels are on the deck (`reference_height_m`, AIRBOSS: 2 m) -- and
+ * the backend's deviations are measured from that line, so the drawn ideal
+ * has to be too. */
+function glideslopeEndFt(track: ApproachTrack): number {
+  const value = track.geometry?.["reference_height_m"];
+  return typeof value === "number" && Number.isFinite(value) ? mToFt(value) : 0;
+}
+
+/** Is this a carrier track measured against the moving deck?
+ *
+ * Only those are referenced to the target wire and to the deck. Carrier
+ * rows stored before that change carry no `frame`: they were measured from
+ * the ramp (or the touchdown point) with a sea-referenced height and a deck
+ * frozen at the touchdown instant, so the carrier wording would misdescribe
+ * them. */
+export function isMovingDeck(track: ApproachTrack): boolean {
+  return track.geometry?.["frame"] === "moving_deck";
+}
+
+export function buildProfilePoints(track: ApproachTrack): ProfilePoint[] {
   const glideslopeDeg = track.glideslope_deg ?? 3.5;
   const tanSlope = Math.tan(glideslopeDeg * Math.PI / 180);
+  const endFt = glideslopeEndFt(track);
 
   return track.samples.map((s) => {
     const distNm = s.distance_to_go !== null && s.distance_to_go !== undefined
@@ -105,8 +129,8 @@ function buildProfilePoints(track: ApproachTrack): ProfilePoint[] {
       ? mToFt(s.agl)
       : null;
 
-    // Ideal AGL based on glideslope (0 at touchdown)
-    const idealFt = distNm !== null ? distNm * 6076.12 * tanSlope : null;
+    // Ideal AGL based on glideslope (at the glideslope's end height at touchdown)
+    const idealFt = distNm !== null ? distNm * 6076.12 * tanSlope + endFt : null;
 
     const gsDevFt = s.glideslope_deviation !== null && s.glideslope_deviation !== undefined
       ? mToFt(s.glideslope_deviation)
@@ -158,6 +182,11 @@ export function GlideslopeProfileChart({ track, metrics }: GlideslopeProfileChar
     const box = scroller.current;
     if (box) box.scrollLeft = box.scrollWidth;
   }, [track]);
+  // On the boat the last turn is the 180 and what follows it is the groove;
+  // the distances are to the target wire, not to wherever the jet touched.
+  const carrier = isMovingDeck(track);
+  const rolloutLabel = carrier ? "グルーブ開始" : "ベース→ファイナル";
+  const distanceLabel = carrier ? "目標ワイヤーまでの距離 (nm)" : "接地点までの距離 (nm)";
 
   if (points.length === 0) {
     return <p className="empty-message">グライドスローププロファイルデータがありません。</p>;
@@ -206,7 +235,7 @@ export function GlideslopeProfileChart({ track, metrics }: GlideslopeProfileChar
         <span className="legend-item"><span className="legend-color actual"></span>実飛行AGL (ft)</span>
         <span className="legend-item"><span className="legend-color deviation"></span>グライドスロープ偏差 (ft, 右軸)</span>
         {rolloutNm !== null && (
-          <span className="legend-item"><span className="legend-color rollout"></span>ベース→ファイナル（ここでグライドスロープに乗る）</span>
+          <span className="legend-item"><span className="legend-color rollout"></span>{rolloutLabel}（ここでグライドスロープに乗る）</span>
         )}
       </div>
       {/* Fixed size, scaled by CSS, rather than a ResponsiveContainer.
@@ -232,7 +261,7 @@ export function GlideslopeProfileChart({ track, metrics }: GlideslopeProfileChar
             reversed
             tick={{ fill: "var(--text-dim)", fontSize: 11 }}
             label={{
-              value: "接地点までの距離 (nm)",
+              value: distanceLabel,
               position: "insideBottom",
               offset: -10,
               fill: "var(--text-dim)",
@@ -345,7 +374,7 @@ export function GlideslopeProfileChart({ track, metrics }: GlideslopeProfileChar
               stroke="var(--text-dim)"
               strokeDasharray="6 4"
               label={{
-                value: "ベース→ファイナル",
+                value: rolloutLabel,
                 position: "insideTopLeft",
                 fill: "var(--text-dim)",
                 fontSize: 10,
@@ -355,8 +384,12 @@ export function GlideslopeProfileChart({ track, metrics }: GlideslopeProfileChar
         </LineChart>
       </div>
       <p className="chart-note">
-        ※ 横軸は接地点までの距離（左：進入開始側 → 右：接地点）。グライドスロープ偏差は右軸（ft、+ が理想より上）。横ずれはパターン軌跡を参照。
-        紫の破線がベース→ファイナルの境目で、採点対象はその右側。
+        {carrier
+          ? "※ 横軸は目標ワイヤー（3 番）までの距離、高さは甲板から。艦と一緒に動く座標で測っている。グライドスロープ偏差は右軸（ft、+ が理想より上）。横ずれはパターン軌跡を参照。"
+          : "※ 横軸は接地点までの距離（左：進入開始側 → 右：接地点）。グライドスロープ偏差は右軸（ft、+ が理想より上）。横ずれはパターン軌跡を参照。"}
+        {carrier
+          ? "紫の破線がグルーブ開始の位置。"
+          : "紫の破線がベース→ファイナルの境目で、採点対象はその右側。"}
       </p>
     </div>
   );

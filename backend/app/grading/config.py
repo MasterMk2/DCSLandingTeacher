@@ -28,6 +28,9 @@ _DEFAULTS: dict[str, Any] = {
         "distance_m": 3704.0,
         "land_window_s": 300.0,
         "land_distance_m": 14816.0,
+        # 空母も Case I のブレイク (キスオフ) から入れるため陸上と同じ幅にする。
+        "carrier_window_s": 300.0,
+        "carrier_distance_m": 14816.0,
     },
     "detection": {
         "wow_agl_threshold_m": 3.0,
@@ -64,18 +67,25 @@ _DEFAULTS: dict[str, Any] = {
                 "UH-1", "AH-64", "AH-1", "UH-60", "CH-47", "KA-50", "Mi-8",
                 "Mi-24", "SA342", "OH-58", "OH58",
             ],
+            # 艦載機。fighter より前に置くこと (先に当たった方が勝つので、
+            # 後ろだと "Su-33" が fighter の "Su-3" に取られる)。
+            "carrier": [
+                "FA-18", "F/A-18", "EA-18G", "F-14", "Su-33", "MiG-29K",
+                "T-45", "A-4E", "E-2C", "E-2D", "C-2A", "S-3B", "Rafale_M",
+                "F-35C",
+            ],
             "fighter": [
                 # "F-5E" not "F-5": the bare token also matches "TF-51D",
                 # which put the P-51 trainer on the fighter descent bands.
-                "F-16", "FA-18", "F/A-18", "F-15", "F-14", "F-5E", "F-4",
-                "F-86", "F-100", "F-117", "A-10", "AV8B", "AJS37", "Viggen",
-                "JF-17", "M-2000", "Mirage", "MiG-", "Su-2", "Su-3", "J-11",
-                "Tornado", "EF2000",
+                "F-16", "F-15", "F-5E", "F-4", "F-86", "F-100", "F-117",
+                "A-10", "AV8B", "AJS37", "Viggen", "JF-17", "M-2000", "Mirage",
+                "MiG-", "Su-2", "Su-3", "J-11", "Tornado", "EF2000",
             ],
         },
         "descent_rate_fpm": {
             "default": {"excellent": 120, "good": 250, "fair": 450, "hard": 650},
             "fighter": {"excellent": 300, "good": 450, "fair": 650, "hard": 850},
+            "carrier": {"excellent": 500, "good": 850, "fair": 1100, "hard": 1400},
             "helicopter": {"excellent": 100, "good": 200, "fair": 350, "hard": 550},
         },
         "touchdown_speed_ratio": {
@@ -132,6 +142,26 @@ _DEFAULTS: dict[str, Any] = {
             "cut": "CUT",
         },
         "at_ramp_window_s": 3.0,
+        # FAST / SLOW の基準速度を取る区間 (接地前、接地の瞬間より前だけ)。
+        # 取り込み窓が 300 秒に伸びても、350 kt のイニシャルを平均に混ぜない。
+        "approach_speed_window_s": 60.0,
+        # Case I パターンの読み取り (carrier_pattern.py)。測定と講評だけで、
+        # グレードには効かない。基準値は MOOSE AIRBOSS / CV NATOPS の
+        # Hornet・Tomcat の数字 (高度は MSL)。
+        "pattern": {
+            "groove_align_deg": 10.0,
+            "groove_wings_level_deg": 5.0,
+            "groove_time_ok_s": [15.0, 19.0],
+            "initial_altitude_ft": 800.0,
+            "abeam_altitude_ft": 600.0,
+            "abeam_distance_nm": [1.0, 1.3],
+            "ninety_altitude_ft": 500.0,
+            "wake_altitude_ft": 370.0,
+            "altitude_tolerance_ft": 100.0,
+            "break_altitude_spread_m": 45.0,
+            "flare_sink_ratio": 0.5,
+            "hard_touchdown_fpm": 1400.0,
+        },
         # 空母ファクターの閾値。値はすべて config/grading.yaml からの写しで、
         # ここで新しい数字は作っていない。
         #
@@ -277,6 +307,10 @@ class GradingConfig:
             approach_distance_m=float(self.section("approach")["distance_m"]),
             land_approach_window_s=float(self.section("approach")["land_window_s"]),
             land_approach_distance_m=float(self.section("approach")["land_distance_m"]),
+            carrier_approach_window_s=float(self.section("approach")["carrier_window_s"]),
+            carrier_approach_distance_m=float(
+                self.section("approach")["carrier_distance_m"]
+            ),
         )
 
     # -- graders ----------------------------------------------------------------

@@ -163,4 +163,26 @@ describe("formatMetric", () => {
       text: "7",
     });
   });
+
+  it("reads the Case I checkpoints in the units the pattern is flown in", () => {
+    // Distances in nm, heights in ft -- including the abeam HEIGHT, whose key
+    // contains "abeam" like the distance does.
+    expect(formatMetric("pattern_abeam_distance_m", 2083.8)).toEqual({
+      label: "アビーム距離（艦の中心線から）",
+      text: "1.13 nm",
+    });
+    expect(formatMetric("pattern_abeam_altitude_m", 182.9)).toEqual({
+      label: "アビーム高度（MSL）",
+      text: "600 ft",
+    });
+    expect(formatMetric("pattern_break_along_ship_m", 1240.8).text).toBe("0.67 nm");
+    expect(formatMetric("pattern_groove_start_distance_m", 894.5).text).toBe("0.48 nm");
+    expect(formatMetric("pattern_groove_start_lineup_m", -3.0).text).toBe("-10 ft");
+    expect(formatMetric("pattern_groove_time_s", 15.6).text).toBe("15.6 s");
+    expect(formatMetric("pattern_groove_verdict", "LIG").text).toBe("LIG（長い: 19 秒超）");
+    expect(formatMetric("pattern_ship_speed_ms", 15.0).text).toBe("29 kt");
+    expect(formatMetric("ramp_descent_rate_fpm", 207).label).toBe("ランプ直前 1 秒の降下率");
+    expect(formatMetric("deck_frame", "moving_deck").text).toContain("甲板と一緒に動く");
+    expect(formatMetric("airframe_class", "carrier").text).toContain("艦載機");
+  });
 });

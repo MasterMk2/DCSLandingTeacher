@@ -15,6 +15,7 @@ import type { DeviationSample } from "../types/api";
 export const M_PER_NM = 1852;
 
 export type Leg =
+  | "prior"
   | "entry"
   | "break"
   | "downwind"
@@ -23,6 +24,10 @@ export type Leg =
   | "rollout";
 
 export interface LegTimes {
+  /** Everything before this belongs to an earlier pass that did not land
+   *  (a carrier wave-off): the record reaches back over it because no deck
+   *  contact stopped the capture. */
+  priorEnd?: number | null;
   rollout?: number | null;
   breakStart?: number | null;
   breakEnd?: number | null;
@@ -47,9 +52,43 @@ export function alongOf(s: DeviationSample): number | null {
   return null;
 }
 
+/**
+ * The same samples, re-expressed in the SHIP's frame when the API supplied
+ * it (carrier tracks referenced to the moving deck), else unchanged.
+ *
+ * A Case I pattern is flown up the ship's heading -- initial along the BRC,
+ * the break across the bow, the downwind parallel to it -- while the stored
+ * along / lateral fields are measured down the angled deck, 9 deg to port.
+ * Drawn in those, a perfectly parallel downwind leans 9 deg and the ship
+ * sits off-axis. Mapping `ship_along` onto the "along" slot (negated: the
+ * plan view puts larger distance-to-go lower, and astern is negative here)
+ * lets every other function in this module draw the carrier unchanged, with
+ * BRC up the page and the ship's reference point at the origin.
+ *
+ * All-or-nothing: a track where only some samples carry the ship frame is
+ * drawn in its own frame, never a mixture of two.
+ */
+export function inShipFrame(samples: DeviationSample[]): DeviationSample[] {
+  if (
+    samples.length === 0 ||
+    !samples.every(
+      (s) => typeof s.ship_along === "number" && typeof s.ship_lateral === "number",
+    )
+  ) {
+    return samples;
+  }
+  return samples.map((s) => ({
+    ...s,
+    signed_distance_to_go: -(s.ship_along as number),
+    distance_to_go: Math.max(0, -(s.ship_along as number)),
+    centerline_deviation: s.ship_lateral as number,
+  }));
+}
+
 /** Which leg a sample belongs to; everything collapses to "final" when the
  *  backend did not report any pattern boundaries (straight-in, old data). */
 export function legAt(time: number, t: LegTimes): Leg {
+  if (t.priorEnd != null && time < t.priorEnd) return "prior";
   if (t.touchdown != null && time > t.touchdown) return "rollout";
   if (t.rollout != null && time >= t.rollout) return "final";
   if (t.downwindEnd != null && time > t.downwindEnd) return "base";

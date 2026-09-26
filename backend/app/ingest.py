@@ -28,7 +28,7 @@ airborne. New landing events are forwarded to the optional
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 from logging import getLogger
 from typing import Any
@@ -74,6 +74,86 @@ DEFAULT_BATCH_AGE_S = 2.0
 #: duplicates like landings #280/#285/#288 and cross-mission finalize
 #: corruption). Small negative jitter from buffering stays well below this.
 SESSION_REGRESSION_S = 120.0
+
+#: Ground-speed estimate bounds; documented on the TrackIngestor attributes
+#: of the same names, which alias these.
+GROUND_SPEED_MIN_BASELINE_S = 1.0
+GROUND_SPEED_MAX_BASELINE_S = 15.0
+GROUND_SPEED_MIN_DISTANCE_M = 5.0
+GROUND_SPEED_MAX_PLAUSIBLE_MS = 1000.0
+#: See TrackIngestor.POSITION_JUMP_SPEED_MS.
+POSITION_JUMP_SPEED_MS = 1000.0
+
+
+def ground_speed_from_history(
+    history_newest_first: Iterable[TrackSample],
+    time: float,
+    latitude: float,
+    longitude: float,
+) -> float | None:
+    """Two-point ground speed against an earlier position of the same object.
+
+    Walks back through ``history_newest_first`` for a sample at least
+    ``GROUND_SPEED_MIN_BASELINE_S`` old -- but never past
+    ``GROUND_SPEED_MAX_BASELINE_S`` of stale data (Issue #27) -- that the
+    object has moved at least ``GROUND_SPEED_MIN_DISTANCE_M`` from, and
+    returns the implied speed unless it is implausible.
+
+    A function rather than a method because two places must compute it the
+    same way: live ingest (over the rolling buffer) and the rebuild of a
+    stored landing from the raw ``tracks`` table (app/rebuild.py). A speed
+    derived differently there would change FAST / SLOW on a row that was
+    only being re-cut.
+    """
+    for previous in history_newest_first:
+        if previous.latitude is None or previous.longitude is None:
+            continue
+        dt = time - previous.time
+        if dt < GROUND_SPEED_MIN_BASELINE_S:
+            continue
+        if dt > GROUND_SPEED_MAX_BASELINE_S:
+            # Everything further back is even staler; no usable baseline.
+            return None
+        distance = haversine_m(previous.latitude, previous.longitude, latitude, longitude)
+        if distance < GROUND_SPEED_MIN_DISTANCE_M:
+            # ACMI repeats the last position on partial updates; a tiny delta
+            # is noise, not a standstill -- keep walking back within the fresh
+            # window for a sample that actually moved.
+            continue
+        speed = distance / dt
+        if speed > GROUND_SPEED_MAX_PLAUSIBLE_MS:
+            return None
+        return speed
+    return None
+
+
+def reject_impossible_position(
+    previous: TrackSample | None, sample: TrackSample
+) -> TrackSample:
+    """``sample`` without its coordinates if it jumped impossibly far.
+
+    Returns ``sample`` itself when kept. See
+    ``TrackIngestor.POSITION_JUMP_SPEED_MS`` for why; shared with the
+    rebuild for the same reason as :func:`ground_speed_from_history`.
+    """
+    if (
+        previous is None
+        or sample.latitude is None
+        or sample.longitude is None
+        or previous.latitude is None
+        or previous.longitude is None
+    ):
+        return sample
+    dt = sample.time - previous.time
+    if dt <= 0:
+        return sample
+    speed = (
+        haversine_m(previous.latitude, previous.longitude, sample.latitude, sample.longitude)
+        / dt
+    )
+    if speed <= POSITION_JUMP_SPEED_MS:
+        return sample
+    return replace(sample, latitude=None, longitude=None)
 
 
 @dataclass
@@ -677,19 +757,19 @@ class TrackIngestor:
     #: Matches the existing pattern used for vertical speed
     #: (_vertical_speed / _descent_rate_before below) instead of a fixed
     #: 0.05s jitter guard.
-    GROUND_SPEED_MIN_BASELINE_S = 1.0
+    GROUND_SPEED_MIN_BASELINE_S = GROUND_SPEED_MIN_BASELINE_S
     #: A baseline older than this is too stale to trust: the aircraft may have
     #: travelled a very different path in between, so the resulting speed is
     #: noise rather than a measurement (observed live: 1364 m/s spikes). This
     #: bounds a previously unbounded lookback that could reach minutes back.
-    GROUND_SPEED_MAX_BASELINE_S = 15.0
+    GROUND_SPEED_MAX_BASELINE_S = GROUND_SPEED_MAX_BASELINE_S
     #: Below this horizontal displacement over the baseline the estimate is
     #: dominated by ACMI partial-update duplication (the last known position
     #: repeated verbatim) and quantization noise, not real motion.
-    GROUND_SPEED_MIN_DISTANCE_M = 5.0
+    GROUND_SPEED_MIN_DISTANCE_M = GROUND_SPEED_MIN_DISTANCE_M
     #: Above this ground speed the estimate is implausible for crewed aircraft
     #: and must be discarded instead of skewing FAST/SLOW factor detection.
-    GROUND_SPEED_MAX_PLAUSIBLE_MS = 1000.0
+    GROUND_SPEED_MAX_PLAUSIBLE_MS = GROUND_SPEED_MAX_PLAUSIBLE_MS
 
     def _ground_speed_ms(self, obj_id: str, source: AcmiObject) -> float | None:
         """Best-available horizontal speed in m/s (Issue D-2 / #27).
@@ -698,11 +778,8 @@ class TrackIngestor:
         against a live server: real aircraft object lines carry only
         position/attitude/identity properties), so ``AcmiObject.speed`` is
         always ``None`` for real games. Fall back to a ground speed estimate
-        against this aircraft's own position from at least
-        ``GROUND_SPEED_MIN_BASELINE_S`` seconds ago, walking further back in
-        the buffer as needed -- but never past ``GROUND_SPEED_MAX_BASELINE_S``
-        seconds of stale data (Issue #27), and only when the displacement is
-        large enough to be real motion.
+        against this aircraft's own buffered positions
+        (:func:`ground_speed_from_history`).
         """
         if source.speed is not None:
             return source.speed
@@ -711,28 +788,9 @@ class TrackIngestor:
         buffer = self._aircraft_buffers.get(obj_id)
         if buffer is None:
             return None
-        for previous in buffer.iter_reverse():
-            if previous.latitude is None or previous.longitude is None:
-                continue
-            dt = source.last_seen - previous.time
-            if dt < self.GROUND_SPEED_MIN_BASELINE_S:
-                continue
-            if dt > self.GROUND_SPEED_MAX_BASELINE_S:
-                # Everything further back is even staler; no usable baseline.
-                return None
-            distance = haversine_m(
-                previous.latitude, previous.longitude, source.latitude, source.longitude
-            )
-            if distance < self.GROUND_SPEED_MIN_DISTANCE_M:
-                # ACMI repeats the last position on partial updates; a tiny
-                # delta is noise, not a standstill -- keep walking back within
-                # the fresh window for a sample that actually moved.
-                continue
-            speed = distance / dt
-            if speed > self.GROUND_SPEED_MAX_PLAUSIBLE_MS:
-                return None
-            return speed
-        return None
+        return ground_speed_from_history(
+            buffer.iter_reverse(), source.last_seen, source.latitude, source.longitude
+        )
 
     def _ground_altitude_for(
         self, latitude: float | None, longitude: float | None
@@ -967,36 +1025,17 @@ class TrackIngestor:
     #: every chart and grading built on the track. The rejected sample still
     #: becomes the next baseline, so a legitimate teleport (respawn) costs one
     #: rejected sample instead of poisoning the rest of the track.
-    POSITION_JUMP_SPEED_MS = 1000.0
+    POSITION_JUMP_SPEED_MS = POSITION_JUMP_SPEED_MS
 
     def _reject_impossible_position(
         self, obj_id: str, buffer: RollingTrackBuffer, sample: TrackSample
     ) -> TrackSample:
-        last = buffer.last()
-        if (
-            last is None
-            or sample.latitude is None
-            or sample.longitude is None
-            or last.latitude is None
-            or last.longitude is None
-        ):
-            return sample
-        dt = sample.time - last.time
-        if dt <= 0:
-            return sample
-        speed = (
-            haversine_m(last.latitude, last.longitude, sample.latitude, sample.longitude)
-            / dt
-        )
-        if speed <= self.POSITION_JUMP_SPEED_MS:
-            return sample
-        logger.debug(
-            "position jump rejected: obj=%s %.0f m/s over %.2fs",
-            obj_id,
-            speed,
-            dt,
-        )
-        return replace(sample, latitude=None, longitude=None)
+        kept = reject_impossible_position(buffer.last(), sample)
+        if kept is not sample:
+            logger.debug(
+                "position jump rejected: obj=%s at t=%.2f", obj_id, sample.time
+            )
+        return kept
 
     def _build_track(
         self,

@@ -1016,7 +1016,7 @@ _COMPONENT_JA = {
     "centerline": "センターライン保持",
     "pattern": "オーバーヘッドパターン",
 }
-_AIRFRAME_CLASS_JA = {"helicopter": "ヘリコプター", "fighter": "戦闘機"}
+_AIRFRAME_CLASS_JA = {"helicopter": "ヘリコプター", "fighter": "戦闘機", "carrier": "艦載機"}
 
 
 def _unscored_note(
