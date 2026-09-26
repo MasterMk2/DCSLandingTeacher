@@ -388,6 +388,41 @@ async def test_0009_finishes_a_run_that_was_cut_short(tmp_path: Path) -> None:
     assert _stored_tracks(url) == tracks
 
 
+async def test_0009_keeps_the_batches_it_copied_when_it_dies(tmp_path: Path, monkeypatch) -> None:
+    """Killed in the middle of the copy, the batches already copied stay
+    copied, and the next run carries on. (Inside alembic's transaction they
+    all rolled back with the failure, so each retry started from zero.)"""
+    import zlib
+
+    url = f"sqlite:///{(tmp_path / 'killed.db').as_posix()}"
+    tracks = {i: f'{{"samples": [], "n": {i}}}' for i in range(1, 351)}
+    _landings_at_0008(url, tracks)
+    real_compress = zlib.compress
+    calls = {"n": 0}
+
+    def dies_at_250(data, level=-1):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] == 250:
+            raise RuntimeError("killed")
+        return real_compress(data, level)
+
+    monkeypatch.setattr(zlib, "compress", dies_at_250)
+    try:
+        await run_migrations(url)
+    except RuntimeError:
+        pass
+    monkeypatch.setattr(zlib, "compress", real_compress)
+
+    assert _version(url) == "0008_landing_identity"
+    assert len(_stored_tracks(url)) == 200  # two batches of 100, committed
+    assert "approach_track" in _columns(url, "landings")
+
+    await run_migrations(url)
+
+    assert _version(url) == HEAD_REVISION
+    assert _stored_tracks(url) == tracks
+
+
 async def test_0009_downgrades_back_into_landings(tmp_path: Path) -> None:
     url = f"sqlite:///{(tmp_path / 'down.db').as_posix()}"
     tracks = {1: '{"samples": [1, 2, 3]}', 2: None}
