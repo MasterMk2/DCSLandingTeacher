@@ -87,11 +87,13 @@ export function formatMetric(key: string, value: unknown): { label: string; text
   }
   if (key.endsWith("_m")) {
     const stem = key.slice(0, -"_m".length);
-    // パターンの離隔とブレイク開始位置は海里で述べる: 1.5 nm を 9000 ft と
-    // 言われても飛んでいる側の感覚と結びつかない。
-    const text = /abeam|along/.test(stem)
-      ? `${(value / 1852).toFixed(2)} nm`
-      : `${Math.round(mToFt(value))} ft`;
+    // パターンの離隔・ブレイク開始位置・グルーブ開始距離は海里で述べる:
+    // 1.5 nm を 9000 ft と言われても飛んでいる側の感覚と結びつかない。
+    // ただし高度と横ずれは ft ("abeam_altitude" は abeam を含むが高度)。
+    const text =
+      /abeam|along|distance/.test(stem) && !/altitude|lineup/.test(stem)
+        ? `${(value / 1852).toFixed(2)} nm`
+        : `${Math.round(mToFt(value))} ft`;
     return { label: metricLabel(key, stem), text };
   }
   if (key.endsWith("_deg")) {
@@ -251,6 +253,22 @@ const METRIC_VALUE_JA: Record<string, string> = {
     "進入らしい飛行が無かった（ホップ程度の浮上）ため成績なし",
   "ungraded_reason:insufficient-coverage":
     "測れた項目だけでは判断できないため成績なし",
+  "deck_frame:moving_deck": "甲板と一緒に動く座標（艦の移動を毎サンプル反映）",
+  "deck_frame:frozen_at_touchdown":
+    "接地時刻で艦を止めた旧形式（接地前 60 秒のみ。パターンは解析していない）",
+  "pattern_groove_verdict:OK": "OK（15〜19 秒）",
+  "pattern_groove_verdict:NESA": "NESA（短い: 15 秒未満）",
+  "pattern_groove_verdict:LIG": "LIG（長い: 19 秒超）",
+  "pattern_entry:initial": "イニシャルからのブレイク（キスオフ）",
+  "pattern_entry:turn": "上昇からダウンウィンドへの旋回（ボルター・タッチアンドゴー・ウェーブオフ後など。キスオフではない）",
+  "pattern_starts_from_deck:true": "はい（甲板を離れた直後から記録）",
+  "pattern_starts_from_deck:false": "いいえ",
+  "pattern_groove_start_method:wings_level": "翼が水平になった時点（記録の Roll）",
+  "pattern_groove_start_method:track": "最終方位に乗った時点（対地トラック、Roll 無し）",
+  "airframe_class:carrier": "艦載機（フレアしない接地が前提の許容幅）",
+  "airframe_class:fighter": "戦闘機",
+  "airframe_class:helicopter": "ヘリコプター",
+  "airframe_class:default": "標準",
 };
 
 /** パターンのメトリクスは `pattern_` 付きで metrics に、素のキーで
@@ -370,6 +388,25 @@ const METRIC_LABELS: Record<string, string> = {
   pattern_downwind_samples: "ダウンウィンドのサンプル数",
   pattern_downwind_judged: "ダウンウィンドを採点したか",
   pattern_overshoot: "センターライン突き抜け",
+  // 空母 (Case I)。高度は MSL (海面から)。測定のみでグレードには効かない。
+  deck_frame: "着艦の座標系",
+  groove_descent_rate: "グルーブ中の降下率",
+  ramp_descent_rate: "ランプ直前 1 秒の降下率",
+  ramp_sink_ratio: "ランプ ÷ グルーブ 降下率比（0.5 未満 = フレア）",
+  pattern_break_along_ship: "ブレイク開始位置（艦の中央から、+ = 前方）",
+  pattern_entry: "ダウンウィンドへの入り方",
+  pattern_starts_from_deck: "甲板を離れた直後からの記録か",
+  pattern_groove_time: "グルーブ時間",
+  pattern_groove_verdict: "グルーブ判定",
+  pattern_groove_start_method: "グルーブ開始の決め方",
+  pattern_groove_start_distance: "グルーブ開始の距離（目標ワイヤーまで）",
+  pattern_groove_start_lineup: "グルーブ開始時の横ずれ（+ = 右）",
+  pattern_abeam_distance: "アビーム距離（艦の中心線から）",
+  pattern_abeam_altitude: "アビーム高度（MSL）",
+  pattern_ninety_altitude: "90 の高度（MSL）",
+  pattern_wake_altitude: "ウェイク通過高度（MSL）",
+  pattern_ship_speed: "艦速",
+  pattern_ship_heading_change: "記録中の艦の針路変化",
 };
 
 /** Keys that exist for the charts, not for the reader.
@@ -389,6 +426,11 @@ const INTERNAL_METRIC_KEYS = new Set([
   "break_end_time",
   "pattern_break_start_time",
   "pattern_break_end_time",
+  "pattern_low_pass_time",
+  "pattern_abeam_time",
+  "pattern_ninety_time",
+  "pattern_wake_time",
+  "pattern_groove_start_time",
 ]);
 
 export function isInternalMetricKey(key: string): boolean {

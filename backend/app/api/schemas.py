@@ -81,6 +81,18 @@ class DeviationSampleOut(BaseModel):
     #: positive) derived from the track (app.grading.kinematics).
     load_factor: float | None = None
     turn_rate_deg_s: float | None = None
+    #: Carrier tracks referenced to the moving deck only: the position in
+    #: the earth-fixed frame the load factor was derived in (stored)...
+    fixed_along: float | None = None
+    fixed_lateral: float | None = None
+    #: ...and in the SHIP's own frame, metres forward (+) of the ship's ACMI
+    #: position and to starboard (+). Not stored: computed on the way out
+    #: from the landing-area coordinates above and the stored geometry
+    #: (app.grading.carrier_pattern.ShipFrame), so the plan view can draw a
+    #: Case I pattern the way it is flown -- up the ship's heading, not the
+    #: angled deck.
+    ship_along: float | None = None
+    ship_lateral: float | None = None
 
 
 class ApproachTrackOut(BaseModel):

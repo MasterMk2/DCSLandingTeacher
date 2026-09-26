@@ -1,121 +1,155 @@
-# DCS Landing Teacher - per-carrier FLOLS geometry (Issue #3 / O-2).
+# DCS Landing Teacher - per-carrier landing-area geometry (Issue #3 / O-2).
 #
-# Values below are based on:
-# - DCS Forum "By the Numbers: Carrier Landing Geometry & the IFLOLS" (Matthew10_28, 2018)
-#   - IFLOLS model position error: +1.792 ft (0.55m) vertical correction needed
-#   - 3-wire hook touchdown target: ~230 ft (70m) from stern
-# - DCS Supercarrier Operations Guide (Eagle Dynamics)
-#   - IFLOLS mounted on port side, elevation transmitter above flight deck aft of island
-# - Hoggit Wiki "Carrier Air Operations" & community knowledge
-#   - Nimitz-class angled deck offset: 9° from BRC (Base Recovery Course)
-#   - Standard USN FLOLS glideslope: 3.5°
-# - Wikipedia / public specifications for ship dimensions
+# ---------------------------------------------------------------------------
+# Where the numbers come from (2026-09-26)
+# ---------------------------------------------------------------------------
+# The US carriers below are taken from MOOSE's AIRBOSS
+# (FlightControl-Master/MOOSE, Moose Development/Moose/Ops/Airboss.lua:
+# _InitNimitz / _InitStennis / _InitForrestal, _GetSternCoord,
+# _GetOptLandingCoordinate, GetFinalBearing). AIRBOSS is the LSO the DCS
+# community actually flies against, and for the Nimitz-class supercarrier its
+# comments cite DCS's own files for the two numbers that matter most:
+#   - deck height 20.1494 m   <- CoreMods\tech\USS_Nimitz\Database\USS_CVN_7X.lua
+#   - runway angle -9.1359 deg <- CoreMods\tech\USS_Nimitz\scripts\USS_Nimitz_RunwaysAndRoutes.lua
 #
-# !! NOTE: Values are derived from community research and public docs.
-#    They are more accurate than pure estimates but should still be
-#    validated against in-game measurements for precision grading.
+# The values this file shipped before disagreed with those in three ways, and
+# each one moved every carrier grade:
+#   - landing_course_offset_deg was +9, i.e. an angled deck to STARBOARD.
+#     Every angled deck points to PORT: final bearing = BRC - 9.14 deg. The
+#     grading frame was therefore 18 deg off the deck a trap is flown down.
+#   - the ramp was put 10 m to PORT of the ship's axis; AIRBOSS puts the
+#     stern end of the landing-area centreline 9.5 m to STARBOARD.
+#   - the glideslope was anchored AT the ramp. The glidepath the FLOLS shows
+#     ends at the target wire, not at the round-down, so a pass flown
+#     exactly on the ball read ~3-5 m "high" at the ramp.
+# These are still `validated: false`: they are AIRBOSS's numbers for the DCS
+# models, not values fitted to this server's own traps.
 #
-# How the geometry is used by the grader (app.grading.deviations):
-#   - The glideslope reference point is the RAMP (the FLOLS datum at the
-#     aft end of the angled deck), expressed as an offset from the ship's
-#     ACMI position:
-#       ramp_along_m   : meters forward of the ship position (+) toward
-#                         the bow / negative toward the stern.
-#       ramp_lateral_m : meters to the RIGHT (+) of the ship heading.
-#   - deck_altitude_m is the height of the landing-area deck above sea
-#     level (MSL); it replaces the proximity-based ground elevation when
-#     computing AGL for glideslope deviations.
-#   - landing_course_offset_deg is the angle of the landing course
-#     relative to the ship heading (angled-deck carriers ~ 9 degrees,
-#     axial-deck carriers ~ 0).
-#   - beam_width_m is the approximate lateral width of the FLOLS light
-#     beam; informational only (UI display), not used by grading yet.
+# ---------------------------------------------------------------------------
+# How the grader uses the geometry (app.grading.deviations, carrier_pattern)
+# ---------------------------------------------------------------------------
+# Everything is expressed in the SHIP's frame and re-evaluated at every sample
+# time, because the deck moves (15 m/s is 2 km over a Case I pattern):
+#   ramp_along_m / ramp_lateral_m
+#       Stern end of the landing-area centreline (the ramp / round-down),
+#       relative to the ship's ACMI position: metres forward (+) of it and
+#       metres to STARBOARD (+) of the ship's heading.
+#   landing_course_offset_deg
+#       Bearing of the landing area relative to the ship's heading.
+#       NEGATIVE = angled to PORT (all angled decks). Final bearing =
+#       ship heading + this.
+#   touchdown_target_m
+#       Distance from the ramp, along the landing area, to the point the
+#       glideslope ends at. AIRBOSS uses the 3-wire "to approximately account
+#       for the length of the aircraft" (the ACMI position is the aircraft's
+#       reference point, well forward of its hook).
+#   reference_height_m
+#       Height of that reference point above the deck when the aircraft is
+#       sitting on it (AIRBOSS: 2 m; measured here: 22.00 m MSL on a 20.15 m
+#       deck, i.e. 1.85 m). The glideslope ends this far above the deck.
+#   deck_altitude_m
+#       Landing-area deck above the ship's own ACMI altitude (DCS ships sit
+#       at ~0 m, the waterline). Also what the detector uses to decide that an
+#       aircraft is standing on the deck: Tacview's AGL is measured to the sea.
+#   landing_area_length_m
+#       Length of the landing area from the ramp (display only).
+#   glideslope_deg / beam_width_m
+#       FLOLS glideslope; beam width is informational (not used by grading).
 #
-# Matching: `name_patterns` are matched case-insensitively against the
-# ACMI object Name; `type_patterns` against the ACMI Type string. First
-# entry that matches wins; ships not listed here fall back to the legacy
-# touchdown-referenced approximation (see app/grading/deviations.py).
+# The ramp offsets are AIRBOSS's (sterndist along the heading, then N metres
+# toward FB + 90) rotated into this file's ship frame: the lateral step is
+# taken perpendicular to the FINAL BEARING, so it contributes N*cos(80.86 deg)
+# forward and N*sin(80.86 deg) to starboard.
 #
-# Validation status: Each carrier entry can include a `validated` section
-# with real in-game measurements. Run `scripts/validate_carrier_geometry.py`
-# to generate validated values from Tacview ACMI trap data.
+# Matching: `type_patterns` are tried against the ACMI Type string for every
+# entry BEFORE any `name_patterns` is tried against the Name, and the first
+# match wins. DCS writes Type=Sea+Watercraft+AircraftCarrier for all of these,
+# so never add a type pattern as broad as that: one entry would hand its deck
+# to every ship. Match by Name (DCS writes the unit type, e.g. CVN_73).
+#
+# Validation: `scripts/validate_carrier_geometry.py` can derive values from
+# Tacview ACMI trap data.
 
-version: 2
+version: 3
 
 defaults:
   # Used as fallback values for entries that omit a field.
-  glideslope_deg: 3.5        # standard USN FLOLS slope
-  landing_course_offset_deg: 9.0   # typical angled-deck bearing (Nimitz/Forrestal)
-  beam_width_m: 12.0         # rough FLOLS beam width
+  glideslope_deg: 3.5              # standard USN FLOLS slope
+  landing_course_offset_deg: -9.1359  # angled deck, to PORT (AIRBOSS rwyangle)
+  beam_width_m: 12.0               # rough FLOLS beam width
+  reference_height_m: 2.0          # aircraft reference point above the deck (AIRBOSS)
 
 carriers:
   kuznetsov:
-    # "CV_1143_5" is the unit name DCS actually puts in the ACMI; without it
-    # nothing here matched the ship on the wire (see the note above `stennis`).
-    name_patterns: ["kuznetsov", "cv_1143_5", "1143_5"]
+    # "CV_1143_5" is the unit name DCS actually puts in the ACMI; "KUZNECOW"
+    # is the older model's type name (AIRBOSS CarrierType.KUZNETSOV).
+    name_patterns: ["kuznetsov", "cv_1143_5", "1143_5", "kuznecow"]
     type_patterns: ["Carrier+FixedWing", "AircraftCarrier+Kuznetsov"]
-    # Admiral Kuznetsov (Project 1143.5): STOBAR with ski-jump.
-    # Landing run is nearly axial (minimal angled deck offset).
-    # Russian FLOLS equivalent (Klystron) typically set steeper than USN.
-    # Deck height higher due to ski-jump bow structure.
-    # Sources: DCS community data, Kuznetsov specs (flight deck ~22m above waterline at landing area)
+    # Admiral Kuznetsov (Project 1143.5), STOBAR with ski-jump.
+    # NOTHING here is sourced: AIRBOSS itself falls back to the Stennis
+    # numbers for this ship ("Kusnetsov parameters - maybe..."), and no trap
+    # on it has ever been recorded on this server (100% of its carrier
+    # traffic is CVN_73). The one change made on 2026-09-26 is the SIGN of
+    # the landing course: it was +2 (starboard) from before the convention
+    # was written down; every angled deck points to port. The magnitude is
+    # still the old estimate (the real ship's angle is ~7 deg).
     validated: false
     deck_altitude_m: 22.0            # Flight deck height at landing area (MSL)
-    ramp_along_m: -110.0             # Ramp/IFLOLS datum ~110m aft of ship reference (stern area)
-    ramp_lateral_m: 5.0              # Near centerline for axial approach (slight starboard for angled landing area)
+    ramp_along_m: -110.0             # Ramp ~110 m aft of the ship reference (estimate)
+    ramp_lateral_m: 5.0              # estimate
     glideslope_deg: 4.0              # Steeper glideslope typical for STOBAR (Russian practice)
-    landing_course_offset_deg: 2.0   # Nearly axial, slight offset for landing area alignment
-    beam_width_m: 10.0               # Narrower beam (older optics)
+    landing_course_offset_deg: -2.0  # to port; magnitude unverified
+    # Unknown: the glideslope stays anchored at the ramp, as it always was
+    # for this ship.
+    touchdown_target_m: 0.0
+    beam_width_m: 10.0
+
+  nimitz_supercarrier:
+    # The Supercarrier module's Nimitz class. This server's carrier traffic
+    # is 100% "CVN_73" (George Washington), measured 2026-09-06.
+    #
+    # 実測で分かったこと (2026-09-06): 旧一覧は DCS が実際に ACMI へ書く
+    # 名前と 1 つも一致していなかった (ハイフンとアンダースコア、Type の
+    # 部分文字列でないパターン)。ここは Name で当てる。
+    name_patterns:
+      ["cvn_71", "cvn-71", "cvn_72", "cvn-72", "cvn_73", "cvn-73",
+       "cvn_75", "cvn-75", "nimitz"]
+    type_patterns: ["Carrier+Nimitz"]
+    validated: false
+    deck_altitude_m: 20.15           # AIRBOSS 20.1494 (DCS USS_CVN_7X.lua)
+    ramp_along_m: -162.49            # AIRBOSS sterndist -164, then 9.5 m to FB+90
+    ramp_lateral_m: 9.38             # ...which lands 9.38 m to starboard
+    glideslope_deg: 3.5
+    landing_course_offset_deg: -9.1359  # AIRBOSS rwyangle (DCS RunwaysAndRoutes.lua)
+    touchdown_target_m: 79.0         # 3-wire (wires at 55 / 67 / 79 / 96 m from the stern)
+    landing_area_length_m: 250.0
+    beam_width_m: 12.0
 
   stennis:
-    # ---------------------------------------------------------------------
-    # 実測で分かったこと (2026-09-06): この一覧は DCS が実際に ACMI へ書く
-    # 名前と 1 つも一致していなかった。本番の艦は Name="CVN_73" /
-    # Type="Sea+Watercraft+AircraftCarrier" で、
-    #   - name_patterns の "cvn-74" はハイフンで、DCS はアンダースコア
-    #   - type_patterns の "AircraftCarrier+Stennis" 等は
-    #     "Sea+Watercraft+AircraftCarrier" の部分文字列ではない
-    # ため resolve() が None を返し、甲板高が引けず、空母の接地判定は
-    # 丸ごと無効化されていた (この鯖の空母活動は 100% が CVN_73)。
-    #
-    # type_patterns に "AircraftCarrier" のような広いものを足してはいけない:
-    # resolve() は **全エントリの type_patterns を先に** 走査するので、
-    # 1 つ広げると全艦がそのエントリの甲板高を持つことになる (carriers.py の
-    # resolve を参照)。艦ごとの Name で当てる。
-    #
-    # CVN_73 は George Washington で、ここに書いてあるのは Stennis (CVN-74)
-    # だが、どちらもニミッツ級で甲板高・アングルドデッキ幾何は同一に扱える。
-    # 級として当てているのであって、艦名の間違いではない。
-    # ---------------------------------------------------------------------
-    name_patterns:
-      ["stennis", "nimitz", "cvn-74", "cvn_74", "cvn-73", "cvn_73",
-       "cvn-71", "cvn_71", "cvn-72", "cvn_72", "cvn-75", "cvn_75"]
-    type_patterns: ["Carrier+Hornet", "AircraftCarrier+Stennis", "Carrier+Nimitz"]
-    # USS John C. Stennis (CVN-74), Nimitz-class.
-    # Angled deck: 9° offset from ship heading (BRC).
-    # IFLOLS on port side of landing area.
-    # 3-wire target: ~230 ft (70m) from stern per ED Supercarrier Guide.
-    # IFLOLS vertical position: community research suggests +0.55m correction vs model.
-    # Sources: DCS Forum (Matthew10_28), ED Supercarrier Operations Guide, Hoggit Wiki
+    # The free "Stennis" model (and the old "VINSON"), which AIRBOSS
+    # parameterises separately from the Supercarrier hulls above.
+    name_patterns: ["stennis", "cvn-74", "cvn_74", "vinson"]
+    type_patterns: ["Carrier+Hornet", "AircraftCarrier+Stennis"]
     validated: false
-    deck_altitude_m: 19.5            # Flight deck height at landing area (MSL) ~64 ft
-    ramp_along_m: -140.0             # Ramp/IFLOLS datum ~140m aft of ship reference (near stern)
-    ramp_lateral_m: -10.0            # IFLOLS on PORT side of landing area (negative = left of ship heading)
-    glideslope_deg: 3.5              # Standard USN FLOLS glideslope
-    landing_course_offset_deg: 9.0   # Angled deck offset from BRC (confirmed by community math)
-    beam_width_m: 12.0               # Standard FLOLS beam width
+    deck_altitude_m: 18.30           # AIRBOSS _InitStennis
+    ramp_along_m: -151.89            # AIRBOSS sterndist -153, then 7 m to FB+90
+    ramp_lateral_m: 6.91
+    glideslope_deg: 3.5
+    landing_course_offset_deg: -9.1359
+    touchdown_target_m: 70.0         # 3-wire (46 / 58 / 70 / 81 m from the stern)
+    landing_area_length_m: 225.0
+    beam_width_m: 12.0
 
   forrestal:
     name_patterns: ["forrestal", "cv-59", "cv-60", "cv-61", "cv-62"]
     type_patterns: ["Carrier+Tomcat", "AircraftCarrier+Forrestal"]
-    # USS Forrestal (CV-59), first supercarrier with angled deck (Heatblur model).
-    # Slightly smaller than Nimitz, similar angled deck geometry.
-    # Angled deck: ~9° (early angled deck design).
-    # Sources: Heatblur forums, Forrestal-class specs, DCS community feedback
+    # USS Forrestal (CV-59), Heatblur model.
     validated: false
-    deck_altitude_m: 17.5            # Flight deck height at landing area (MSL) ~57 ft
-    ramp_along_m: -130.0             # Ramp/IFLOLS datum ~130m aft of ship reference
-    ramp_lateral_m: -10.0            # IFLOLS on PORT side of landing area
-    glideslope_deg: 3.5              # Standard USN FLOLS glideslope
-    landing_course_offset_deg: 9.0   # Angled deck offset
-    beam_width_m: 12.0               # Standard FLOLS beam width
+    deck_altitude_m: 20.0            # AIRBOSS _InitForrestal
+    ramp_along_m: -134.31            # AIRBOSS sterndist -135.5, then 7.5 m to FB+90
+    ramp_lateral_m: 7.40
+    glideslope_deg: 3.5
+    landing_course_offset_deg: -9.1359
+    touchdown_target_m: 64.0         # 3-wire (44 / 54 / 64 / 74 m from the stern)
+    landing_area_length_m: 212.0
+    beam_width_m: 12.0

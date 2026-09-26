@@ -19,6 +19,7 @@ from app.api.auth import (
     ws_still_authorized,
 )
 from app.api.errors import AppError
+from app.grading.carrier_pattern import ShipFrame
 from app.importer import IMPORT_SOURCE_PREFIX
 from app.pipeline import _touchdown_epoch
 from app.api.schemas import (
@@ -54,6 +55,25 @@ async def get_session(request: Request) -> AsyncSession:
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
         yield session
+
+
+def _ship_position(ship: ShipFrame | None, sample: dict[str, Any]) -> dict[str, float]:
+    """``ship_along`` / ``ship_lateral`` for one stored carrier sample.
+
+    Empty (so the fields stay null) for land tracks and for carrier tracks
+    stored before the deck was tracked, whose frame cannot be mapped onto
+    the ship. The stored keys win if a sample ever carries them itself.
+    """
+    if ship is None or "ship_along" in sample:
+        return {}
+    lateral = sample.get("centerline_deviation")
+    along = sample.get("signed_distance_to_go")
+    if along is None:
+        along = sample.get("distance_to_go")
+    if lateral is None or along is None:
+        return {}
+    x, y = ship.point(float(along), float(lateral))
+    return {"ship_along": round(x, 2), "ship_lateral": round(y, 2)}
 
 
 @router.get("/health")
@@ -296,6 +316,7 @@ async def get_landing(
     approach = None
     if landing.approach_track:
         data = dict(landing.approach_track)
+        ship = ShipFrame.from_geometry(data.get("geometry"))
         samples = [
             # Built from the stored dict wholesale, not field by field: the
             # explicit list silently dropped every field added after it was
@@ -303,7 +324,7 @@ async def get_landing(
             # were both stored and both served as null, which collapsed the
             # break and the upwind leg -- 142 of landing #54's 515 samples --
             # onto the threshold line in the plan view.
-            DeviationSampleOut(**s)
+            DeviationSampleOut(**s, **_ship_position(ship, s))
             for s in data.pop("samples", [])
         ]
         approach = ApproachTrackOut(**data, samples=samples)

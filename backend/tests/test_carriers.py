@@ -47,14 +47,51 @@ def test_resolve_known_carriers_by_name() -> None:
 
     kuznetsov = book.resolve("Kuznetsov")
     assert kuznetsov is not None and kuznetsov.key == "kuznetsov"
-    # Kuznetsov has nearly axial landing (2° offset)
-    assert kuznetsov.landing_course_offset_deg == pytest.approx(2.0)
+    # Nearly axial, and -- like every angled deck -- to PORT (negative).
+    assert kuznetsov.landing_course_offset_deg == pytest.approx(-2.0)
 
     stennis = book.resolve("CVN-74 Stennis")
     assert stennis is not None and stennis.key == "stennis"
 
     forrestal = book.resolve("Forrestal")
     assert forrestal is not None and forrestal.key == "forrestal"
+
+
+def test_every_angled_deck_points_to_port() -> None:
+    """The landing course is the ship's heading MINUS the deck angle.
+
+    The file said +9 for years: an angled deck to STARBOARD, which no carrier
+    has. Graded in that frame a trap flown straight down the real deck
+    (final bearing = BRC - 9.14 deg per AIRBOSS, taken from DCS's own
+    USS_Nimitz_RunwaysAndRoutes.lua) sits 18 deg off the axis -- 60 m of
+    "OFFLINE" at 200 m from the ramp.
+    """
+    book = load_carrier_geometry_book(CARRIERS_YAML)
+    for name in ("CVN_73", "CVN_71", "Stennis", "Forrestal", "CV_1143_5"):
+        geometry = book.resolve(name, "Sea+Watercraft+AircraftCarrier")
+        assert geometry is not None, name
+        assert geometry.landing_course_offset_deg < 0.0, name
+
+
+def test_the_supercarrier_hulls_carry_airboss_geometry() -> None:
+    """CVN_73 is 100% of this server's carrier traffic; pin its numbers.
+
+    AIRBOSS _InitNimitz: stern 164 m aft of the ship position, then 9.5 m to
+    starboard of the final bearing; deck 20.1494 m (DCS USS_CVN_7X.lua);
+    3-wire 79 m from the stern.
+    """
+    book = load_carrier_geometry_book(CARRIERS_YAML)
+    geometry = book.resolve("CVN_73", "Sea+Watercraft+AircraftCarrier")
+    assert geometry is not None and geometry.key == "nimitz_supercarrier"
+    assert geometry.deck_altitude_m == pytest.approx(20.15)
+    assert geometry.landing_course_offset_deg == pytest.approx(-9.1359)
+    # The ramp offsets are AIRBOSS's two translations composed in the ship
+    # frame; recompute them rather than trusting the rounded YAML numbers.
+    step = math.radians(-9.1359 + 90.0)
+    assert geometry.ramp_along_m == pytest.approx(-164.0 + 9.5 * math.cos(step), abs=0.01)
+    assert geometry.ramp_lateral_m == pytest.approx(9.5 * math.sin(step), abs=0.01)
+    assert geometry.touchdown_target_m == pytest.approx(79.0)
+    assert geometry.reference_height_m == pytest.approx(2.0)
 
 
 def test_resolve_by_type_pattern_and_case_insensitivity() -> None:
@@ -198,9 +235,12 @@ def _ramp_aligned_event(
                     on_ground=True,
                 )
             )
+    # A DCS ship reports its waterline (~0 m), and the deck sits
+    # ``deck_altitude_m`` above that -- which is how the detector and the
+    # grader both place it.
     carrier = make_carrier_state(
         type_str="Sea+Watercraft+AircraftCarrier+Stennis",
-        altitude=geometry.deck_altitude_m,
+        altitude=0.0,
     )
     events = analyze_track(samples, DECK_ALTITUDE_M, {"C1": carrier})
     assert len(events) == 1
@@ -284,8 +324,8 @@ def test_pipeline_metrics_record_resolved_geometry() -> None:
     payload = result.metrics["flols_geometry"]
     assert payload["key"] == "stennis"
     assert payload["source"] == "carriers.yaml"
-    # Updated deck altitude based on community research (~64 ft = 19.5m)
-    assert payload["deck_altitude_m"] == pytest.approx(19.5)
+    # The free "Stennis" model's deck per AIRBOSS _InitStennis.
+    assert payload["deck_altitude_m"] == pytest.approx(18.30)
 
 
 def test_pipeline_metrics_record_fallback_for_unknown_carrier() -> None:

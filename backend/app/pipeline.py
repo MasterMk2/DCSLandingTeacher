@@ -64,7 +64,15 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
 # 6 (2026-09-26): 位置の飛び (leave-one-out 残差が 10 m または 0.1 秒分を
 # 超えるサンプル) を G の導出から外す (kinematics.reject_position_outliers)。
 # 点数には触らない --- G は測定のみ --- が、G のピーク値と系列が変わる。
-GRADING_VERSION = "6"
+# 7 (2026-09-26): 空母を Case I パターンごと記録・解析する。取り込み窓を
+# 陸上と同じ 300 秒 / 8 nm に広げ (ブレイク = キスオフが入る)、偏差は
+# 甲板と一緒に動く座標系で、甲板からの高さで、左舷 9.14 度のアングルド
+# デッキと 3 番ワイヤーを基準に測る (carriers.yaml を AIRBOSS の値に)。
+# FAST / SLOW の基準速度は接地前 60 秒に限る。パターンは測定と講評のみ。
+# 陸上では艦載機 (F/A-18・F-14 等) に専用の接地降下率バンドを当てる
+# (フレアしない接地が前提のため)。既存の空母の行は再採点しても接地前
+# 60 秒・旧座標系のままなので、パターンは出ない。
+GRADING_VERSION = "7"
 
 
 def _row_approach_pattern(
@@ -72,14 +80,13 @@ def _row_approach_pattern(
 ) -> str | None:
     """``landings`` 行に書く進入パターン。
 
-    陸上では採点側が軌跡から決め直した値が正で、検出器のラベル
+    採点側が軌跡から決め直した値が正で、検出器のラベル
     (``event.approach_pattern``) は取り込み時の見込みでしかない。書き戻さ
     ないと、詳細画面が「オーバーヘッド」と表示したまま採点だけが別の
-    判断で動く、という食い違いが残る。
+    判断で動く、という食い違いが残る。空母も Case I のダウンウィンドを
+    艦の座標系で読めたかどうかで決める (読めない旧形式は検出器のまま)。
     """
-    if isinstance(result, LandGradeResult):
-        return result.metrics.get("approach_pattern") or event.approach_pattern
-    return event.approach_pattern
+    return result.metrics.get("approach_pattern") or event.approach_pattern
 
 
 def _runway_venue(analysis: ApproachAnalysis) -> str | None:
@@ -463,13 +470,12 @@ class LandingPipeline:
             landing.comment = result.comment
             landing.factors = result.factors_payload()
             landing.metrics = dict(result.metrics)
-            # 陸上は採点側が軌跡から決め直したパターンを行にも反映する。
-            # ここを書かないと、詳細画面のラベルだけ検出器の見込み値のまま
-            # 残り、採点は別の判断で動く。
-            if landing.kind != "carrier":
-                landing.approach_pattern = (
-                    result.metrics.get("approach_pattern") or landing.approach_pattern
-                )
+            # 採点側が軌跡から決め直したパターンを行にも反映する。ここを
+            # 書かないと、詳細画面のラベルだけ検出器の見込み値のまま残り、
+            # 採点は別の判断で動く。
+            landing.approach_pattern = (
+                result.metrics.get("approach_pattern") or landing.approach_pattern
+            )
             # 機体名を持っていない古い行は、ここで焼き付けて自己修復させる。
             # 0008 の backfill は「そのとき approach_track に機体名があった行」
             # しか埋められず、後から採点し直して初めて機体名が入った行が
