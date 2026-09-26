@@ -140,6 +140,29 @@ async def test_rebuilding_a_current_carrier_row_changes_nothing(session_factory)
     assert speeds == [(s["time"], s["speed"]) for s in after.approach_track["samples"]]
 
 
+async def test_a_position_glitch_is_dropped_again_on_the_rebuild(session_factory) -> None:
+    """``tracks`` keeps the glitched fix as it arrived; live ingest dropped
+    its coordinates before the detector saw it. Unless the rebuild drops it
+    again, the re-cut downwind carries an 18 km spike -- and the ground
+    speed and G derived around it."""
+    lines = list(fly_case1().lines)
+    aircraft = [i for i, line in enumerate(lines) if line.startswith("A1,T=")]
+    glitch = aircraft[len(aircraft) // 2]
+    longitude, rest = lines[glitch][len("A1,T="):].split("|", 1)
+    lines[glitch] = f"A1,T={float(longitude) + 0.2:.7f}|{rest}"
+    await _ingest(session_factory, lines, _pipeline(session_factory))
+    (before,) = await _rows(session_factory)
+
+    await _pipeline(session_factory).rebuild(before)
+
+    (after,) = await _rows(session_factory)
+    samples_before = before.approach_track["samples"]
+    samples_after = after.approach_track["samples"]
+    assert len(samples_after) == len(samples_before)
+    assert [s["speed"] for s in samples_after] == [s["speed"] for s in samples_before]
+    _same(before.metrics, after.metrics, "pattern_break_max_load_factor", 0.02)
+
+
 async def test_rebuilding_a_land_row_changes_nothing(session_factory) -> None:
     text = make_acmi_text(
         make_approach_samples(outcome="full_stop", pre_touchdown_descent_ms=1.2),
