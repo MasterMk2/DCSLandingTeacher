@@ -227,3 +227,37 @@ async def test_two_applied_rescans_of_one_flight_store_a_landing_once(tmp_path) 
     assert first.status_code == second.status_code == 200
     assert len(stored) == 1
     assert sorted(r.json()["new_landings"] for r in (first, second)) == [0, 1]
+
+
+async def test_a_contact_on_a_dropped_position_does_not_break_the_rescan(session_factory) -> None:
+    """A respawn: after its landing the jet is airborne once more, then
+    reappears 170 km away standing on the ground. That first sample is
+    dropped as a jump -- its time kept, its coordinates not -- and it is the
+    ground contact the gate sees. Re-detecting around it measured a distance
+    from None (six production flights failed the rescan with a 500)."""
+    from tests.helpers import LAT0, LON0
+
+    samples = make_approach_samples(duration_before_s=120.0, ground_time_s=30.0)
+    lines = make_acmi_text(samples, include_carrier=False).splitlines()
+    # Something to measure the distance to, as there always is in
+    # production (the carrier): a hangar by the runway.
+    lines[3:3] = [
+        "#0",
+        f"301,T={LON0 + 0.0165:g}|{LAT0:g}|20,Type=Ground+Static+Building,Name=Hangar",
+    ]
+    far = f"{LON0 + 2.0:g}|{LAT0:g}|20"
+    lines += [
+        "#1035", f"101,T={LON0:g}|{LAT0 + 0.01:g}|500,OnGround=0",
+        "#1040", f"101,T={far},OnGround=1",
+        "#1041", f"101,T={far},OnGround=1",
+        "#1042", f"101,T={far},OnGround=1",
+    ]
+    await ingest(session_factory, lines, keep_all=True)
+    (stored,) = await landings(session_factory)
+
+    report = await rescan_flight(
+        session_factory, pipeline_for(session_factory), stored.flight_id, apply=False
+    )
+
+    assert report.contacts >= 2  # the landing, and the respawn
+    assert [f.existing_landing_id for f in report.landings] == [stored.id]

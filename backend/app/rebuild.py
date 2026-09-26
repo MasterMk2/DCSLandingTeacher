@@ -217,6 +217,8 @@ async def ground_altitude_at(
     on the ground. Live ingest asks at its newest sample on every pass; the
     rebuild asks once, at the stored touchdown.
     """
+    if sample.latitude is None or sample.longitude is None:
+        return None
     best: float | None = None
     best_distance = GROUND_REFERENCE_RADIUS_M
     for state in carriers:
@@ -324,10 +326,17 @@ async def redetect(
     if not samples:
         return Redetection(None, samples, ships, start, end)
     carriers = {obj_id: state for obj_id, (_, state) in ships.items()}
-    at_touchdown = min(samples, key=lambda s: abs(s.time - touchdown_time))
-    ground_altitude = await ground_altitude_at(
-        session, flight_id, at_touchdown, carriers.values()
-    )
+    # The nearest sample that still has a position: one dropped as a jump
+    # (a respawn lands the jet somewhere else, on the ground) keeps its time
+    # but not its coordinates, and a distance from None raised a TypeError --
+    # six production flights failed the rescan on exactly that.
+    positioned = [s for s in samples if s.latitude is not None and s.longitude is not None]
+    ground_altitude = None
+    if positioned:
+        at_touchdown = min(positioned, key=lambda s: abs(s.time - touchdown_time))
+        ground_altitude = await ground_altitude_at(
+            session, flight_id, at_touchdown, carriers.values()
+        )
     event = pick_event(
         analyze_track(
             samples,
