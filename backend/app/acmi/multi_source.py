@@ -44,9 +44,11 @@ class MultiSourceAcmiManager:
         landing_finalize_listener: LandingFinalizeListener | None = None,
         detection_config: DetectionConfig | None = None,
         deck_altitude_for: DeckAltitudeResolver | None = None,
+        keep_all_tracks: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._deck_altitude_for = deck_altitude_for
+        self._keep_all_tracks = keep_all_tracks
         self._landing_listener = landing_listener
         self._landing_finalize_listener = landing_finalize_listener
         self._detection_config = detection_config
@@ -75,6 +77,7 @@ class MultiSourceAcmiManager:
             source_id=source.id,
             detection_config=self._detection_config,
             deck_altitude_for=self._deck_altitude_for,
+            keep_all_tracks=self._keep_all_tracks,
         )
 
         # Line handler that tags events with source_id

@@ -2,8 +2,9 @@
 
 A landing row keeps only what the detector cut out on the day it was graded:
 that day's approach window, in that day's frame. The raw samples behind it
-stay in ``tracks`` -- every object update the ingestor saw -- so a landing can
-be detected and graded again from scratch with the current code.
+stay in ``tracks`` -- the aircraft's and every carrier's, over the span
+:mod:`app.retention` defines -- so a landing can be detected and graded again
+from scratch with the current code.
 
 That is the only way a carrier trap stored before 2026-09-26 gets its
 kiss-off. Its stored track is the last 60 s before the touchdown, measured
@@ -21,13 +22,21 @@ static -- so a row that is already current re-cuts to the same result
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.detection.classify import ObjectClass, classify_object_type
-from app.detection.detector import CarrierState, LandingEvent, TrackSample
+from app.detection.detector import (
+    CarrierState,
+    DetectionConfig,
+    LandingEvent,
+    TrackSample,
+    analyze_track,
+)
 from app.detection.geometry import haversine_m
 from app.ingest import (
     GROUND_REFERENCE_RADIUS_M,
@@ -35,12 +44,7 @@ from app.ingest import (
     reject_impossible_position,
 )
 from app.models.entities import DcsObject, Track
-
-#: How far either side of the touchdown to read beyond the detector's own
-#: windows: the ground-speed baseline needs up to 15 s of history before the
-#: first sample of the approach, and the outcome needs the climb-out (or the
-#: full-stop dwell) after the contact.
-REBUILD_MARGIN_S = 60.0
+from app.retention import rebuild_window
 
 #: A re-detected touchdown this close to the stored one is the same landing.
 #: The detector can move it a sample or two -- a deck height that changed
@@ -49,11 +53,21 @@ REBUILD_MARGIN_S = 60.0
 MATCH_TOLERANCE_S = 2.0
 
 
-async def load_track_samples(
-    session: AsyncSession, object_row_id: int, start: float, end: float
-) -> list[TrackSample]:
-    """The aircraft's samples in ``[start, end]``, as the live buffer held them."""
-    rows = (
+def _time_bounds(column: Any, start: float | None, end: float | None) -> list[Any]:
+    """``start <= column <= end``, either side left open when ``None``."""
+    bounds = []
+    if start is not None:
+        bounds.append(column >= start)
+    if end is not None:
+        bounds.append(column <= end)
+    return bounds
+
+
+async def fetch_track_rows(
+    session: AsyncSession, object_row_id: int, start: float | None, end: float | None
+) -> Sequence[Any]:
+    """The aircraft's raw ``tracks`` rows in ``[start, end]``, oldest first."""
+    return (
         await session.execute(
             select(
                 Track.mission_time,
@@ -70,12 +84,26 @@ async def load_track_samples(
             )
             .where(
                 Track.object_id == object_row_id,
-                Track.mission_time >= start,
-                Track.mission_time <= end,
+                *_time_bounds(Track.mission_time, start, end),
             )
             .order_by(Track.mission_time, Track.id)
         )
     ).all()
+
+
+async def load_track_samples(
+    session: AsyncSession, object_row_id: int, start: float | None, end: float | None
+) -> list[TrackSample]:
+    """The aircraft's samples in ``[start, end]``, as the live buffer held them."""
+    return samples_from_rows(await fetch_track_rows(session, object_row_id, start, end))
+
+
+def samples_from_rows(rows: Iterable[Any]) -> list[TrackSample]:
+    """Raw rows from :func:`fetch_track_rows` turned into detector samples.
+
+    Pure CPU and linear in the rows, so a caller holding a whole flight's
+    worth can run it off the event loop.
+    """
     samples: list[TrackSample] = []
     for row in rows:
         # Live ingest only buffers updates that carry a position.
@@ -104,7 +132,7 @@ async def load_track_samples(
 
 
 async def load_carrier_state(
-    session: AsyncSession, carrier_row_id: int, start: float, end: float
+    session: AsyncSession, carrier_row_id: int, start: float | None, end: float | None
 ) -> CarrierState | None:
     """The ship's track in ``[start, end]``, as live ingest fills a CarrierState."""
     ship = await session.get(DcsObject, carrier_row_id)
@@ -122,8 +150,7 @@ async def load_carrier_state(
             )
             .where(
                 Track.object_id == carrier_row_id,
-                Track.mission_time >= start,
-                Track.mission_time <= end,
+                *_time_bounds(Track.mission_time, start, end),
             )
             .order_by(Track.mission_time, Track.id)
         )
@@ -146,7 +173,7 @@ async def load_carrier_state(
 
 
 async def load_flight_carriers(
-    session: AsyncSession, flight_id: int, start: float, end: float
+    session: AsyncSession, flight_id: int, start: float | None, end: float | None
 ) -> dict[str, tuple[int, CarrierState]]:
     """Every carrier of the flight with samples in ``[start, end]``.
 
@@ -259,3 +286,56 @@ def pick_event(
         if gap < best_gap:
             best, best_gap = event, gap
     return best
+
+
+@dataclass
+class Redetection:
+    """What :func:`redetect` read and found around one touchdown."""
+
+    #: The re-detected landing at the touchdown, if the raw track holds one.
+    event: LandingEvent | None
+    #: The aircraft's samples the detector ran on (empty: no raw track).
+    samples: list[TrackSample]
+    #: Every carrier of the flight over the span, by ACMI id, with its row id.
+    ships: dict[str, tuple[int, CarrierState]]
+    start: float
+    end: float
+
+
+async def redetect(
+    session: AsyncSession,
+    object_row_id: int,
+    flight_id: int,
+    touchdown_time: float,
+    detection: DetectionConfig,
+    deck_altitude_for: Callable[[CarrierState], float | None] | None,
+) -> Redetection:
+    """Run today's detector on the raw track around ``touchdown_time``.
+
+    One routine for the rebuild of a stored row and for the rescan that
+    looks for rows that were never stored, so a landing the rescan adds
+    rebuilds to itself.
+    """
+    start, end = rebuild_window(touchdown_time, detection)
+    samples = await load_track_samples(session, object_row_id, start, end)
+    # Every ship live ingest was tracking, not just the one the row names:
+    # which deck is under the aircraft is the detector's call.
+    ships = await load_flight_carriers(session, flight_id, start, end)
+    if not samples:
+        return Redetection(None, samples, ships, start, end)
+    carriers = {obj_id: state for obj_id, (_, state) in ships.items()}
+    at_touchdown = min(samples, key=lambda s: abs(s.time - touchdown_time))
+    ground_altitude = await ground_altitude_at(
+        session, flight_id, at_touchdown, carriers.values()
+    )
+    event = pick_event(
+        analyze_track(
+            samples,
+            ground_altitude,
+            carriers,
+            config=detection,
+            deck_altitude_for=deck_altitude_for,
+        ),
+        touchdown_time,
+    )
+    return Redetection(event, samples, ships, start, end)

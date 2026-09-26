@@ -29,7 +29,10 @@ flowchart LR
 | [`acmi/stream.py`](../backend/app/acmi/stream.py) | Tacview Realtime Telemetry への TCP 接続。XtraLib ハンドシェイク（`handshake.py`）、自動再接続（指数バックオフ）。ハンドシェイク直後の圧縮ストリーム（gzip / zlib / raw deflate）を先頭バイトから自動判別して透過展開する（Issue #2）。展開失敗時はエラーログを出し、接続断として再接続する |
 | [`acmi/parser.py`](../backend/app/acmi/parser.py) | ACMI 2.2 Text の行解釈: Time ヘッダ管理、`-`/`+` オブジェクト更新行、イベント行 |
 | [`acmi/file_reader.py`](../backend/app/acmi/file_reader.py) | 保存済み .acmi / .acmi.zip ファイルの再生（テスト・再評価用） |
-| [`ingest.py`](../backend/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給 |
+| [`ingest.py`](../backend/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給。生の航跡（`tracks`）は着陸の前後だけを書く（下記「生の航跡の保持」） |
+| [`retention.py`](../backend/app/retention.py) | 生の航跡をどこまで残すかの定義（rebuild が読む範囲と、取り込み・一括縮小が残す範囲）。三者がずれないよう、ここだけで決める |
+| [`rescan.py`](../backend/app/rescan.py) | DB に残る生の航跡を今の検出器で洗い直し、記録されていない着陸を拾う（`POST /api/v1/flights/{id}/rescan`）。ライブ取り込みと同じ判定で接地を探し、rebuild と同じ切り方で検出し直す |
+| [`compact.py`](../backend/app/compact.py) | 保持の仕組みより前に記録された DB を、残す範囲だけの新しいファイルへ一度だけ縮める CLI（`python -m app.compact`、アプリ停止中に実行） |
 | [`importer.py`](../backend/app/importer.py) | ACMI ファイルインポート（`POST /api/import`）。アップロードされた記録をリアルタイムと同一の ingest→検出→採点パイプラインでバックグラウンド処理し、ジョブ状態を管理。既存着陸との重複は `ReferenceTime`＋タッチダウン時刻＋機体 ID で判定してスキップ |
 | [`api/imports.py`](../backend/app/api/imports.py) | インポート REST エンドポイント（認証対象）: `POST /api/import`、`GET /api/imports`、`GET /api/imports/{id}` |
 | [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
@@ -52,6 +55,8 @@ flowchart LR
 
 1. `AcmiStreamClient` が Tacview へ接続し、受信行を `TrackIngestor.handle_line` へ渡す
 2. パーサが時刻・オブジェクト状態を更新し、ingestor が機体別バッファへ追記する
+   （生の航跡は、機体と空母はメモリに直近ぶんを持つだけで、着陸を検出したときにその前後だけ、
+   機体とその着陸の艦について書く）
 3. 検出器が接地（WOW）を検出すると、進入区間を切り出す（陸上・空母とも既定 300 秒 / 8 nm。
    空母は Case I のブレイク＝キスオフまで入るように。空母のイベントは艦自身の航跡も持つ）
 4. パイプラインが空母/陸地を判定して対応グレーダで採点し、SQLite に保存
@@ -59,6 +64,41 @@ flowchart LR
    タッチダウン直後は outcome 未確定のため `outcome_status: "provisional"` として即時通知し、
    full-stop 滞地時間の経過などで確定した時点で同一レコードを更新する
    `{"type": "landing_update", ...}` を送る二段階方式（Issue #5）
+
+### 生の航跡の保持（`tracks`）
+
+検出はメモリ上のバッファだけで動き、`tracks` を読むのは保存済み着陸の作り直し
+（rebuild）だけで、読む範囲は接地の 360 秒前〜60 秒後に限られる。それでも以前は
+全オブジェクト（ミサイル・砲弾・チャフ・地上車両を含む）の全更新を書いていたため、
+本番 DB は `tracks` が 8,778 万行（2026-09-05 計測）、ファイルが約 11 GB になっていた
+（1 行あたり約 120 バイトはローカルの実記録での実測値で、この 2 つの数字と合う）。
+
+今は [`retention.py`](../backend/app/retention.py) の定義に従い、次だけを書く:
+
+- **機体**: 着陸ごとに「初接地の 420 秒前〜接地の 120 秒後」（rebuild が読む範囲の
+  両側に 60 秒の余裕）。直近 600 秒ぶんの生サンプルをメモリに持ち、窓の終わりを
+  過ぎた時点、または機体の消滅・セッションの切り替え・終了の時点で書く。窓が
+  開いたまま古いサンプルがメモリから落ちる場合（2 分未満の間隔で着艦が続き、
+  窓がつながり続ける甲板など）は、落ちる時点で書く
+- **空母**: その着陸が降りた艦だけ、同じ窓。検出器が艦を見るのは機体から 800 m
+  以内なので、ほかの艦は作り直しの結果を変えない（全艦を残すと、忙しいサーバでは
+  艦の航跡がほぼ丸ごと残ってしまう）
+- 書き込みに失敗したバッチでも、窓の行は捨てずに次のバッチで書き直す
+- **静的オブジェクト**: 受け取ったとおり全部（ほとんど更新されず、rebuild の
+  地面基準が読む）
+- **それ以外**（ミサイル・砲弾・チャフ・地上車両など）: 書かない
+
+ローカルの実記録（63 万行の ACMI）を流し直した実測では、取り込み時間が
+124 秒 → 72 秒、`tracks` が 56 万行 → 7 行（その記録には正しい着陸が無い）になった。
+検証用に全部を記録したいときだけ `DLT_KEEP_ALL_TRACKS=true` にする。
+
+この仕組みより前に記録された DB は、一度だけ次の順で縮める（窓の外は戻せない）:
+
+1. `scripts/rescan-landings.py` で全フライトを洗い直す（既定は下見、`--apply` で記録）。
+   2026-09-06 以前の空母着艦のように、当時の検出器が見落とした着陸はここでしか拾えない
+2. アプリを止めて `python -m app.compact /data/dlt.db` で `dlt.db.compact` を作って検証し、
+   `--swap` で差し替える。元のファイルは `dlt.db.pre-compact-<時刻>` として残るので、
+   確認後に手で消す
 
 ### BURBLE 検出について（Issue #4 / O-3 調査結果）
 
@@ -115,6 +155,8 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 | GET | `/api/landings/{id}` | 詳細（ファクター・進入サンプル含む） |
 | POST | `/api/landings/{id}/regrade` | 現在の閾値で再評価 |
 | POST | `/api/landings/{id}/rebuild` | 生の航跡から検出・採点をやり直す（409: `NO_RAW_TRACK` / `NOT_AN_AIRCRAFT` / `REBUILD_NO_MATCH` / `NO_TOUCHDOWN_TIME`、行は変えない） |
+| GET | `/api/v1/flights` | 記録済みの ACMI セッション（`flights`）の一覧と着陸数 |
+| POST | `/api/v1/flights/{id}/rescan` | そのフライトの生の航跡から、記録されていない着陸を探す。既定は下見、`?apply=true` で採点して記録（通知はしない）。記録済みの着陸には触らない |
 | POST | `/api/import` | ACMI ファイルインポート（multipart、バックグラウンドジョブ。認証対象） |
 | GET | `/api/imports` / `/api/imports/{id}` | インポートジョブの一覧・進捗（認証対象） |
 | WebSocket | `/api/ws/landings` | 着陸通知＋インポート完了通知（`ping` → `pong`） |

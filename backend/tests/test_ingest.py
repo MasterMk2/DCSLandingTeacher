@@ -20,7 +20,9 @@ async def feed_sample(ingestor: TrackIngestor) -> None:
 
 
 async def test_ingest_persists_flight_objects_tracks(session_factory) -> None:
-    ingestor = TrackIngestor(session_factory)
+    # Every sample, as it arrived: keep_all_tracks is the mode that writes
+    # them all (the default keeps landing windows; test_track_retention.py).
+    ingestor = TrackIngestor(session_factory, keep_all_tracks=True)
     await feed_sample(ingestor)
     await ingestor.close()
 
@@ -190,7 +192,7 @@ async def test_ground_speed_rejects_stale_baseline(session_factory) -> None:
 
 
 async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
-    ingestor = TrackIngestor(session_factory)
+    ingestor = TrackIngestor(session_factory, keep_all_tracks=True)
     await ingestor.handle_line("#not-a-number")  # must not raise
     await ingestor.handle_line("FileType=text/acmi/tacview")
     await ingestor.handle_line("101,T=41.6|41.5|100")
@@ -217,7 +219,8 @@ async def test_ingest_batches_commits(tmp_path) -> None:
     event.listen(Session, "after_commit", _count_commit)
 
     session_factory = create_session_factory(engine)
-    ingestor = TrackIngestor(session_factory, max_batch_size=2)
+    # Batching is observed through track rows, so every sample is written.
+    ingestor = TrackIngestor(session_factory, max_batch_size=2, keep_all_tracks=True)
     try:
         # Three object updates -> two commits expected at batch size 2,
         # plus one pending write flushed by close().
@@ -275,7 +278,9 @@ async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> No
     # age-flush the opening batch (flight + first sample) before the second
     # write arrives and turn this into a 1-track assertion (seen 3x on
     # ubuntu-latest).
-    ingestor = TrackIngestor(session_factory, max_batch_size=1000, max_batch_age_s=3600.0)
+    ingestor = TrackIngestor(
+        session_factory, max_batch_size=1000, max_batch_age_s=3600.0, keep_all_tracks=True
+    )
     try:
         await ingestor.handle_line("FileType=text/acmi/tacview")
         await ingestor.handle_line("#0.00")
@@ -340,7 +345,8 @@ async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> No
             inserts["n"] += 1
 
     event.listen(engine.sync_engine, "before_cursor_execute", _count)
-    ingestor = TrackIngestor(session_factory, max_batch_size=1000)
+    # 全サンプルを書くモードで、書き込みがバッチ末尾にまとまることを見る。
+    ingestor = TrackIngestor(session_factory, max_batch_size=1000, keep_all_tracks=True)
     try:
         # オブジェクトを登録しきる (ここでの明示 flush は許容)。
         await ingestor.handle_line("FileType=text/acmi/tacview")
@@ -350,7 +356,7 @@ async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> No
         inserts["n"] = 0
 
         # 以降は既知オブジェクトの更新のみ = 定常状態。
-        ingestor = TrackIngestor(session_factory, max_batch_size=1000)
+        ingestor = TrackIngestor(session_factory, max_batch_size=1000, keep_all_tracks=True)
         for i in range(1, 40):
             await ingestor.handle_line(f"#{i}.00")
             await ingestor.handle_line(f"101,T=41.6{i:02d}||{100 + i}")
@@ -391,7 +397,7 @@ async def test_a_failed_write_does_not_wedge_the_ingestor(tmp_path) -> None:
         cursor.close()
 
     session_factory = create_session_factory(engine)
-    ingestor = TrackIngestor(session_factory)
+    ingestor = TrackIngestor(session_factory, keep_all_tracks=True)
     lines = (FIXTURES / "sample.acmi").read_text(encoding="utf-8").splitlines()
 
     # Hold SQLite's single write lock from an unrelated connection: an

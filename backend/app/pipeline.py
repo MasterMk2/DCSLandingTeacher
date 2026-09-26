@@ -258,6 +258,24 @@ class LandingPipeline:
                 logger.exception("landing notification failed")
         return landing_id
 
+    async def record_rescanned_landing(
+        self, context: LandingContext, created_at: datetime | None
+    ) -> int | None:
+        """Grade + persist a landing the rescan found in old raw tracks.
+
+        The same grading and row as a live detection, minus the broadcast:
+        the landing happened long ago, and pushing it to the dashboard as a
+        ``landing`` message would put it at the top of every open list as
+        if it had just touched down. ``created_at`` is the rescan's estimate
+        of when it did, since that column is what the list shows and sorts
+        by.
+        """
+        event = context.event
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
+        return await self._persist(
+            context, analysis, result, score, "final", created_at=created_at
+        )
+
     async def finalize_landing(self, landing_id: int, context: LandingContext) -> None:
         """Confirm a provisional landing once its outcome is settled (Issue #5).
 
@@ -540,45 +558,28 @@ class LandingPipeline:
         """
         from app.api.errors import AppError
         from app.detection.classify import ObjectClass, classify_object_type
-        from app.detection.detector import analyze_track
-        from app.rebuild import (
-            REBUILD_MARGIN_S,
-            ground_altitude_at,
-            load_flight_carriers,
-            load_track_samples,
-            pick_event,
-        )
+        from app.rebuild import redetect
 
         if landing.touchdown_time is None:
             raise AppError(409, "NO_TOUCHDOWN_TIME", "landing has no touchdown time")
-        detection = self._config.to_detection_config()
         touchdown_time = landing.touchdown_time
-        start = touchdown_time - REBUILD_MARGIN_S - max(
-            detection.approach_window_s,
-            detection.land_approach_window_s,
-            detection.carrier_approach_window_s,
-        )
-        end = touchdown_time + REBUILD_MARGIN_S
         async with self._session_factory() as session:
             aircraft = await session.get(DcsObject, landing.object_id)
             flight = await session.get(Flight, landing.flight_id)
-            samples = await load_track_samples(session, landing.object_id, start, end)
-            # Every ship live ingest was tracking, not just the one the row
-            # names: which deck is under the aircraft is the detector's call.
-            ships = await load_flight_carriers(session, landing.flight_id, start, end)
-            carriers = {obj_id: state for obj_id, (_, state) in ships.items()}
-            ground_altitude = None
-            if samples:
-                at_touchdown = min(samples, key=lambda s: abs(s.time - touchdown_time))
-                ground_altitude = await ground_altitude_at(
-                    session, landing.flight_id, at_touchdown, carriers.values()
-                )
-        if aircraft is None or not samples:
+            found = await redetect(
+                session,
+                landing.object_id,
+                landing.flight_id,
+                touchdown_time,
+                self._config.to_detection_config(),
+                self.deck_altitude_for,
+            )
+        if aircraft is None or not found.samples:
             raise AppError(
                 409,
                 "NO_RAW_TRACK",
                 f"no raw track samples for landing #{landing.id} "
-                f"between t={start:.1f} and t={end:.1f}",
+                f"between t={found.start:.1f} and t={found.end:.1f}",
             )
         # Live ingest only runs detection for aircraft (a leading "Air+"): an
         # ejected pilot is Ground+Light+Human+Air+Parachutist, and rows like
@@ -595,16 +596,7 @@ class LandingPipeline:
                 f"landing #{landing.id} belongs to {aircraft.type!r}, "
                 "which live ingest does not treat as an aircraft",
             )
-        event = pick_event(
-            analyze_track(
-                samples,
-                ground_altitude,
-                carriers,
-                config=detection,
-                deck_altitude_for=self.deck_altitude_for,
-            ),
-            touchdown_time,
-        )
+        event = found.event
         if event is None:
             raise AppError(
                 409,
@@ -612,6 +604,7 @@ class LandingPipeline:
                 f"the raw track of landing #{landing.id} holds no landing at "
                 f"t={touchdown_time:.1f}; the row was left unchanged",
             )
+        ships = found.ships
         carrier_row_id = (
             ships[event.carrier_obj_id][0] if event.carrier_obj_id in ships else None
         )
@@ -659,6 +652,7 @@ class LandingPipeline:
         result: LandGradeResult | LsoGradeResult,
         score: float | None,
         outcome_status: str = "final",
+        created_at: datetime | None = None,
     ) -> int | None:
         event: LandingEvent = context.event
         touchdown = event.touchdown
@@ -715,6 +709,8 @@ class LandingPipeline:
                 grading_version=GRADING_VERSION,
                 graded_at=_utcnow(),
             )
+            if created_at is not None:
+                landing.created_at = created_at
             session.add(landing)
             await session.commit()
             await session.refresh(landing)

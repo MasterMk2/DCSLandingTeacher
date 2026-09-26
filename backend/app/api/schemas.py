@@ -149,6 +149,55 @@ class RebuildResponse(RegradeResponse):
     approach_start_time: float | None = None
 
 
+class FlightSummary(BaseModel):
+    """One recorded ACMI session (a ``flights`` row)."""
+
+    id: int
+    source_id: str | None = None
+    reference_time: str | None = None
+    recording_time: str | None = None
+    title: str | None = None
+    created_at: datetime | None = None
+    landings: int = 0
+
+
+class RescannedLanding(BaseModel):
+    """A landing the rescan detected in a flight's raw track."""
+
+    object_id: int
+    acmi_id: str
+    pilot: str | None = None
+    airframe: str | None = None
+    kind: str
+    outcome: str
+    first_contact_time: float
+    touchdown_time: float
+    carrier_name: str | None = None
+    latitude: float
+    longitude: float
+    #: Already stored as this row: left alone.
+    existing_landing_id: int | None = None
+    #: Stored by this (applied) rescan as this row.
+    created_landing_id: int | None = None
+
+
+class FlightRescanResponse(BaseModel):
+    """What ``POST /flights/{id}/rescan`` found, and (``apply``) stored."""
+
+    flight_id: int
+    source_id: str | None = None
+    applied: bool
+    aircraft_scanned: int
+    samples_scanned: int
+    contacts: int
+    landings: list[RescannedLanding]
+    #: Found and not stored before (created when ``applied``).
+    new_landings: int
+    #: Stored landings of the flight no contact matched; never modified.
+    stored_not_redetected: list[int]
+    elapsed_s: float
+
+
 class LandingDetail(LandingSummary):
     """Full evaluation + approach track for one landing."""
 

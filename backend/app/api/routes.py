@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.api.auth import (
     require_auth,
@@ -26,12 +27,15 @@ from app.api.schemas import (
     ApproachTrackOut,
     DeviationSampleOut,
     FactorOut,
+    FlightRescanResponse,
+    FlightSummary,
     LandingDetail,
     LandingListResponse,
     LandingSummary,
     RebuildResponse,
     RegradeRequest,
     RegradeResponse,
+    RescannedLanding,
     RunwayInventoryResponse,
     SourceInfo,
     SweepResponse,
@@ -211,6 +215,9 @@ async def list_landings(
     direction = column.asc() if order == "asc" else column.desc()
     query = (
         select(Landing, DcsObject, Flight)
+        # A row of the list never shows the approach, and each one is a few
+        # hundred KB of JSON: up to 200 of them were read and parsed per page.
+        .options(defer(Landing.approach_track))
         .join(DcsObject, Landing.object_id == DcsObject.id, isouter=True)
         .join(Flight, Landing.flight_id == Flight.id, isouter=True)
         # Nulls last whichever way round, so an ungraded row never takes the
@@ -402,6 +409,77 @@ async def rebuild_landing(
 
     payload = await pipeline.rebuild(landing)
     return RebuildResponse(**payload)
+
+
+@protected_router.get("/flights", response_model=list[FlightSummary])
+async def list_flights(session: AsyncSession = Depends(get_session)) -> list[FlightSummary]:
+    """Every recorded ACMI session, oldest first, with its landing count."""
+    counts = dict(
+        (
+            await session.execute(
+                select(Landing.flight_id, func.count()).group_by(Landing.flight_id)
+            )
+        ).all()
+    )
+    flights = (await session.execute(select(Flight).order_by(Flight.id))).scalars().all()
+    return [
+        FlightSummary(
+            id=flight.id,
+            source_id=flight.source_id,
+            reference_time=flight.reference_time,
+            recording_time=flight.recording_time,
+            title=flight.title,
+            created_at=flight.created_at,
+            landings=counts.get(flight.id, 0),
+        )
+        for flight in flights
+    ]
+
+
+@protected_router.post("/flights/{flight_id}/rescan", response_model=FlightRescanResponse)
+async def rescan_flight(
+    flight_id: int,
+    request: Request,
+    apply: bool = Query(default=False, description="Store the landings found"),
+) -> FlightRescanResponse:
+    """Search one flight's raw tracks for landings the database never stored.
+
+    Meant to run once over the whole history before it is compacted to
+    landing windows (``python -m app.compact``); see :mod:`app.rescan`.
+    Without ``apply`` nothing is written. Landings already stored are never
+    modified. Takes as long as reading every aircraft sample of the flight.
+    """
+    from app.rescan import FlightNotFound
+    from app.rescan import rescan_flight as run_rescan
+
+    pipeline = getattr(request.app.state, "pipeline", None)
+    if pipeline is None:
+        raise AppError(503, "PIPELINE_UNAVAILABLE", "grading pipeline unavailable")
+    # One rescan at a time: each decides "already stored?" from what it read
+    # when it started, so two applied at once to one flight (a client that
+    # timed out and retried) would both store the same landings.
+    lock = getattr(request.app.state, "rescan_lock", None)
+    if lock is None:
+        lock = request.app.state.rescan_lock = asyncio.Lock()
+    try:
+        async with lock:
+            report = await run_rescan(
+                request.app.state.session_factory, pipeline, flight_id, apply=apply
+            )
+    except FlightNotFound:
+        raise HTTPException(status_code=404, detail="flight not found") from None
+    return FlightRescanResponse(
+        flight_id=report.flight_id,
+        source_id=report.source_id,
+        applied=report.applied,
+        aircraft_scanned=report.aircraft_scanned,
+        samples_scanned=report.samples_scanned,
+        contacts=report.contacts,
+        landings=[RescannedLanding(**vars(found)) for found in report.landings],
+        new_landings=len(report.new_landings),
+        stored_not_redetected=report.stored_not_redetected,
+        elapsed_s=report.elapsed_s,
+    )
 
 
 @protected_router.post("/config/reload")

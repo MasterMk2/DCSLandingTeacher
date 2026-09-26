@@ -208,6 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # 甲板高が無いと空母の接地は検出できない (Tacview の AGL は
                 # 海面基準)。carriers.yaml が読めていれば解決器が値を返す。
                 deck_altitude_for=pipeline.deck_altitude_for,
+                keep_all_tracks=settings.keep_all_tracks,
             )
             await multi_source_manager.start()
             # Legacy compatibility: expose first source's client as acmi_client
@@ -226,6 +227,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 grading_config.detection.get("sample_buffer_s", 600.0)
             ),
             detection_config=grading_config.to_detection_config(),
+            keep_all_tracks=settings.keep_all_tracks,
         )
 
         app.state.settings = settings
