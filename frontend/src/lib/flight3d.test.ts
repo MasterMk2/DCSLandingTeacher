@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  approachLengthM,
   attitudeBasis,
   buildFlightPath,
+  carrierModel,
+  lengthAtDistance,
+  placeOnCarrier,
+  REAL_MODEL_LENGTH_M,
+  type FlightPoint,
   ghostTimes,
   gridStepM,
   medianSpeed,
@@ -243,38 +249,92 @@ describe("pointAt", () => {
   });
 });
 
+/** A bare scene point for the geometry that only reads positions. */
+function scenePoint(x: number, z: number): FlightPoint {
+  return {
+    time: 0,
+    x,
+    y: 100,
+    z,
+    heading: 0,
+    pitch: 0,
+    roll: 0,
+    estimated: { heading: false, pitch: false, roll: false },
+    leg: "final",
+    sample: { time: 0, distance_to_go: 0 },
+  };
+}
+
+const CARRIER_GEOMETRY = {
+  frame: "moving_deck",
+  ramp_along_m: -160,
+  ramp_lateral_m: -10,
+  landing_course_offset_deg: -9,
+  landing_area_length_m: 220,
+  touchdown_target_m: 60,
+  reference_height_m: 4,
+  deck_altitude_m: 20.15,
+};
+
 describe("venueGeometry", () => {
+  const runwayTrack: ApproachTrack = {
+    course_deg: 90,
+    glideslope_deg: 3,
+    geometry: { kind: "runway", length_m: 2500, width_m: 50, aiming_point_m: 300 },
+    samples: [],
+  };
+
   it("draws the runway from its threshold, short of the aiming point", () => {
-    const v = venueGeometry(
-      { course_deg: 90, glideslope_deg: 3, geometry: { kind: "runway", length_m: 2500, width_m: 50, aiming_point_m: 300 }, samples: [] },
-      false,
-      2000,
-    );
+    const v = venueGeometry(runwayTrack, false, [scenePoint(-2000, 40)]);
     expect(v.runway).toEqual({ from: [-300, 0, 0], to: [2200, 0, 0], width: 50 });
     // The course line runs from far down the final to the runway's far end.
     expect(v.course).toEqual({ from: [-20000, 0, 0], to: [2200, 0, 0] });
+    // The glide path reaches back to the farthest point of the track.
     expect(v.glideslope!.to[0]).toBe(-2000);
     expect(v.glideslope!.to[1]).toBeCloseTo(2000 * Math.tan(3 * DEG), 9);
+    expect(v.carrier).toBeNull();
+    expect(v.groundY).toBe(0);
+  });
+
+  it("sizes the ILS cross from the AIM: 700 ft wide at the threshold, 1.4 deg tall", () => {
+    const beams = venueGeometry(runwayTrack, false, [scenePoint(-5000, 0)]).beams!;
+    // The localizer antenna is at the runway's far end, 2200 m past the
+    // glide path's end; its sector is 350 ft each side at the threshold,
+    // 2500 m from it. Linear in distance, so every row obeys the same ratio.
+    const perMetre = (700 * 0.3048) / 2 / 2500;
+    beams.glideslope.forEach(([left, centre, right], i) => {
+      const d = -centre[0];
+      expect(centre[1]).toBeCloseTo(d * Math.tan(3 * DEG), 9);
+      expect(left[2]).toBeCloseTo(-(d + 2200) * perMetre, 6);
+      expect(right[2]).toBeCloseTo((d + 2200) * perMetre, 6);
+      const [bottom, , top] = beams.localizer[i];
+      expect(top[1] - centre[1]).toBeCloseTo(d * Math.tan(0.7 * DEG), 6);
+      expect(centre[1] - bottom[1]).toBeCloseTo(d * Math.tan(0.7 * DEG), 6);
+    });
+    // Fades out at the far end, which is where the track starts.
+    expect(beams.glideslope[beams.glideslope.length - 1][1][0]).toBeCloseTo(-5000, 6);
+    expect(beams.strength[beams.strength.length - 1]).toBe(0);
+
+    // Cross-shaped gates every half mile, sized like the planes, square to
+    // the glide path.
+    expect(beams.gates.map((g) => Math.round(-g.centre[0]))).toEqual([926, 1852, 2778, 3704, 4630]);
+    const glide: Vec3 = [-Math.cos(3 * DEG), Math.sin(3 * DEG), 0];
+    for (const gate of beams.gates) {
+      const d = -gate.centre[0];
+      expect(gate.centre[1]).toBeCloseTo(d * Math.tan(3 * DEG), 9);
+      expect(gate.halfWidth).toBeCloseTo((d + 2200) * perMetre, 6);
+      expect(gate.halfHeight).toBeCloseTo(d * Math.tan(0.7 * DEG), 6);
+      expect(dot(gate.up, glide)).toBeCloseTo(0, 12);
+      expect(dot(gate.right, glide)).toBeCloseTo(0, 12);
+      expect(gate.up[1]).toBeGreaterThan(0.99);
+    }
   });
 
   it("runs a carrier's glide path down the angled deck in the ship frame", () => {
     const v = venueGeometry(
-      {
-        kind: "carrier",
-        glideslope_deg: 3.5,
-        geometry: {
-          frame: "moving_deck",
-          ramp_along_m: -160,
-          ramp_lateral_m: -10,
-          landing_course_offset_deg: -9,
-          landing_area_length_m: 220,
-          touchdown_target_m: 60,
-          reference_height_m: 4,
-        },
-        samples: [],
-      },
+      { kind: "carrier", glideslope_deg: 3.5, geometry: CARRIER_GEOMETRY, samples: [] },
       true,
-      1000,
+      [],
     );
     const { from, to } = v.glideslope!;
     // The glide path ends on the landing-area centreline, `target` up it.
@@ -285,8 +345,8 @@ describe("venueGeometry", () => {
     // starboard quarter for a deck angled to port.
     const bearing = Math.atan2(from[2] - to[2], from[0] - to[0]) / DEG;
     expect(bearing).toBeCloseTo(-9, 6);
-    expect(Math.hypot(to[0] - from[0], to[2] - from[2])).toBeCloseTo(1000, 6);
-    expect(v.hull!.from[0]).toBe(-160);
+    // No track to reach back to: the 1 nm minimum.
+    expect(Math.hypot(to[0] - from[0], to[2] - from[2])).toBeCloseTo(1852, 6);
     expect(v.runway).toBeNull();
     // The course line is the angled deck's, astern to the deck's forward end.
     const course = Math.atan2(
@@ -295,6 +355,59 @@ describe("venueGeometry", () => {
     );
     expect(course / DEG).toBeCloseTo(-9, 6);
     expect(v.course.to).toEqual([v.landingArea!.to[0], 0, v.landingArea!.to[2]]);
+    // The ship sits at the frame's origin, the sea a deck-height below.
+    expect(v.carrier!.position).toEqual([0, 0, 0]);
+    expect(v.carrier!.rotationY).toBe(0);
+    expect(v.groundY).toBe(-20.15);
+    expect(v.beams).not.toBeNull();
+  });
+});
+
+describe("carrierModel", () => {
+  it("draws the landing area where the grader's geometry puts it", () => {
+    const model = carrierModel(CARRIER_GEOMETRY, true)!;
+    expect(model.landingArea.from).toEqual([-160, -10]);
+    expect(model.landingArea.to[0]).toBeCloseTo(-160 + 220 * Math.cos(-9 * DEG), 9);
+    expect(model.landingArea.to[1]).toBeCloseTo(-10 + 220 * Math.sin(-9 * DEG), 9);
+    // The stern is at the ramp and the bow ahead of the ship's origin.
+    const xs = model.waterline.map(([x]) => x);
+    expect(Math.min(...xs)).toBeLessThan(-160 + 1);
+    expect(Math.max(...xs)).toBeGreaterThan(160);
+    expect(placeOnCarrier(model, 12, -7)).toEqual([12, 0, -7]);
+  });
+
+  it("places the ship in the landing-area frame of older carrier tracks", () => {
+    // That frame's origin is the glide path's end and its x axis runs up
+    // the angled deck: the inverse of the backend's ShipFrame.point.
+    const model = carrierModel({ ...CARRIER_GEOMETRY, frame: undefined }, false)!;
+    const c = Math.cos(-9 * DEG);
+    const s = Math.sin(-9 * DEG);
+    const end = placeOnCarrier(model, -160 + 60 * c, -10 + 60 * s);
+    end.forEach((v) => expect(v).toBeCloseTo(0, 9));
+    const ramp = placeOnCarrier(model, -160, -10);
+    expect(ramp[0]).toBeCloseTo(-60, 9);
+    expect(ramp[2]).toBeCloseTo(0, 9);
+    const forward = placeOnCarrier(model, model.landingArea.to[0], model.landingArea.to[1]);
+    expect(forward[0]).toBeCloseTo(160, 9);
+    expect(forward[2]).toBeCloseTo(0, 9);
+    // The ship's own heading is 9 deg to starboard of the landing course.
+    const origin = placeOnCarrier(model, 0, 0);
+    const bow = placeOnCarrier(model, 100, 0);
+    expect(Math.atan2(bow[2] - origin[2], bow[0] - origin[0]) / DEG).toBeCloseTo(9, 9);
+  });
+
+  it("needs the ramp and the deck angle", () => {
+    expect(carrierModel({ ramp_along_m: -160 }, true)).toBeNull();
+  });
+});
+
+describe("approachLengthM", () => {
+  it("reaches back to the farthest point, within 1-10 nm", () => {
+    expect(approachLengthM([], [0, 0, 0], [-1, 0])).toBe(1852);
+    expect(approachLengthM([scenePoint(-6000, 900)], [0, 0, 0], [-1, 0])).toBe(6000);
+    expect(approachLengthM([scenePoint(-40_000, 0)], [0, 0, 0], [-1, 0])).toBe(18520);
+    // Points past the end, up the runway, do not count.
+    expect(approachLengthM([scenePoint(3000, 0)], [0, 0, 0], [-1, 0])).toBe(1852);
   });
 });
 
@@ -317,6 +430,22 @@ describe("modelLength", () => {
   it("measures the speed along the path", () => {
     const path = buildFlightPath(straightTrack(() => ({}), { speed: 70 }), {})!;
     expect(medianSpeed(path.points)).toBeCloseTo(70, 6);
+  });
+});
+
+describe("lengthAtDistance", () => {
+  it("keeps the models a constant share of the view while zoomed out", () => {
+    // 5% of the view height at 40 deg of field of view.
+    const share = 2 * Math.tan(20 * DEG) * 0.05;
+    expect(lengthAtDistance(2000, 40, 500)).toBeCloseTo(2000 * share, 9);
+    expect(lengthAtDistance(4000, 40, 500)).toBeCloseTo(4000 * share, 9);
+  });
+
+  it("is never bigger than the no-overlap cap nor smaller than a real fighter", () => {
+    expect(lengthAtDistance(50_000, 40, 136)).toBe(136);
+    // Zoomed onto a deck: real size, so the ship is not buried.
+    expect(lengthAtDistance(200, 40, 136)).toBe(REAL_MODEL_LENGTH_M);
+    expect(lengthAtDistance(200, 40, 136, 1.6)).toBeCloseTo(REAL_MODEL_LENGTH_M * 1.6, 9);
   });
 });
 

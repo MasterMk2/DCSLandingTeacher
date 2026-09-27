@@ -19,11 +19,15 @@ import {
   buildFlightPath,
   ghostTimes,
   gridStepM,
+  lengthAtDistance,
   medianSpeed,
   modelLength,
   pointAt,
+  REAL_MODEL_LENGTH_M,
   sceneBounds,
   venueGeometry,
+  type ApproachBeams,
+  type CarrierModel,
   type FlightPath,
   type FlightPoint,
   type SceneBounds,
@@ -83,8 +87,13 @@ interface Palette {
   ghost: THREE.Color;
   cursor: THREE.Color;
   runway: THREE.Color;
+  sea: THREE.Color;
   hull: THREE.Color;
+  deck: THREE.Color;
+  island: THREE.Color;
+  marking: THREE.Color;
   glideslope: THREE.Color;
+  beam: THREE.Color;
   touchdown: THREE.Color;
 }
 
@@ -111,8 +120,13 @@ function readPalette(): Palette {
     ghost: new THREE.Color("#d4d1c9"),
     cursor: new THREE.Color("#ffb347"),
     runway: css("--warn", "#c39a4e"),
-    hull: new THREE.Color("#8a8e95"),
+    sea: new THREE.Color("#0f171d"),
+    hull: new THREE.Color("#8d939c"),
+    deck: new THREE.Color("#50545b"),
+    island: new THREE.Color("#b3b8bf"),
+    marking: new THREE.Color("#e8e6e1"),
     glideslope: css("--info", "#7f9bb5"),
+    beam: new THREE.Color("#9fd0f0"),
     touchdown: css("--danger", "#cd6a61"),
   };
 }
@@ -198,8 +212,11 @@ function poseMatrix(p: FlightPoint, exaggeration: number, length: number, out: T
 interface ContentOptions {
   ghostIntervalS: number;
   exaggeration: number;
+  /** Upper bound on the model length (m); see `lengthAtDistance`. */
   modelLength: number;
+  modelScale: number;
   touchdownTime: number | null;
+  showBeams: boolean;
 }
 
 class FlightScene {
@@ -217,6 +234,18 @@ class FlightScene {
   private framed = false;
   private bounds: SceneBounds | null = null;
   private exaggeration = 1;
+  private groundY = 0;
+  private approachBack: [number, number] = [-1, 0];
+  private approachEnd: Vec3 = [0, 0, 0];
+  private approachSlopeDeg: number | null = null;
+  private finalDistance = 1500;
+  private ghostMesh: THREE.InstancedMesh | null = null;
+  private ghostPoints: FlightPoint[] = [];
+  private touchdownRing: THREE.Mesh | null = null;
+  private cursorPoint: FlightPoint | null = null;
+  private maxModelLength = REAL_MODEL_LENGTH_M;
+  private modelScale = 1;
+  private appliedLength = -1;
   private dirty = true;
   private animationFrame = 0;
   private width = 1;
@@ -287,6 +316,7 @@ class FlightScene {
       const moved = this.controls.update();
       if (moved || this.dirty) {
         this.dirty = false;
+        this.applyModelLength();
         this.renderer.render(this.scene, this.camera);
       }
     };
@@ -331,6 +361,175 @@ class FlightScene {
     return mesh;
   }
 
+  /** The carrier, built in its own frame and placed by the model's transform. */
+  private carrier(model: CarrierModel): THREE.Group {
+    const palette = this.palette;
+    const ship = new THREE.Group();
+    ship.position.set(...model.position);
+    ship.rotation.y = model.rotationY;
+    const hull = this.track(new THREE.MeshStandardMaterial({ color: palette.hull, roughness: 0.85 }));
+    const deck = this.track(new THREE.MeshStandardMaterial({ color: palette.deck, roughness: 0.95 }));
+    // An outline in the ship frame ([x, z]), extruded between two heights:
+    // top and bottom faces take the deck colour, the sides the hull's.
+    const slab = (outline: [number, number][], bottom: number, top: number) => {
+      const shape = new THREE.Shape(outline.map(([x, z]) => new THREE.Vector2(x, -z)));
+      const geometry = this.track(
+        new THREE.ExtrudeGeometry(shape, { depth: top - bottom, bevelEnabled: false }),
+      );
+      geometry.rotateX(-Math.PI / 2);
+      geometry.translate(0, bottom, 0);
+      return new THREE.Mesh(geometry, [deck, hull]);
+    };
+    ship.add(slab(model.waterline, -model.deckHeight, -2.5));
+    ship.add(slab(model.flightDeck, -2.5, 0));
+    ship.add(slab(model.angledDeck, -5, 0));
+
+    const { x, z, length, width, height } = model.island;
+    const island = new THREE.Mesh(
+      this.track(new THREE.BoxGeometry(length, height, width)),
+      this.track(new THREE.MeshStandardMaterial({ color: palette.island, roughness: 0.8 })),
+    );
+    island.position.set(x, height / 2, z);
+    ship.add(island);
+
+    // Landing-area edges and a dashed centreline, just above the deck.
+    const area = model.landingArea;
+    const dx = area.to[0] - area.from[0];
+    const dz = area.to[1] - area.from[1];
+    const norm = Math.hypot(dx, dz) || 1;
+    const [px, pz] = [(-dz / norm) * area.halfWidth, (dx / norm) * area.halfWidth];
+    const edges = new THREE.LineSegments(
+      this.track(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(area.from[0] + px, 0.3, area.from[1] + pz),
+          new THREE.Vector3(area.to[0] + px, 0.3, area.to[1] + pz),
+          new THREE.Vector3(area.from[0] - px, 0.3, area.from[1] - pz),
+          new THREE.Vector3(area.to[0] - px, 0.3, area.to[1] - pz),
+        ]),
+      ),
+      this.track(new THREE.LineBasicMaterial({ color: palette.runway })),
+    );
+    ship.add(edges);
+    const centreline = new THREE.Line(
+      this.track(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(area.from[0], 0.3, area.from[1]),
+          new THREE.Vector3(area.to[0], 0.3, area.to[1]),
+        ]),
+      ),
+      this.track(new THREE.LineDashedMaterial({ color: palette.marking, dashSize: 8, gapSize: 6 })),
+    );
+    centreline.computeLineDistances();
+    ship.add(centreline);
+    return ship;
+  }
+
+  /** The localizer / glide-path cross: two translucent planes, brightest on
+   *  the glide path and fading to nothing at their edges and far end. */
+  private beams(beams: ApproachBeams, ex: number): THREE.Group {
+    const color = this.palette.beam;
+    const peak = 0.45;
+    // The edges keep a trace of the centre's brightness, so the extent of
+    // each arm (where the needle pegs) stays visible.
+    const edge = 0.25;
+    const group = new THREE.Group();
+    for (const rows of [beams.glideslope, beams.localizer]) {
+      const positions: number[] = [];
+      const colors: number[] = [];
+      const push = (p: Vec3, alpha: number) => {
+        positions.push(p[0], p[1] * ex, p[2]);
+        colors.push(color.r, color.g, color.b, alpha);
+      };
+      for (let i = 0; i + 1 < rows.length; i++) {
+        const a0 = beams.strength[i] * peak;
+        const a1 = beams.strength[i + 1] * peak;
+        const [l0, c0, r0] = rows[i];
+        const [l1, c1, r1] = rows[i + 1];
+        // Two quads per band: edge -> centre on each side of the glide path.
+        for (const [p, q] of [
+          [l0, l1],
+          [r0, r1],
+        ] as [Vec3, Vec3][]) {
+          push(p, a0 * edge);
+          push(c0, a0);
+          push(c1, a1);
+          push(p, a0 * edge);
+          push(c1, a1);
+          push(q, a1 * edge);
+        }
+      }
+      const geometry = this.track(new THREE.BufferGeometry());
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      // Four components: three.js turns on per-vertex alpha for these.
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 4));
+      const material = this.track(
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      group.add(new THREE.Mesh(geometry, material));
+    }
+
+    // The cross-shaped gates: a horizontal and a vertical bar each.
+    const positions: number[] = [];
+    const colors: number[] = [];
+    const quad = (
+      centre: Vec3,
+      along: Vec3,
+      across: Vec3,
+      halfAlong: number,
+      halfAcross: number,
+      alpha: number,
+    ) => {
+      const corner = (a: number, b: number) => {
+        positions.push(
+          centre[0] + along[0] * a + across[0] * b,
+          (centre[1] + along[1] * a + across[1] * b) * ex,
+          centre[2] + along[2] * a + across[2] * b,
+        );
+        colors.push(color.r, color.g, color.b, alpha);
+      };
+      corner(-halfAlong, -halfAcross);
+      corner(halfAlong, -halfAcross);
+      corner(halfAlong, halfAcross);
+      corner(-halfAlong, -halfAcross);
+      corner(halfAlong, halfAcross);
+      corner(-halfAlong, halfAcross);
+    };
+    for (const gate of beams.gates) {
+      // Bar thickness: a slice of the glide path's half-height, never so
+      // thin it vanishes.
+      const thickness = Math.max(gate.halfHeight * 0.12, 1.5);
+      const alpha = 0.55 * gate.strength;
+      quad(gate.centre, gate.right, gate.up, gate.halfWidth, thickness, alpha);
+      quad(gate.centre, gate.up, gate.right, gate.halfHeight, thickness, alpha);
+    }
+    if (positions.length > 0) {
+      const geometry = this.track(new THREE.BufferGeometry());
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 4));
+      group.add(
+        new THREE.Mesh(
+          geometry,
+          this.track(
+            new THREE.MeshBasicMaterial({
+              vertexColors: true,
+              transparent: true,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+              blending: THREE.AdditiveBlending,
+            }),
+          ),
+        ),
+      );
+    }
+    return group;
+  }
+
   setContent(path: FlightPath, venue: VenueGeometry, opts: ContentOptions) {
     this.scene.remove(this.content);
     for (const d of this.contentDisposables) d.dispose();
@@ -349,7 +548,32 @@ class FlightScene {
     const palette = this.palette;
 
     // Ground: a plane a shade lighter than the sky and a grid in round
-    // nautical miles, centred on the path.
+    // nautical miles, centred on the path. For a carrier it is the sea, a
+    // deck-height below the flight deck the heights are measured from.
+    const groundY = venue.groundY;
+    this.groundY = groundY;
+    this.approachBack = venue.approachBack;
+    this.approachEnd = venue.approachEnd;
+    // The pilot's-eye preset sits just beyond the far end of the glide path
+    // (which reaches back to the start of the track), so the whole beam and
+    // the whole approach are ahead of it rather than around it.
+    const [bx, bz] = venue.approachBack;
+    const [x0, , z0] = venue.approachEnd;
+    const glideLength = venue.glideslope
+      ? Math.hypot(venue.glideslope.to[0] - x0, venue.glideslope.to[2] - z0)
+      : Math.max(0, ...points.map((p) => (p.x - x0) * bx + (p.z - z0) * bz));
+    this.finalDistance = Math.max(glideLength * 1.15, 1500);
+    this.approachSlopeDeg = venue.glideslope
+      ? (Math.atan2(
+          venue.glideslope.to[1] - venue.glideslope.from[1],
+          Math.hypot(
+            venue.glideslope.to[0] - venue.glideslope.from[0],
+            venue.glideslope.to[2] - venue.glideslope.from[2],
+          ),
+        ) *
+          180) /
+        Math.PI
+      : null;
     const step = gridStepM(bounds.span);
     const cells = Math.ceil((bounds.span * 1.5) / step / 2) * 2;
     const size = cells * step;
@@ -357,16 +581,18 @@ class FlightScene {
     const cz = Math.round(bounds.center[2] / step) * step;
     const ground = new THREE.Mesh(
       this.track(new THREE.PlaneGeometry(size * 4, size * 4).rotateX(-Math.PI / 2)),
-      this.track(new THREE.MeshBasicMaterial({ color: palette.ground })),
+      this.track(
+        new THREE.MeshBasicMaterial({ color: venue.carrier ? palette.sea : palette.ground }),
+      ),
     );
-    ground.position.set(cx, -1, cz);
+    ground.position.set(cx, groundY - 1, cz);
     group.add(ground);
     // Both grid colours alike: GridHelper's own centre lines fall wherever
     // the grid happens to be centred and read as a course line.
     const grid = new THREE.GridHelper(size, cells, palette.grid, palette.grid);
     this.track(grid.geometry);
     this.track(grid.material as THREE.Material);
-    grid.position.set(cx, 0, cz);
+    grid.position.set(cx, groundY, cz);
     group.add(grid);
 
     // Extended landing course on the ground, dashed, like the plan view's
@@ -376,8 +602,8 @@ class FlightScene {
       const centerline = new THREE.Line(
         this.track(
           new THREE.BufferGeometry().setFromPoints([
-            new THREE.Vector3(from[0], 0.8, from[2]),
-            new THREE.Vector3(to[0], 0.8, to[2]),
+            new THREE.Vector3(from[0], groundY + 0.8, from[2]),
+            new THREE.Vector3(to[0], groundY + 0.8, to[2]),
           ]),
         ),
         this.track(
@@ -394,21 +620,16 @@ class FlightScene {
       group.add(centerline);
     }
 
-    // Runway, or the ship and its landing area.
+    // Runway, or the ship with its angled deck.
     if (venue.runway) group.add(this.strip(venue.runway, 0.3, palette.runway, 0.85));
-    if (venue.hull) {
-      const hull = venue.hull;
-      const length = Math.abs(hull.to[0] - hull.from[0]);
-      const box = new THREE.Mesh(
-        this.track(new THREE.BoxGeometry(length, 14, hull.width)),
-        this.track(new THREE.MeshStandardMaterial({ color: palette.hull, roughness: 0.9 })),
-      );
-      box.position.set((hull.from[0] + hull.to[0]) / 2, -7, 0);
-      group.add(box);
-    }
-    if (venue.landingArea) {
+    if (venue.carrier) {
+      group.add(this.carrier(venue.carrier));
+    } else if (venue.landingArea) {
       group.add(this.strip(venue.landingArea, 0.4, palette.runway, 0.9));
     }
+
+    // The localizer / glide-path cross, translucent, under everything else.
+    if (opts.showBeams && venue.beams) group.add(this.beams(venue.beams, ex));
 
     // Ideal glide path, dashed.
     if (venue.glideslope) {
@@ -456,7 +677,7 @@ class FlightScene {
     const shadow = new THREE.Line(
       this.track(
         new THREE.BufferGeometry().setFromPoints(
-          points.map((p) => new THREE.Vector3(p.x, 0.5, p.z)),
+          points.map((p) => new THREE.Vector3(p.x, groundY + 0.5, p.z)),
         ),
       ),
       this.track(
@@ -471,6 +692,8 @@ class FlightScene {
     const ghosts = ghostTimes(first, last, opts.touchdownTime, opts.ghostIntervalS)
       .map((t) => pointAt(points, t, Math.min(1, opts.ghostIntervalS / 2)))
       .filter((p): p is FlightPoint => p !== null);
+    this.ghostPoints = ghosts;
+    this.ghostMesh = null;
     if (ghosts.length > 0) {
       const mesh = new THREE.InstancedMesh(
         this.aircraft,
@@ -485,16 +708,14 @@ class FlightScene {
         ),
         ghosts.length,
       );
-      const matrix = new THREE.Matrix4();
-      ghosts.forEach((p, i) => mesh.setMatrixAt(i, poseMatrix(p, ex, opts.modelLength, matrix)));
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
+      // Posed (and sized) in `applyModelLength`, on every camera move.
+      this.ghostMesh = mesh;
       this.contentDisposables.push({ dispose: () => mesh.dispose() });
       group.add(mesh);
 
       const drops: THREE.Vector3[] = [];
       for (const p of ghosts) {
-        drops.push(new THREE.Vector3(p.x, 0, p.z), new THREE.Vector3(p.x, p.y * ex, p.z));
+        drops.push(new THREE.Vector3(p.x, groundY, p.z), new THREE.Vector3(p.x, p.y * ex, p.z));
       }
       group.add(
         new THREE.LineSegments(
@@ -507,16 +728,21 @@ class FlightScene {
     }
 
     // Touchdown: a ring on the surface under the touchdown sample.
+    // Unit radius, scaled with the models in `applyModelLength`.
     const td = opts.touchdownTime !== null ? pointAt(points, opts.touchdownTime, 1) : null;
+    this.touchdownRing = null;
     if (td) {
-      const r = opts.modelLength * 0.45;
       const ring = new THREE.Mesh(
-        this.track(new THREE.RingGeometry(r, r * 1.35, 40).rotateX(-Math.PI / 2)),
+        this.track(new THREE.RingGeometry(1, 1.35, 40).rotateX(-Math.PI / 2)),
         this.track(new THREE.MeshBasicMaterial({ color: palette.touchdown, side: THREE.DoubleSide })),
       );
       ring.position.set(td.x, 0.6, td.z);
+      this.touchdownRing = ring;
       group.add(ring);
     }
+    this.maxModelLength = opts.modelLength;
+    this.modelScale = opts.modelScale;
+    this.appliedLength = -1;
 
     this.camera.near = Math.max(0.5, bounds.span / 20_000);
     this.camera.far = bounds.span * 40;
@@ -535,15 +761,45 @@ class FlightScene {
     this.dirty = true;
   }
 
-  setCursor(point: FlightPoint | null, exaggeration: number, length: number) {
+  /**
+   * Size every model for the current camera distance (`lengthAtDistance`):
+   * readable when zoomed out, real size up against the deck. Only re-poses
+   * when the length has actually changed by more than a couple of percent.
+   */
+  private applyModelLength(force = false) {
+    const distance = this.camera.position.distanceTo(this.controls.target);
+    const length = lengthAtDistance(
+      distance,
+      this.camera.fov,
+      this.maxModelLength,
+      this.modelScale,
+    );
+    if (!force && Math.abs(length - this.appliedLength) <= this.appliedLength * 0.02) return;
+    this.appliedLength = length;
+    const ex = this.exaggeration;
+    const mesh = this.ghostMesh;
+    if (mesh) {
+      const matrix = new THREE.Matrix4();
+      this.ghostPoints.forEach((p, i) => mesh.setMatrixAt(i, poseMatrix(p, ex, length, matrix)));
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+    }
+    this.touchdownRing?.scale.setScalar(length * 0.45);
+    if (this.cursorPoint) {
+      poseMatrix(this.cursorPoint, ex, length * 1.15, this.cursorMesh.matrix);
+      this.cursorMesh.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  setCursor(point: FlightPoint | null, exaggeration: number) {
+    this.cursorPoint = point;
     if (!point) {
       this.cursorMesh.visible = false;
       this.cursorDrop.visible = false;
     } else {
-      poseMatrix(point, exaggeration, length * 1.15, this.cursorMesh.matrix);
-      this.cursorMesh.matrixWorldNeedsUpdate = true;
+      this.applyModelLength(true);
       const drop = this.cursorDrop.geometry.getAttribute("position") as THREE.BufferAttribute;
-      drop.setXYZ(0, point.x, 0, point.z);
+      drop.setXYZ(0, point.x, this.groundY, point.z);
       drop.setXYZ(1, point.x, point.y * exaggeration, point.z);
       drop.needsUpdate = true;
       this.cursorDrop.geometry.computeBoundingSphere();
@@ -553,21 +809,49 @@ class FlightScene {
     this.dirty = true;
   }
 
-  /** Frame the whole path from one of the presets. */
+  /** Frame the whole path from one of the presets. "From the approach" is
+   *  a pilot's view: from out on the extended final, looking at the glide
+   *  path's end -- up the angled deck on a carrier, 9 deg off the ship's
+   *  axis the other presets use -- so the beams are seen end-on. */
   view(preset: ViewPreset) {
-    this.frame(vec(VIEW_DIRECTIONS[preset]));
+    if (preset === "behind") {
+      // A pilot's seat: out on the extended final, where the final leg
+      // starts, just above the (possibly stretched) glide path, looking at
+      // its end. Both beam planes are then seen nearly edge-on and the
+      // gates stack into the cross a pilot flies into.
+      const [bx, bz] = this.approachBack;
+      const [x, y, z] = this.approachEnd;
+      const rise =
+        this.approachSlopeDeg !== null
+          ? Math.tan((this.approachSlopeDeg * Math.PI) / 180) * this.exaggeration +
+            Math.tan((0.3 * Math.PI) / 180)
+          : VIEW_DIRECTIONS.behind[1];
+      const target = new THREE.Vector3(x, y * this.exaggeration, z);
+      const distance = this.finalDistance;
+      this.controls.target.copy(target);
+      this.camera.position.set(
+        target.x + bx * distance,
+        target.y + rise * distance,
+        target.z + bz * distance,
+      );
+      this.camera.lookAt(target);
+      this.controls.update();
+      this.dirty = true;
+    } else {
+      this.frame(vec(VIEW_DIRECTIONS[preset]));
+    }
   }
 
-  /** Look at the whole path from `direction` (target -> camera): the camera
-   *  backs off just far enough for every corner of the bounds to be in the
-   *  frustum. */
-  private frame(direction: THREE.Vector3) {
+  /** Look from `direction` (target -> camera) at `center` (default: the
+   *  middle of the path): the camera backs off just far enough for every
+   *  corner of the bounds to be in the frustum. */
+  private frame(direction: THREE.Vector3, center?: THREE.Vector3) {
     const bounds = this.bounds;
     if (!bounds || direction.lengthSq() === 0) return;
     const ex = this.exaggeration;
     const min = new THREE.Vector3(bounds.min[0], bounds.min[1] * ex, bounds.min[2]);
     const max = new THREE.Vector3(bounds.max[0], bounds.max[1] * ex, bounds.max[2]);
-    const center = min.clone().add(max).multiplyScalar(0.5);
+    center = center ?? min.clone().add(max).multiplyScalar(0.5);
     const back = direction.clone().normalize();
     const right = new THREE.Vector3().crossVectors(back.clone().negate(), THREE.Object3D.DEFAULT_UP);
     // Straight down (orbited onto the pole) has no horizon to take "right"
@@ -653,6 +937,7 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
   const [ghostIntervalS, setGhostIntervalS] = useState(2);
   const [exaggeration, setExaggeration] = useState(1);
   const [modelScale, setModelScale] = useState(1);
+  const [showBeams, setShowBeams] = useState(true);
   const [playSpeed, setPlaySpeed] = useState(4);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState<number | null>(null);
@@ -689,19 +974,26 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
     };
   }, [path]);
 
+  const venue = useMemo(
+    () => (path ? venueGeometry(track, path.shipFrame, path.points) : null),
+    [track, path],
+  );
+
   useEffect(() => {
-    if (!path) return;
-    sceneRef.current?.setContent(path, venueGeometry(track, path.shipFrame, glideslopeLength(path)), {
+    if (!path || !venue) return;
+    sceneRef.current?.setContent(path, venue, {
       ghostIntervalS,
       exaggeration,
       modelLength: length,
+      modelScale,
       touchdownTime,
+      showBeams,
     });
-  }, [path, track, ghostIntervalS, exaggeration, length, touchdownTime]);
+  }, [path, venue, ghostIntervalS, exaggeration, length, modelScale, touchdownTime, showBeams]);
 
   const cursor = path ? pointAt(path.points, current, 1) : null;
   useEffect(() => {
-    sceneRef.current?.setCursor(cursor, exaggeration, length);
+    sceneRef.current?.setCursor(cursor, exaggeration);
   }, [cursor, exaggeration, length, path]);
 
   useEffect(() => {
@@ -786,6 +1078,16 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
             ))}
           </select>
         </label>
+        {venue?.beams && (
+          <label className="flight3d-check">
+            <input
+              type="checkbox"
+              checked={showBeams}
+              onChange={(e) => setShowBeams(e.target.checked)}
+            />
+            進入ビーム
+          </label>
+        )}
       </div>
 
       <div className="flight3d-stage">
@@ -906,10 +1208,16 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
           <span className="flight3d-swatch flight3d-swatch-cursor" />
           選択中の時刻
         </span>
-        {venueHasGlideslope(track) && (
+        {venue?.glideslope && (
           <span className="pattern-legend-item">
             <span className="pattern-legend-swatch flight3d-swatch-glideslope" />
             理想グライドスロープ
+          </span>
+        )}
+        {showBeams && venue?.beams && (
+          <span className="pattern-legend-item">
+            <span className="flight3d-swatch flight3d-swatch-beam" />
+            進入ビーム（ローカライザー／グライドパス）
           </span>
         )}
       </figcaption>
@@ -917,21 +1225,15 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
         {path.shipFrame
           ? "艦と一緒に動く座標（奥行き = 艦首方向）で描いています。"
           : "着陸方向を奥行きに取った座標で描いています。"}
+        {venue?.carrier && " 艦の形は着艦エリアの設定値から描いた概形です。"}
+        {showBeams &&
+          venue?.beams &&
+          (venue.runway
+            ? " 進入ビームの十字の腕の端は、ILS の計器がフルスケールになる位置の目安です（FAA AIM: ローカライザーは進入端で幅 700 ft、グライドパスは上下 1.4°）。"
+            : " 進入ビームは表示用の目安です（グライドパスは上下 1.4°、ローカライザーは左右 ±2°）。")}
         {exaggeration > 1 && ` 高さを ${exaggeration} 倍に強調しています（機影の姿勢は実際の角度のまま）。`}
         {note && ` ${note}`}
       </p>
     </figure>
   );
-}
-
-function venueHasGlideslope(track: ApproachTrack): boolean {
-  return num(track.glideslope_deg) !== null;
-}
-
-/** Glide path drawn back to where the final starts, within 1-3 nm. */
-function glideslopeLength(path: FlightPath): number {
-  const finals = path.points.filter((p) => p.leg === "final");
-  const source = finals.length > 1 ? finals : path.points;
-  const farthest = Math.max(...source.map((p) => Math.hypot(p.x, p.z)));
-  return Math.min(Math.max(farthest, 1852), 3 * 1852);
 }

@@ -355,49 +355,300 @@ export interface Strip {
   width: number;
 }
 
+/** A carrier in its own frame (metres, x forward of the ship's ACMI
+ *  position, z to starboard), and where that frame sits in the scene. */
+export interface CarrierModel {
+  /** Ship frame -> scene: rotate by `rotationY` about +y, then translate. */
+  position: Vec3;
+  rotationY: number;
+  /** Flight deck above the waterline (m); the deck is the scene's y = 0. */
+  deckHeight: number;
+  /** Outlines, [x, z] in the ship frame. */
+  waterline: [number, number][];
+  flightDeck: [number, number][];
+  angledDeck: [number, number][];
+  /** Landing-area centreline, ramp to forward end, and its half-width. */
+  landingArea: { from: [number, number]; to: [number, number]; halfWidth: number };
+  island: { x: number; z: number; length: number; width: number; height: number };
+}
+
+/** A cross-shaped approach beam: rows of three points at increasing
+ *  distance down the final. `glideslope` rows run left - centre - right
+ *  across the glide-path plane, `localizer` rows bottom - centre - top up
+ *  the course plane; both centres lie on the glide path. `strength` is the
+ *  row's relative brightness, fading to 0 at the far end. */
+export interface ApproachBeams {
+  glideslope: Vec3[][];
+  localizer: Vec3[][];
+  strength: number[];
+  /** Cross-shaped sections across the beam every half mile: what makes it
+   *  read as a cross when looked at down the final, where both planes are
+   *  seen edge-on. `right` is horizontal, `up` perpendicular to the glide
+   *  path; the arms reach the full-scale half-width / half-height. */
+  gates: {
+    centre: Vec3;
+    right: Vec3;
+    up: Vec3;
+    halfWidth: number;
+    halfHeight: number;
+    strength: number;
+  }[];
+}
+
 export interface VenueGeometry {
   /** The runway, when its real length is known. */
   runway: Strip | null;
-  /** The ship's hull (ship frame only) and its angled landing area. */
-  hull: Strip | null;
+  /** The ship, whenever the track carries the carrier's deck geometry. */
+  carrier: CarrierModel | null;
+  /** Angled landing area in scene coordinates (carriers). */
   landingArea: Strip | null;
+  /** Height of the ground under the scene: the sea, a deck-height below
+   *  the flight deck, for a carrier. */
+  groundY: number;
   /** Ideal glide path, from its end point back along the final. */
   glideslope: { from: Vec3; to: Vec3 } | null;
+  /** ILS-style localizer / glide-path beams around it. */
+  beams: ApproachBeams | null;
   /** The landing course on the ground: extended far back down the final,
    *  forward to the end of the runway / landing area. */
   course: { from: Vec3; to: Vec3 };
+  /** The glide path's end (the aiming point, the target wire) and the
+   *  horizontal unit vector from it back down the final (x, z): where a
+   *  pilot on final looks, and from which direction. */
+  approachEnd: Vec3;
+  approachBack: [number, number];
 }
 
-/** Nimitz-class figures, for drawing only: nothing is measured against them. */
-const HULL_WIDTH_M = 40;
 const LANDING_AREA_WIDTH_M = 25;
 const DEFAULT_RUNWAY_WIDTH_M = 45;
+const DEFAULT_DECK_HEIGHT_M = 20;
+
+/** Glide-path beam half-thickness: "a glide path beam 1.4 degrees wide
+ *  (vertically)" (FAA AIM 1-1-9). */
+export const GLIDESLOPE_HALF_ANGLE_DEG = 0.7;
+/** Localizer: "a course width (full scale fly-left to a full scale
+ *  fly-right) of 700 feet at the runway threshold" (FAA AIM 1-1-9), from an
+ *  antenna at the far end of the runway. */
+export const LOCALIZER_WIDTH_AT_THRESHOLD_M = 700 * 0.3048;
+/** Where no runway threshold defines it (a deck, an unresolved runway),
+ *  a display choice rather than any standard: +-2 deg from the forward end. */
+export const FALLBACK_LOCALIZER_HALF_ANGLE_DEG = 2.0;
 
 /**
- * Where to draw the runway or the ship, and the ideal glide path, in scene
- * coordinates. Mirrors what the plan view draws (PatternTrack).
+ * A generic angled-deck carrier built from the deck geometry the grader
+ * uses (`config/carriers.yaml`): the ramp, the deck angle, the landing area,
+ * the deck height. The proportions (beam, bow, island) are drawn, not
+ * measured; nothing is graded against them.
  *
- * `glideslopeLengthM` is the horizontal length of the glide path drawn,
- * `courseLengthM` how far back down the final the course line runs.
+ * In the ship frame the model sits at the origin. Older carrier tracks are
+ * in the landing area's own frame (origin at the glide path's end, x down
+ * the angled deck): the model is rotated and moved there, the inverse of
+ * the backend's `ShipFrame.point`.
+ */
+export function carrierModel(
+  geometry: Record<string, unknown>,
+  shipFrame: boolean,
+): CarrierModel | null {
+  const rampX = num(geometry["ramp_along_m"]);
+  const rampZ = num(geometry["ramp_lateral_m"]);
+  const angle = num(geometry["landing_course_offset_deg"]);
+  if (rampX === null || rampZ === null || angle === null) return null;
+  const target = num(geometry["touchdown_target_m"]) ?? 0;
+  const deckHeight = num(geometry["deck_altitude_m"]) ?? DEFAULT_DECK_HEIGHT_M;
+
+  const stern = rampX - 2;
+  const bow = -rampX * 1.05;
+  const length = bow - stern;
+  const hb = 0.062 * length; // waterline half-beam: 41 m on a 333 m Nimitz
+  const fd = hb * 1.35; // flight deck overhang
+  const waterline: [number, number][] = [
+    [stern, -hb * 0.9],
+    [stern, hb * 0.9],
+    [stern + 0.2 * length, hb],
+    [bow - 0.3 * length, hb],
+    [bow - 0.1 * length, hb * 0.55],
+    [bow, 0],
+    [bow - 0.1 * length, -hb * 0.55],
+    [bow - 0.3 * length, -hb],
+    [stern + 0.2 * length, -hb],
+  ];
+  const flightDeck: [number, number][] = [
+    [stern, -hb * 1.05],
+    [stern, hb * 1.2],
+    [stern + 0.12 * length, fd],
+    [bow - 0.28 * length, fd],
+    [bow - 0.06 * length, fd * 0.75],
+    [bow, fd * 0.35],
+    [bow, -fd * 0.3],
+    [bow - 0.06 * length, -fd * 0.6],
+    [bow - 0.28 * length, -fd * 0.9],
+    [stern + 0.3 * length, -fd * 0.9],
+    [stern + 0.08 * length, -hb * 1.05],
+  ];
+
+  const c = Math.cos(angle * DEG);
+  const s = Math.sin(angle * DEG);
+  const areaLength = num(geometry["landing_area_length_m"]) ?? 0.75 * length;
+  const halfWidth = 0.05 * length;
+  const at = (along: number, across: number): [number, number] => [
+    rampX + along * c - across * s,
+    rampZ + along * s + across * c,
+  ];
+  const angledDeck = [
+    at(-4, -halfWidth * 1.1),
+    at(areaLength, -halfWidth * 1.1),
+    at(areaLength, halfWidth * 1.1),
+    at(-4, halfWidth * 1.1),
+  ];
+
+  let position: Vec3 = [0, 0, 0];
+  let rotationY = 0;
+  if (!shipFrame) {
+    const endX = rampX + target * c;
+    const endZ = rampZ + target * s;
+    position = [-(endX * c + endZ * s), 0, endX * s - endZ * c];
+    rotationY = angle * DEG;
+  }
+
+  return {
+    position,
+    rotationY,
+    deckHeight,
+    waterline,
+    flightDeck,
+    angledDeck,
+    landingArea: { from: at(0, 0), to: at(areaLength, 0), halfWidth },
+    island: {
+      x: -0.06 * length,
+      z: fd - 0.02 * length,
+      length: 0.08 * length,
+      width: 0.03 * length,
+      height: 0.065 * length,
+    },
+  };
+}
+
+/** A ship-frame point placed in the scene with `carrier`'s transform. */
+export function placeOnCarrier(carrier: CarrierModel, x: number, z: number): Vec3 {
+  const c = Math.cos(carrier.rotationY);
+  const s = Math.sin(carrier.rotationY);
+  return [
+    carrier.position[0] + x * c + z * s,
+    carrier.position[1],
+    carrier.position[2] - x * s + z * c,
+  ];
+}
+
+/**
+ * The localizer and glide-path beams, drawn as the two planes of an ILS:
+ * the vertical course plane and the inclined glide-path plane, crossing on
+ * the ideal glide path.
+ *
+ * The glide-path plane is as wide as the localizer's full-scale sector and
+ * the course plane as tall as the glide path's, so the ends of the cross's
+ * arms are where each needle would reach full scale. The localizer sector
+ * grows from its antenna at `localizerOrigin` (the far end of the runway),
+ * the glide path's from its end point.
+ */
+export function approachBeams(
+  end: Vec3,
+  back: [number, number],
+  slopeDeg: number,
+  lengthM: number,
+  localizerOrigin: Vec3,
+  localizerHalfAngleDeg: number,
+): ApproachBeams {
+  const tanSlope = Math.tan(slopeDeg * DEG);
+  const tanGs = Math.tan(GLIDESLOPE_HALF_ANGLE_DEG * DEG);
+  const tanLoc = Math.tan(localizerHalfAngleDeg * DEG);
+  // Horizontal distance from the localizer antenna to the glide path's end.
+  const lead = Math.max(
+    0,
+    -((localizerOrigin[0] - end[0]) * back[0] + (localizerOrigin[2] - end[2]) * back[1]),
+  );
+  // Right of the landing course, which runs opposite to `back`.
+  const right: [number, number] = [back[1], -back[0]];
+  const centreAt = (d: number): Vec3 => [
+    end[0] + back[0] * d,
+    end[1] + d * tanSlope,
+    end[2] + back[1] * d,
+  ];
+  const fractions = [0, 0.1, 0.35, 0.7, 1];
+  const glideslope: Vec3[][] = [];
+  const localizer: Vec3[][] = [];
+  for (const f of fractions) {
+    const d = f * lengthM;
+    const centre = centreAt(d);
+    const halfWidth = (d + lead) * tanLoc;
+    const halfHeight = d * tanGs;
+    glideslope.push([
+      [centre[0] - right[0] * halfWidth, centre[1], centre[2] - right[1] * halfWidth],
+      centre,
+      [centre[0] + right[0] * halfWidth, centre[1], centre[2] + right[1] * halfWidth],
+    ]);
+    localizer.push([
+      [centre[0], centre[1] - halfHeight, centre[2]],
+      centre,
+      [centre[0], centre[1] + halfHeight, centre[2]],
+    ]);
+  }
+
+  // Perpendicular to the glide path, in its vertical plane.
+  const sinSlope = Math.sin(slopeDeg * DEG);
+  const cosSlope = Math.cos(slopeDeg * DEG);
+  const up: Vec3 = [-back[0] * sinSlope, cosSlope, -back[1] * sinSlope];
+  const spacing = Math.min(926, lengthM / 3);
+  const gates: ApproachBeams["gates"] = [];
+  for (let d = spacing; d <= lengthM * 0.98; d += spacing) {
+    gates.push({
+      centre: centreAt(d),
+      right: [right[0], 0, right[1]],
+      up,
+      halfWidth: (d + lead) * tanLoc,
+      halfHeight: d * tanGs,
+      strength: 1 - (0.5 * d) / lengthM,
+    });
+  }
+  return { glideslope, localizer, strength: [0.8, 1, 0.8, 0.45, 0], gates };
+}
+
+/** How far down the final to draw the glide path and the beams: back to
+ *  the farthest point of the track behind its end, within 1-10 nm. */
+export function approachLengthM(
+  points: FlightPoint[],
+  end: Vec3,
+  back: [number, number],
+): number {
+  let farthest = 0;
+  for (const p of points) {
+    farthest = Math.max(farthest, (p.x - end[0]) * back[0] + (p.z - end[2]) * back[1]);
+  }
+  return Math.min(Math.max(farthest, 1852), 10 * 1852);
+}
+
+/**
+ * Where to draw the runway or the ship, the ideal glide path and the
+ * approach beams, in scene coordinates. Mirrors what the plan view draws
+ * (PatternTrack). `courseLengthM` is how far back the course line runs.
  */
 export function venueGeometry(
   track: ApproachTrack,
   shipFrame: boolean,
-  glideslopeLengthM: number,
+  points: FlightPoint[],
   courseLengthM = 20_000,
 ): VenueGeometry {
   const geometry = track.geometry ?? {};
   const slope = num(track.glideslope_deg);
   const refHeight = num(geometry["reference_height_m"]) ?? 0;
-  const tanSlope = slope !== null ? Math.tan(slope * DEG) : null;
 
   let runway: Strip | null = null;
-  let hull: Strip | null = null;
   let landingArea: Strip | null = null;
   // Glide-path end point and its horizontal direction back down the final.
   let end: Vec3 = [0, refHeight, 0];
   let back: [number, number] = [-1, 0];
+  let threshold: Vec3 | null = null;
 
+  const carrier = carrierModel(geometry, shipFrame);
   const rampX = num(geometry["ramp_along_m"]);
   const rampY = num(geometry["ramp_lateral_m"]);
   const deckAngle = num(geometry["landing_course_offset_deg"]);
@@ -409,7 +660,6 @@ export function venueGeometry(
     // landing area angled `deckAngle` off it from the ramp.
     const c = Math.cos(deckAngle * DEG);
     const s = Math.sin(deckAngle * DEG);
-    hull = { from: [rampX, 0, 0], to: [-rampX, 0, 0], width: HULL_WIDTH_M };
     if (deckLength !== null) {
       landingArea = {
         from: [rampX, 0, rampY],
@@ -436,17 +686,19 @@ export function venueGeometry(
         to: [length - aiming, 0, 0],
         width: num(geometry["width_m"]) ?? DEFAULT_RUNWAY_WIDTH_M,
       };
+      threshold = runway.from;
     }
   }
 
+  const lengthM = approachLengthM(points, end, back);
   const glideslope =
-    tanSlope !== null
+    slope !== null
       ? {
           from: end,
           to: [
-            end[0] + back[0] * glideslopeLengthM,
-            end[1] + glideslopeLengthM * tanSlope,
-            end[2] + back[1] * glideslopeLengthM,
+            end[0] + back[0] * lengthM,
+            end[1] + lengthM * Math.tan(slope * DEG),
+            end[2] + back[1] * lengthM,
           ] as Vec3,
         }
       : null;
@@ -460,7 +712,53 @@ export function venueGeometry(
     to: [ahead[0], 0, ahead[2]] as Vec3,
   };
 
-  return { runway, hull, landingArea, glideslope, course };
+  // The localizer antenna sits at the forward end. With a real runway its
+  // sector is set by the AIM's 700 ft at the threshold; elsewhere by the
+  // fallback angle.
+  let beams: ApproachBeams | null = null;
+  if (slope !== null) {
+    const toThreshold = threshold
+      ? Math.hypot(course.to[0] - threshold[0], course.to[2] - threshold[2])
+      : 0;
+    const halfAngle =
+      toThreshold > 0
+        ? Math.atan(LOCALIZER_WIDTH_AT_THRESHOLD_M / 2 / toThreshold) / DEG
+        : FALLBACK_LOCALIZER_HALF_ANGLE_DEG;
+    beams = approachBeams(end, back, slope, lengthM, course.to, halfAngle);
+  }
+
+  return {
+    runway,
+    carrier,
+    landingArea,
+    groundY: carrier ? -carrier.deckHeight : 0,
+    glideslope,
+    beams,
+    course,
+    approachEnd: end,
+    approachBack: back,
+  };
+}
+
+/** Real length of a fighter, the smallest a model is ever drawn (m). */
+export const REAL_MODEL_LENGTH_M = 18;
+
+/**
+ * Length to draw the models at for a camera `distanceM` from what it looks
+ * at: a constant share of the view while zoomed out, shrinking to real size
+ * as the camera closes in -- otherwise, zoomed onto a deck, models scaled up
+ * to read a whole circuit bury the ship. Never above `maxLengthM` (the
+ * no-overlap cap, see `modelLength`).
+ */
+export function lengthAtDistance(
+  distanceM: number,
+  fovDeg: number,
+  maxLengthM: number,
+  scale = 1,
+): number {
+  const screenShare = 0.05;
+  const apparent = 2 * Math.tan((fovDeg / 2) * DEG) * screenShare * distanceM * scale;
+  return Math.min(maxLengthM, Math.max(REAL_MODEL_LENGTH_M * scale, apparent));
 }
 
 /** Grid spacing (m) giving roughly `divisions` cells across `span`, rounded
