@@ -348,7 +348,7 @@ export function Detail({ id, onBack }: DetailProps) {
             }
           >
             <Suspense fallback={<p className="loading-message">3D ビューを読み込み中...</p>}>
-              <FlightPath3D track={track} metrics={detail.metrics} />
+              <FlightPath3D track={track} metrics={detail.metrics} airframe={detail.airframe} />
             </Suspense>
           </ErrorBoundary>
         </section>

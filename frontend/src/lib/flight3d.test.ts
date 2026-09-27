@@ -425,6 +425,8 @@ describe("modelLength", () => {
     // 1.2% of the scene is the floor, whatever the interval.
     expect(modelLength(10_000, 70, 0.5)).toBeCloseTo(120, 9);
     expect(modelLength(300, 60, 2)).toBe(18);
+    // Real size is the airframe's own: a T-45 is 12 m, not a generic 18.
+    expect(modelLength(300, 60, 2, 1, 12)).toBe(12);
   });
 
   it("measures the speed along the path", () => {
@@ -446,6 +448,7 @@ describe("lengthAtDistance", () => {
     // Zoomed onto a deck: real size, so the ship is not buried.
     expect(lengthAtDistance(200, 40, 136)).toBe(REAL_MODEL_LENGTH_M);
     expect(lengthAtDistance(200, 40, 136, 1.6)).toBeCloseTo(REAL_MODEL_LENGTH_M * 1.6, 9);
+    expect(lengthAtDistance(200, 40, 136, 1, 12)).toBe(12);
   });
 });
 

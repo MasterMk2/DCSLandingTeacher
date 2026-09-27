@@ -304,18 +304,20 @@ export function medianSpeed(points: FlightPoint[]): number {
  * Length to draw the aircraft model at (m).
  *
  * Large enough to read the attitude of a whole circuit (3% of the scene;
- * real size, 18 m, when zoomed onto a deck), but never longer than the gap
- * between two ghosts, or a slow downwind becomes a solid comb of wings.
+ * real size, `realLengthM`, when zoomed onto a deck), but never longer than
+ * the gap between two ghosts, or a slow downwind becomes a solid comb of
+ * wings.
  */
 export function modelLength(
   span: number,
   speedMs: number,
   ghostIntervalS: number,
   scale = 1,
+  realLengthM = REAL_MODEL_LENGTH_M,
 ): number {
   const spacing = speedMs * ghostIntervalS * 0.85;
   const length = Math.min(span * 0.03, Math.max(spacing, span * 0.012));
-  return Math.min(Math.max(length, 18), 500) * scale;
+  return Math.min(Math.max(length, realLengthM), 500) * scale;
 }
 
 export interface SceneBounds {
@@ -740,25 +742,27 @@ export function venueGeometry(
   };
 }
 
-/** Real length of a fighter, the smallest a model is ever drawn (m). */
+/** Real length of a fighter: the size of a model whose airframe is not
+ *  known (m). Known airframes use their own (`AirframeModel.lengthM`). */
 export const REAL_MODEL_LENGTH_M = 18;
 
 /**
  * Length to draw the models at for a camera `distanceM` from what it looks
  * at: a constant share of the view while zoomed out, shrinking to real size
- * as the camera closes in -- otherwise, zoomed onto a deck, models scaled up
- * to read a whole circuit bury the ship. Never above `maxLengthM` (the
- * no-overlap cap, see `modelLength`).
+ * (`realLengthM`) as the camera closes in -- otherwise, zoomed onto a deck,
+ * models scaled up to read a whole circuit bury the ship. Never above
+ * `maxLengthM` (the no-overlap cap, see `modelLength`).
  */
 export function lengthAtDistance(
   distanceM: number,
   fovDeg: number,
   maxLengthM: number,
   scale = 1,
+  realLengthM = REAL_MODEL_LENGTH_M,
 ): number {
   const screenShare = 0.05;
   const apparent = 2 * Math.tan((fovDeg / 2) * DEG) * screenShare * distanceM * scale;
-  return Math.min(maxLengthM, Math.max(REAL_MODEL_LENGTH_M * scale, apparent));
+  return Math.min(maxLengthM, Math.max(realLengthM * scale, apparent));
 }
 
 /** Grid spacing (m) giving roughly `divisions` cells across `span`, rounded
