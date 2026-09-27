@@ -727,7 +727,8 @@ def _comment_parts(metrics: dict[str, Any], settings: dict[str, Any]) -> list[st
     if touchdown is not None:
         if touchdown > hard:
             parts.append(
-                f"接地 {touchdown:.0f} fpm は艦載機の脚の設計値（約 {hard:,.0f} fpm）を超える硬さ"
+                f"接地 {touchdown:.0f} fpm は艦載機の脚の設計値（約 {hard:,.0f} fpm）を"
+                "超えるハードランディング"
             )
         elif ratio is not None and ratio < flare:
             ramp = metrics.get("ramp_descent_rate_fpm")

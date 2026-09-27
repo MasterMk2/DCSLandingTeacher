@@ -852,6 +852,25 @@ def test_descent_rate_score_is_continuous_across_bands() -> None:
     assert abs(just_under - just_over) < 1.0
 
 
+def test_a_firm_touchdown_is_called_hard_in_the_comment() -> None:
+    """「接地はやや硬かった」は操縦者の言い方ではない。強い接地は「ハード」と書く。"""
+    from app.grading.land_grader import _build_comment, _descent_rate_score
+
+    bands = {"excellent": 300, "good": 450, "fair": 650, "hard": 850}
+    expected = {
+        200.0: "接地は非常に滑らかだった（200 fpm）",
+        400.0: "接地は良好だった（400 fpm）",
+        600.0: "接地はややハードだった（600 fpm）",
+        800.0: "接地はハードだった（800 fpm）",
+        1200.0: "接地は非常にハードだった（1200 fpm）",
+    }
+    for fpm, phrase in expected.items():
+        _, label = _descent_rate_score(fpm, bands)
+        comment = _build_comment(None, label, None, None, None, None, descent_fpm=fpm)
+        assert phrase in comment, comment
+        assert "硬" not in comment, comment
+
+
 def test_the_downwind_leg_decides_whether_a_pattern_was_flown() -> None:
     """The pattern is scored when the track HOLDS a pattern, not when the
     detector said so.
