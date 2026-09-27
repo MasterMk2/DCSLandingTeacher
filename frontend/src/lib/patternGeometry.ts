@@ -85,6 +85,28 @@ export function inShipFrame(samples: DeviationSample[]): DeviationSample[] {
   }));
 }
 
+function finite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** The leg boundaries the backend timed (mission seconds, in `metrics`).
+ *  One reader for every view, so the plan view and the 3D view cannot
+ *  disagree about where the break ends. */
+export function legTimesFrom(
+  metrics: Record<string, unknown> | null | undefined,
+  touchdownTime: number | null | undefined,
+): LegTimes {
+  return {
+    priorEnd: finite(metrics?.["pattern_low_pass_time"]),
+    rollout: finite(metrics?.["pattern_rollout_time"]),
+    breakStart: finite(metrics?.["pattern_break_start_time"]),
+    breakEnd: finite(metrics?.["pattern_break_end_time"]),
+    downwindStart: finite(metrics?.["pattern_downwind_start_time"]),
+    downwindEnd: finite(metrics?.["pattern_downwind_end_time"]),
+    touchdown: finite(touchdownTime),
+  };
+}
+
 /** Which leg a sample belongs to; everything collapses to "final" when the
  *  backend did not report any pattern boundaries (straight-in, old data). */
 export function legAt(time: number, t: LegTimes): Leg {
