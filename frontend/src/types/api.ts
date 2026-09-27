@@ -77,6 +77,8 @@ export interface DeviationSample {
    *  and on sources that omit it. */
   roll?: number | null;
   pitch?: number | null;
+  /** Recorded true heading (ACMI Yaw, degrees). Absent on older tracks. */
+  heading?: number | null;
   /** Normal load factor (G) derived from the track; 1.0 in straight and
    *  level flight, 1/cos(bank) in a level turn. */
   load_factor?: number | null;

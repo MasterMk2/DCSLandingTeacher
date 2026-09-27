@@ -13,6 +13,7 @@ import {
   downwindGuide,
   inShipFrame,
   legRuns,
+  legTimesFrom,
   patternProjection,
   scaleBarLabel,
   type Leg,
@@ -55,6 +56,12 @@ const CARRIER_TURN_ENTRY_LABELS: Partial<Record<Leg, string>> = {
   break: "ダウンウィンドへの旋回",
 };
 
+/** The leg names for this track: a runway circuit's, or a Case I's. */
+export function legLabelsFor(shipFrame: boolean, turnEntry: boolean): Record<Leg, string> {
+  if (!shipFrame) return LEG_LABELS;
+  return turnEntry ? { ...CARRIER_LEG_LABELS, ...CARRIER_TURN_ENTRY_LABELS } : CARRIER_LEG_LABELS;
+}
+
 /** Case I checkpoints the backend timed (mission seconds), in flying order. */
 const CARRIER_MARKS: [string, string][] = [
   ["pattern_low_pass_time", "ウェーブオフ"],
@@ -87,15 +94,7 @@ function num(value: unknown): number | null {
 
 export function PatternTrack({ track, metrics }: PatternTrackProps) {
   const legTimes: LegTimes = useMemo(
-    () => ({
-      priorEnd: num(metrics?.["pattern_low_pass_time"]),
-      rollout: num(metrics?.["pattern_rollout_time"]),
-      breakStart: num(metrics?.["pattern_break_start_time"]),
-      breakEnd: num(metrics?.["pattern_break_end_time"]),
-      downwindStart: num(metrics?.["pattern_downwind_start_time"]),
-      downwindEnd: num(metrics?.["pattern_downwind_end_time"]),
-      touchdown: num(track.touchdown_time),
-    }),
+    () => legTimesFrom(metrics, track.touchdown_time),
     [metrics, track.touchdown_time],
   );
 
@@ -117,11 +116,7 @@ export function PatternTrack({ track, metrics }: PatternTrackProps) {
   const runs = legRuns(points);
   const legsShown = Array.from(new Set(runs.map((r) => r.leg)));
   const turnEntry = metrics?.["pattern_entry"] === "turn";
-  const legLabels = !shipFrame
-    ? LEG_LABELS
-    : turnEntry
-      ? { ...CARRIER_LEG_LABELS, ...CARRIER_TURN_ENTRY_LABELS }
-      : CARRIER_LEG_LABELS;
+  const legLabels = legLabelsFor(shipFrame, turnEntry);
   const marks = shipFrame
     ? CARRIER_MARKS.map(([key, label]) => ({
         label: key === "pattern_break_start_time" && turnEntry ? "旋回開始" : label,

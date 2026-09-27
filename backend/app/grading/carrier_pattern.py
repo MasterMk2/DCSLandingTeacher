@@ -165,6 +165,7 @@ def ship_frame_view(analysis: ApproachAnalysis, frame: ShipFrame) -> ApproachAna
                 signed_distance_to_go=-x,
                 roll=s.roll,
                 pitch=s.pitch,
+                heading=s.heading,
                 load_factor=s.load_factor,
                 turn_rate_deg_s=s.turn_rate_deg_s,
             )

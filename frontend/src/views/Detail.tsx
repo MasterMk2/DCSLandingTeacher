@@ -7,8 +7,9 @@
  * between them covered the same ground: two more dark boxes plotting the
  * same final approach was noise, not information. */
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { getLanding } from "../api/client";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { PatternTrack } from "../components/PatternTrack";
 import { hasPlanViewShape } from "../lib/patternGeometry";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
@@ -30,6 +31,9 @@ import {
 } from "../lib/format";
 import { downloadCsv, samplesToCsv } from "../lib/csv";
 import type { Factor, LandingDetail } from "../types/api";
+
+/** three.js は大きいので、3D ビューを開いたときだけ読み込む。 */
+const FlightPath3D = lazy(() => import("../components/FlightPath3D"));
 
 /** 採点しなかった理由 (backend: land_grader.UNSCORED_*) の日本語。 */
 const UNSCORED_REASON_JA: Record<string, string> = {
@@ -332,6 +336,24 @@ export function Detail({ id, onBack }: DetailProps) {
       </section>
 
       {/* ===== Screen-only sections ===== */}
+      {track && track.samples.length > 1 && (
+        <section className="no-print">
+          <h2>3D 飛行軌跡</h2>
+          <ErrorBoundary
+            key={detail.id}
+            fallback={
+              <p className="error-message">
+                3D ビューを読み込めませんでした。ページを再読み込みしてください。
+              </p>
+            }
+          >
+            <Suspense fallback={<p className="loading-message">3D ビューを読み込み中...</p>}>
+              <FlightPath3D track={track} metrics={detail.metrics} />
+            </Suspense>
+          </ErrorBoundary>
+        </section>
+      )}
+
       {track && track.samples.length > 0 && (
         <section className="no-print">
           <h2>時系列チャート</h2>

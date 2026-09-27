@@ -81,6 +81,12 @@ class DeviationSample:
     #: the load factor derived from the turn.
     roll: float | None = None
     pitch: float | None = None
+    #: True heading in degrees (ACMI ``Yaw``; the flat-world heading only
+    #: when the source omits it), as recorded. The attitude the 3D view
+    #: draws needs it next to roll and pitch: the direction of the track is
+    #: not the nose's, by the crab in a crosswind and by the ship's motion
+    #: in a moving-deck frame. ``None`` on tracks stored before it was kept.
+    heading: float | None = None
     #: Normal load factor (G) and ground-track turn rate (deg/s, right
     #: positive) derived from the track by :mod:`app.grading.kinematics`.
     #: Recomputed on every grade / re-grade, so a stored value always
@@ -128,6 +134,7 @@ class DeviationSample:
             ),
             "roll": round(self.roll, 2) if self.roll is not None else None,
             "pitch": round(self.pitch, 2) if self.pitch is not None else None,
+            "heading": round(self.heading, 2) if self.heading is not None else None,
             "load_factor": (
                 round(self.load_factor, 3) if self.load_factor is not None else None
             ),
@@ -268,6 +275,7 @@ class ApproachAnalysis:
                         ),
                         roll=_optional_float(row.get("roll")),
                         pitch=_optional_float(row.get("pitch")),
+                        heading=_optional_float(row.get("heading")),
                         load_factor=_optional_float(row.get("load_factor")),
                         turn_rate_deg_s=_optional_float(row.get("turn_rate_deg_s")),
                         fixed_along=_optional_float(row.get("fixed_along")),
@@ -637,6 +645,7 @@ def _moving_deck_analysis(
                 signed_distance_to_go=-along,
                 roll=sample.roll,
                 pitch=sample.pitch,
+                heading=sample.heading,
                 fixed_along=fixed_along,
                 fixed_lateral=fixed_lateral,
             )
@@ -804,6 +813,7 @@ def build_approach_analysis(
                 signed_distance_to_go=-along,
                 roll=sample.roll,
                 pitch=sample.pitch,
+                heading=sample.heading,
             )
         )
     return analysis

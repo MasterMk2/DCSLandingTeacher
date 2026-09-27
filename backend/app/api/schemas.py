@@ -77,6 +77,8 @@ class DeviationSampleOut(BaseModel):
     #: Recorded attitude (ACMI Roll / Pitch, degrees); None on older tracks.
     roll: float | None = None
     pitch: float | None = None
+    #: Recorded true heading (ACMI Yaw, degrees); None on older tracks.
+    heading: float | None = None
     #: Normal load factor (G) and ground-track turn rate (deg/s, right
     #: positive) derived from the track (app.grading.kinematics).
     load_factor: float | None = None
