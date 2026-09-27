@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { AUTH_INVALID_EVENT, clearToken, getToken, saveToken } from "./auth/token";
 import { TokenPrompt } from "./components/TokenPrompt";
+import { siteHomeHref } from "./lib/siteLink";
 import { Dashboard } from "./views/Dashboard";
 import { Detail } from "./views/Detail";
+
+const SITE_HOME = siteHomeHref(window.location.href);
 
 function parseHash(): { view: "dashboard" } | { view: "detail"; id: number } {
   const hash = location.hash.replace(/^#/, "");
@@ -60,6 +63,11 @@ export default function App() {
           DCS Landing Teacher
         </a>
         <span className="app-subtitle">着陸・着艦レビューシステム</span>
+        {SITE_HOME && (
+          <a href={SITE_HOME} className="app-home-link" title="サイトのトップページへ戻る">
+            ← メインページ
+          </a>
+        )}
       </nav>
       {/* key remounts the views when the token changes (refetch + WS reconnect) */}
       <main key={authVersion}>
