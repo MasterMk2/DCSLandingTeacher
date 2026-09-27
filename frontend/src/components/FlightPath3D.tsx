@@ -23,7 +23,6 @@ import {
   medianSpeed,
   modelLength,
   pointAt,
-  REAL_MODEL_LENGTH_M,
   sceneBounds,
   venueGeometry,
   type ApproachBeams,
@@ -35,6 +34,7 @@ import {
   type Vec3,
   type VenueGeometry,
 } from "../lib/flight3d";
+import { airframeCaption, airframeModel, type AirframeModel } from "../lib/airframes";
 import { legTimesFrom, type Leg } from "../lib/patternGeometry";
 import { mToFt, msToKnots } from "../lib/format";
 import { legLabelsFor } from "./PatternTrack";
@@ -132,60 +132,14 @@ function readPalette(): Palette {
 }
 
 // ---------------------------------------------------------------------------
-// The aircraft model: a generic jet, unit length, nose +x, top +y, right +z.
+// The aircraft model: the airframe's outline (lib/airframes), unit length,
+// nose +x, top +y, right +z.
 // ---------------------------------------------------------------------------
 
-function aircraftGeometry(): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const colors: number[] = [];
-  const BODY: Vec3 = [1, 1, 1];
-  const CANOPY: Vec3 = [0.22, 0.26, 0.3];
-  const tri = (a: Vec3, b: Vec3, c: Vec3, color: Vec3 = BODY) => {
-    positions.push(...a, ...b, ...c);
-    colors.push(...color, ...color, ...color);
-  };
-  const quad = (a: Vec3, b: Vec3, c: Vec3, d: Vec3) => {
-    tri(a, b, c);
-    tri(a, c, d);
-  };
-  // Fuselage cross-sections: top, right, bottom, left.
-  const ring = (x: number, half: number, top: number, bottom: number): Vec3[] => [
-    [x, top, 0],
-    [x, 0, half],
-    [x, -bottom, 0],
-    [x, 0, -half],
-  ];
-  const nose: Vec3 = [0.5, 0, 0];
-  const front = ring(0.22, 0.05, 0.055, 0.045);
-  const rear = ring(-0.36, 0.055, 0.045, 0.04);
-  const tail: Vec3 = [-0.5, 0.01, 0];
-  for (let i = 0; i < 4; i++) {
-    const j = (i + 1) % 4;
-    tri(nose, front[i], front[j]);
-    quad(front[i], rear[i], rear[j], front[j]);
-    tri(rear[i], tail, rear[j]);
-  }
-  // Canopy: a dark ridge on top, so which way is up is never in doubt.
-  const canopyFront: Vec3 = [0.3, 0.04, 0];
-  const canopyTop: Vec3 = [0.12, 0.1, 0];
-  const canopyBack: Vec3 = [0.0, 0.05, 0];
-  for (const side of [-1, 1]) {
-    const edge: Vec3 = [0.14, 0.05, 0.035 * side];
-    tri(canopyFront, canopyTop, edge, CANOPY);
-    tri(canopyTop, canopyBack, edge, CANOPY);
-  }
-  for (const side of [-1, 1]) {
-    // Wing
-    quad([0.12, 0, 0.05 * side], [-0.14, 0, 0.36 * side], [-0.22, 0, 0.36 * side], [-0.26, 0, 0.05 * side]);
-    // Horizontal stabiliser
-    quad([-0.34, 0, 0.04 * side], [-0.43, 0, 0.17 * side], [-0.48, 0, 0.17 * side], [-0.5, 0, 0.04 * side]);
-  }
-  // Fin
-  quad([-0.28, 0.04, 0], [-0.43, 0.22, 0], [-0.49, 0.22, 0], [-0.5, 0.03, 0]);
-
+function aircraftGeometry(model: AirframeModel): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute("position", new THREE.BufferAttribute(model.positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(model.colors, 3));
   geometry.computeVertexNormals();
   return geometry;
 }
@@ -224,7 +178,9 @@ class FlightScene {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(40, 1, 1, 100_000);
   private readonly controls: OrbitControls;
-  private readonly aircraft = aircraftGeometry();
+  private readonly aircraft: THREE.BufferGeometry;
+  /** The airframe's real length: the models' size up against a deck. */
+  private readonly realLength: number;
   private readonly resizeObserver: ResizeObserver;
   private content = new THREE.Group();
   private contentDisposables: { dispose(): void }[] = [];
@@ -243,7 +199,7 @@ class FlightScene {
   private ghostPoints: FlightPoint[] = [];
   private touchdownRing: THREE.Mesh | null = null;
   private cursorPoint: FlightPoint | null = null;
-  private maxModelLength = REAL_MODEL_LENGTH_M;
+  private maxModelLength: number;
   private modelScale = 1;
   private appliedLength = -1;
   private dirty = true;
@@ -254,7 +210,11 @@ class FlightScene {
   constructor(
     private readonly host: HTMLElement,
     private readonly palette: Palette,
+    model: AirframeModel,
   ) {
+    this.aircraft = aircraftGeometry(model);
+    this.realLength = model.lengthM;
+    this.maxModelLength = model.lengthM;
     // Throws when WebGL is unavailable; the component shows a message.
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -773,6 +733,7 @@ class FlightScene {
       this.camera.fov,
       this.maxModelLength,
       this.modelScale,
+      this.realLength,
     );
     if (!force && Math.abs(length - this.appliedLength) <= this.appliedLength * 0.02) return;
     this.appliedLength = length;
@@ -906,6 +867,8 @@ class FlightScene {
 export interface FlightPath3DProps {
   track: ApproachTrack;
   metrics?: Record<string, unknown> | null;
+  /** DCS type name of the aircraft, which picks the model drawn. */
+  airframe?: string | null;
 }
 
 function signed(value: number, digits: number): string {
@@ -926,13 +889,14 @@ function estimatedNote(path: FlightPath): string | null {
   return `記録が無いか異常値だった姿勢は軌跡から推定しています: ${parts.join("、")}。`;
 }
 
-export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
+export default function FlightPath3D({ track, metrics, airframe }: FlightPath3DProps) {
   const legTimes = useMemo(
     () => legTimesFrom(metrics, track.touchdown_time),
     [metrics, track.touchdown_time],
   );
   const path = useMemo(() => buildFlightPath(track, legTimes), [track, legTimes]);
   const bounds = useMemo(() => (path ? sceneBounds(path.points) : null), [path]);
+  const model = useMemo(() => airframeModel(airframe), [airframe]);
 
   const [ghostIntervalS, setGhostIntervalS] = useState(2);
   const [exaggeration, setExaggeration] = useState(1);
@@ -955,14 +919,16 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
   const timeRef = useRef(current);
   timeRef.current = current;
   const speed = useMemo(() => (path ? medianSpeed(path.points) : 0), [path]);
-  const length = bounds ? modelLength(bounds.span, speed, ghostIntervalS, modelScale) : 0;
+  const length = bounds
+    ? modelLength(bounds.span, speed, ghostIntervalS, modelScale, model.lengthM)
+    : 0;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !path) return;
     let scene: FlightScene;
     try {
-      scene = new FlightScene(host, readPalette());
+      scene = new FlightScene(host, readPalette(), model);
     } catch {
       setUnsupported(true);
       return;
@@ -972,7 +938,7 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
       scene.dispose();
       sceneRef.current = null;
     };
-  }, [path]);
+  }, [path, model]);
 
   const venue = useMemo(
     () => (path ? venueGeometry(track, path.shipFrame, path.points) : null),
@@ -989,12 +955,22 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
       touchdownTime,
       showBeams,
     });
-  }, [path, venue, ghostIntervalS, exaggeration, length, modelScale, touchdownTime, showBeams]);
+  }, [
+    path,
+    venue,
+    model,
+    ghostIntervalS,
+    exaggeration,
+    length,
+    modelScale,
+    touchdownTime,
+    showBeams,
+  ]);
 
   const cursor = path ? pointAt(path.points, current, 1) : null;
   useEffect(() => {
     sceneRef.current?.setCursor(cursor, exaggeration);
-  }, [cursor, exaggeration, length, path]);
+  }, [cursor, exaggeration, length, path, model]);
 
   useEffect(() => {
     if (!playing) return;
@@ -1202,7 +1178,7 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
         ))}
         <span className="pattern-legend-item">
           <span className="flight3d-swatch flight3d-swatch-ghost" />
-          {ghostIntervalS} 秒ごとの機影
+          {ghostIntervalS} 秒ごとの機影{model.label && `（${model.label}）`}
         </span>
         <span className="pattern-legend-item">
           <span className="flight3d-swatch flight3d-swatch-cursor" />
@@ -1225,6 +1201,7 @@ export default function FlightPath3D({ track, metrics }: FlightPath3DProps) {
         {path.shipFrame
           ? "艦と一緒に動く座標（奥行き = 艦首方向）で描いています。"
           : "着陸方向を奥行きに取った座標で描いています。"}
+        {` ${airframeCaption(airframe, model)}`}
         {venue?.carrier && " 艦の形は着艦エリアの設定値から描いた概形です。"}
         {showBeams &&
           venue?.beams &&
