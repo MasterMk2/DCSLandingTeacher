@@ -186,7 +186,8 @@ async def test_0008_backfills_the_airframe_from_the_approach_track(
     import json
 
     url = f"sqlite:///{(tmp_path / 'backfill.db').as_posix()}"
-    await run_migrations(url)
+    # Only up to 0008: from 0009 on the tracks are no longer in ``landings``.
+    command.upgrade(make_alembic_config(url), "0008_landing_identity")
 
     engine = _engine(url)
     try:
@@ -251,7 +252,7 @@ async def test_0008_survives_columns_that_already_exist(tmp_path: Path) -> None:
     an interrupted run leaves the columns behind. Re-running must not die on
     "duplicate column name"."""
     url = f"sqlite:///{(tmp_path / 'partial.db').as_posix()}"
-    await run_migrations(url)
+    command.upgrade(make_alembic_config(url), "0008_landing_identity")
 
     engine = _engine(url)
     try:
@@ -266,3 +267,192 @@ async def test_0008_survives_columns_that_already_exist(tmp_path: Path) -> None:
     await run_migrations(url)
     assert _version(url) == HEAD_REVISION
     assert {"pilot", "airframe"} <= _columns(url, "landings")
+
+
+def _landings_at_0008(url: str, tracks: dict[int, str | None]) -> None:
+    """A database at 0008 whose landings carry these approach-track texts."""
+    command.upgrade(make_alembic_config(url), "0008_landing_identity")
+    engine = _engine(url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO flights (id, source_id, started_at, created_at) "
+                    "VALUES (1, 'default', '2024-01-01', '2024-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO objects (id, flight_id, acmi_id, type, name, "
+                    "first_seen, last_seen, removed) VALUES "
+                    "(1, 1, '1001', 'Air+FixedWing', 'F-16C', 0.0, 1.0, 0)"
+                )
+            )
+            for landing_id, track in tracks.items():
+                conn.execute(
+                    text(
+                        "INSERT INTO landings (id, flight_id, object_id, source_id, "
+                        "kind, outcome, touchdown_time, approach_track, created_at) "
+                        "VALUES (:i, 1, 1, 'default', 'land', 'full_stop', 0.0, :t, "
+                        "'2024-01-01')"
+                    ),
+                    {"i": landing_id, "t": track},
+                )
+    finally:
+        engine.dispose()
+
+
+def _stored_tracks(url: str) -> dict[int, str | None]:
+    import zlib
+
+    engine = _engine(url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT landing_id, approach_track FROM landing_tracks"))
+            return {
+                landing_id: None if blob is None else zlib.decompress(blob).decode("utf-8")
+                for landing_id, blob in rows
+            }
+    finally:
+        engine.dispose()
+
+
+async def test_0009_moves_the_tracks_out_of_landings_unchanged(tmp_path: Path) -> None:
+    import json
+
+    url = f"sqlite:///{(tmp_path / 'tracks.db').as_posix()}"
+    tracks = {
+        1: json.dumps({"airframe": "F-16C", "samples": [{"time": 1.5, "agl": 12.25}]}),
+        2: json.dumps({"samples": []}),
+        3: None,
+    }
+    _landings_at_0008(url, tracks)
+
+    await run_migrations(url)
+
+    assert _version(url) == HEAD_REVISION
+    assert "approach_track" not in _columns(url, "landings")
+    # Byte for byte the JSON that was there; no row for a landing without one.
+    assert _stored_tracks(url) == {1: tracks[1], 2: tracks[2]}
+
+    # And the model reads them back through Landing.approach_track.
+    from sqlalchemy import select
+
+    from app.models.database import create_engine as create_async_engine
+    from app.models.database import create_session_factory
+    from app.models.entities import Landing
+
+    engine = create_async_engine(url.replace("sqlite:", "sqlite+aiosqlite:", 1))
+    try:
+        async with create_session_factory(engine)() as session:
+            rows = (await session.execute(select(Landing).order_by(Landing.id))).scalars().all()
+            assert [row.approach_track for row in rows] == [
+                json.loads(tracks[1]),
+                json.loads(tracks[2]),
+                None,
+            ]
+    finally:
+        await engine.dispose()
+
+
+async def test_0009_finishes_a_run_that_was_cut_short(tmp_path: Path) -> None:
+    """A deploy that stops waiting for the health check can kill the copy
+    half way; SQLite commits the table on its own. Re-running copies what is
+    left, once, and drops the column."""
+    url = f"sqlite:///{(tmp_path / 'cut.db').as_posix()}"
+    tracks = {i: f'{{"samples": [], "n": {i}}}' for i in range(1, 251)}
+    _landings_at_0008(url, tracks)
+    command.upgrade(make_alembic_config(url), "0009_landing_tracks")
+    engine = _engine(url)
+    try:
+        with engine.begin() as conn:
+            # Back to the state after the table and the first rows: the column
+            # is back with its data, a third of the rows are copied, version 0008.
+            conn.execute(text("ALTER TABLE landings ADD COLUMN approach_track JSON"))
+            for landing_id, track in tracks.items():
+                conn.execute(
+                    text("UPDATE landings SET approach_track = :t WHERE id = :i"),
+                    {"i": landing_id, "t": track},
+                )
+            conn.execute(text("DELETE FROM landing_tracks WHERE landing_id > 80"))
+            conn.execute(
+                text("UPDATE alembic_version SET version_num = '0008_landing_identity'")
+            )
+    finally:
+        engine.dispose()
+
+    await run_migrations(url)
+
+    assert _version(url) == HEAD_REVISION
+    assert "approach_track" not in _columns(url, "landings")
+    assert _stored_tracks(url) == tracks
+
+
+async def test_0009_keeps_the_batches_it_copied_when_it_dies(tmp_path: Path, monkeypatch) -> None:
+    """Killed in the middle of the copy, the batches already copied stay
+    copied, and the next run carries on. (Inside alembic's transaction they
+    all rolled back with the failure, so each retry started from zero.)"""
+    import zlib
+
+    url = f"sqlite:///{(tmp_path / 'killed.db').as_posix()}"
+    tracks = {i: f'{{"samples": [], "n": {i}}}' for i in range(1, 351)}
+    _landings_at_0008(url, tracks)
+    real_compress = zlib.compress
+    calls = {"n": 0}
+
+    def dies_at_250(data, level=-1):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] == 250:
+            raise RuntimeError("killed")
+        return real_compress(data, level)
+
+    monkeypatch.setattr(zlib, "compress", dies_at_250)
+    try:
+        await run_migrations(url)
+    except RuntimeError:
+        pass
+    monkeypatch.setattr(zlib, "compress", real_compress)
+
+    assert _version(url) == "0008_landing_identity"
+    assert len(_stored_tracks(url)) == 200  # two batches of 100, committed
+    assert "approach_track" in _columns(url, "landings")
+
+    await run_migrations(url)
+
+    assert _version(url) == HEAD_REVISION
+    assert _stored_tracks(url) == tracks
+
+
+async def test_0009_downgrades_back_into_landings(tmp_path: Path) -> None:
+    url = f"sqlite:///{(tmp_path / 'down.db').as_posix()}"
+    tracks = {1: '{"samples": [1, 2, 3]}', 2: None}
+    _landings_at_0008(url, tracks)
+    await run_migrations(url)
+
+    command.downgrade(make_alembic_config(url), "0008_landing_identity")
+
+    assert "landing_tracks" not in _table_names(url)
+    engine = _engine(url)
+    try:
+        with engine.connect() as conn:
+            rows = dict(conn.execute(text("SELECT id, approach_track FROM landings")).all())
+    finally:
+        engine.dispose()
+    assert rows == tracks
+
+
+async def test_a_deleted_landing_takes_its_track_along(tmp_path: Path) -> None:
+    """Foreign keys are not enforced here and the import cleanup deletes
+    landings in bulk. SQLite reuses a deleted landing's id, so a track left
+    behind would make the next landing's insert fail on its primary key."""
+    url = f"sqlite:///{(tmp_path / 'delete.db').as_posix()}"
+    _landings_at_0008(url, {1: '{"samples": []}'})
+    await run_migrations(url)
+    engine = _engine(url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM landings"))
+            remaining = conn.execute(text("SELECT COUNT(*) FROM landing_tracks")).scalar_one()
+    finally:
+        engine.dispose()
+    assert remaining == 0

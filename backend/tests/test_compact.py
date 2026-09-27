@@ -99,6 +99,15 @@ async def test_compaction_keeps_what_the_rebuild_reads(tmp_path) -> None:
             retention_window(landing.touchdown_time, landing.touchdown_time, detection())
         )
     windows["C1"] = windows["A1"]  # the ship of the flight with the trap
+    # The schema came across whole, trigger included (app.models.entities).
+    connection = sqlite3.connect(path)
+    try:
+        triggers = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert triggers == [("landings_delete_track",)]
     for acmi_id, rows in before_rows.items():
         spans = windows.get(acmi_id)
         if acmi_id == "301":

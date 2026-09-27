@@ -114,8 +114,9 @@ async def test_list_landings_filters_and_paging(client) -> None:
 
 async def test_the_list_does_not_read_the_approach_tracks(client) -> None:
     """A list row never shows the approach, and each one is hundreds of KB
-    of JSON: the page query must leave the column out (it used to load and
-    parse up to 200 of them per page)."""
+    of JSON: the list must not touch the tracks at all (it used to load and
+    parse up to 200 of them per page, and to walk every one of them to reach
+    the columns it sorts on)."""
     from sqlalchemy import event
     from sqlalchemy.engine import Engine
 
@@ -136,7 +137,7 @@ async def test_the_list_does_not_read_the_approach_tracks(client) -> None:
     assert response.json()["total"] == 1
     page = [s for s in statements if "FROM landings" in s and "LIMIT" in s]
     assert page, statements
-    assert all("approach_track" not in s for s in page)
+    assert all("approach_track" not in s and "landing_tracks" not in s for s in statements)
 
 
 async def test_get_landing_detail_includes_approach_track(client) -> None:

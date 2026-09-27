@@ -46,7 +46,7 @@ flowchart LR
 | [`grading/deviations.py`](../backend/app/grading/deviations.py) | 進入区間の偏差（残距離・グライドスロープ偏差・横ずれ）。空母は **甲板と一緒に動く座標系**: 各サンプル時刻の艦位置・艦首方位から目標ワイヤーを置き直し、高さは甲板から測る（Tacview の AGL は海面基準なので使わない）。G の導出用に、接地時刻で固定した地面座標（`fixed_along` / `fixed_lateral`）も併せて持つ |
 | [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）と、生の航跡からの作り直し（rebuild）も担当 |
 | [`rebuild.py`](../backend/app/rebuild.py) | 保存済みの着陸を DB の生の航跡（`tracks`）から作り直すための読み戻し。機体のサンプル・同じフライトの全空母・地面基準（最寄りの艦か静的オブジェクト）をライブ取り込みと同じ形で組み立て、今の検出器が切り出したイベントのうち保存時刻 ±2 秒のものだけを同じ着陸とみなす |
-| [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸レコードには進入区間の生サンプルも JSON 保存（FR-7 再評価要件）。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
+| [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸の進入区間（FR-7 再評価要件）は別テーブル `landing_tracks` に zlib 圧縮した JSON で持ち、`Landing.approach_track` から列のように読み書きする。`landings` の行の途中に数百 KB の JSON があると、一覧が並べ替え・絞り込みに使う後ろの列を読むたびにそれを読み飛ばすことになるため（合成 1,723 件で一覧 1,025 ms → 11 ms）。着陸行を消すと進入区間も消えるトリガー付き。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
 | [`api/routes.py`](../backend/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
 | [`api/notifier.py`](../backend/app/api/notifier.py) | WebSocket 接続管理・着陸通知のブロードキャスト |
 | [`api/main.py`](../backend/app/api/main.py) | アプリケーションファクトリ。lifespan で DB 初期化・ACMI クライアント起動。CORS、SPA 静的配信 |

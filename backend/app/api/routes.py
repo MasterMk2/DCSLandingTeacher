@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import raiseload
 
 from app.api.auth import (
     require_auth,
@@ -217,7 +217,8 @@ async def list_landings(
         select(Landing, DcsObject, Flight)
         # A row of the list never shows the approach, and each one is a few
         # hundred KB of JSON: up to 200 of them were read and parsed per page.
-        .options(defer(Landing.approach_track))
+        # raiseload, not just "don't load": touching it here is a bug.
+        .options(raiseload(Landing.track))
         .join(DcsObject, Landing.object_id == DcsObject.id, isouter=True)
         .join(Flight, Landing.flight_id == Flight.id, isouter=True)
         # Nulls last whichever way round, so an ungraded row never takes the
