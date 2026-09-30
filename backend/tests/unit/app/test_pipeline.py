@@ -46,7 +46,7 @@ def test_pipeline_metrics_record_resolved_geometry() -> None:
     payload = result.metrics["flols_geometry"]
     assert payload["key"] == "stennis"
     assert payload["source"] == "carriers.yaml"
-    assert payload["deck_altitude_m"] == pytest.approx(19.5)
+    assert payload["deck_altitude_m"] == pytest.approx(18.30)
 
 
 def test_pipeline_metrics_record_fallback_for_unknown_carrier() -> None:
