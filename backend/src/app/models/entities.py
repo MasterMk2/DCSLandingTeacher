@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
-    DDL,
     JSON,
     Boolean,
     DateTime,
@@ -21,7 +20,6 @@ from sqlalchemy import (
     Index,
     LargeBinary,
     String,
-    event,
 )
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -34,7 +32,7 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class CompressedJSON(TypeDecorator):
+class CompressedJSON(TypeDecorator[object]):
     """JSON stored zlib-compressed in a BLOB.
 
     For the approach tracks: a few hundred KB of JSON each, which zlib
@@ -169,8 +167,8 @@ class Landing(Base):
     grade: Mapped[str | None] = mapped_column(String(32), nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     comment: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    factors: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    factors: Mapped[list[object] | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
     # Raw approach segment + computed deviations, kept for re-evaluation
     # (FR-7). Lives in its own table (LandingTrack); ``approach_track`` reads
@@ -210,16 +208,7 @@ class Landing(Base):
 
 
 class LandingTrack(Base):
-    """One landing's stored approach track, compressed.
-
-    Out of ``landings`` because a big value in the middle of a row is read
-    whenever a column after it is: SQLite reaches a later column by walking
-    the row's overflow pages, and ``created_at``, ``source_id``, ``pilot``
-    and ``airframe`` -- what the list sorts and filters on -- all came after
-    ``approach_track``. With 1,723 tracks of ~300 KB (synthetic, measured)
-    the list's count and page queries took 320 ms and 960 ms; with the track
-    in this table, 1.5 ms and 1 ms.
-    """
+    """One landing's compressed approach track, separate from summary fields."""
 
     __tablename__ = "landing_tracks"
 
@@ -227,17 +216,6 @@ class LandingTrack(Base):
         ForeignKey("landings.id", ondelete="CASCADE"), primary_key=True
     )
     approach_track: Mapped[Any] = mapped_column(CompressedJSON, nullable=True)
-
-
-#: SQLite does not enforce foreign keys here (no ``PRAGMA foreign_keys``), and
-#: landings are also deleted in bulk (the import cleanup). A deleted landing's
-#: id is reused by the next insert, which would then collide with the track
-#: left behind -- so the track goes with the landing, however it is deleted.
-LANDING_TRACK_TRIGGER = (
-    "CREATE TRIGGER IF NOT EXISTS landings_delete_track AFTER DELETE ON landings "
-    "BEGIN DELETE FROM landing_tracks WHERE landing_id = OLD.id; END"
-)
-event.listen(LandingTrack.__table__, "after_create", DDL(LANDING_TRACK_TRIGGER))
 
 
 class ImportJobRow(Base):

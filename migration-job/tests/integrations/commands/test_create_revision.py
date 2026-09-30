@@ -30,7 +30,7 @@ def test_create_revision_generates_next_revision_file(tmp_path: Path) -> None:
 
     create_revision('test revision', config)
 
-    revision_file = tmp_path / 'migrations' / 'versions' / '0009_test_revision.py'
+    revision_file = tmp_path / 'migrations' / 'versions' / '0010_test_revision.py'
 
     assert revision_file.is_file()
 
@@ -42,11 +42,11 @@ def test_create_revision_sets_revision_chain(tmp_path: Path) -> None:
     create_revision('test revision', config)
 
     script = ScriptDirectory.from_config(config)
-    revision = script.get_revision('0009_test_revision')
+    revision = script.get_revision('0010_test_revision')
 
     assert revision is not None
-    assert revision.revision == '0009_test_revision'
-    assert revision.down_revision == '0008_landing_identity'
+    assert revision.revision == '0010_test_revision'
+    assert revision.down_revision == '0009_landing_tracks'
 
 
 def test_create_revision_moves_head_to_new_revision(tmp_path: Path) -> None:
@@ -57,7 +57,7 @@ def test_create_revision_moves_head_to_new_revision(tmp_path: Path) -> None:
 
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ['0009_test_revision']
+    assert script.get_heads() == ['0010_test_revision']
 
 
 def test_create_revision_preserves_existing_history(tmp_path: Path) -> None:
@@ -69,6 +69,7 @@ def test_create_revision_preserves_existing_history(tmp_path: Path) -> None:
     script = ScriptDirectory.from_config(config)
     revisions = {revision.revision: revision.down_revision for revision in script.walk_revisions()}
 
-    assert revisions['0009_test_revision'] == '0008_landing_identity'
+    assert revisions['0010_test_revision'] == '0009_landing_tracks'
+    assert revisions['0009_landing_tracks'] == '0008_landing_identity'
     assert revisions['0008_landing_identity'] == '0007_import_jobs'
     assert revisions['0001_baseline'] is None
