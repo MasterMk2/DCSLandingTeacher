@@ -130,6 +130,49 @@ describe("formatMetric", () => {
     expect(text).toBe('{"alignment":98.6}');
   });
 
+  it("summarises the carrier geometry instead of dumping its JSON", () => {
+    // 甲板と一緒に動く座標で採点した記録 (deviations.py の payload そのまま)。
+    expect(
+      formatMetric("flols_geometry", {
+        key: "nimitz_supercarrier",
+        source: "carriers.yaml",
+        validated: false,
+        deck_altitude_m: 20.15,
+        ramp_along_m: -162.49,
+        ramp_lateral_m: 9.38,
+        glideslope_deg: 3.5,
+        landing_course_offset_deg: -9.1359,
+        touchdown_target_m: 79.0,
+        reference_height_m: 2.0,
+        landing_area_length_m: 250.0,
+        beam_width_m: 12.0,
+        frame: "moving_deck",
+        ship_heading_deg: 87.5,
+        ship_altitude_m: 0.0,
+        ship_speed_ms: 15.2,
+        ship_heading_change_deg: 0.4,
+      }),
+    ).toEqual({
+      label: "採点に使った着艦幾何",
+      text:
+        "nimitz_supercarrier（グライドスロープ 3.5°、アングルドデッキ 左 9.1°、" +
+        "甲板高 66 ft、狙点 ランプから 259 ft）",
+    });
+    // 狙点の無い旧 entry はグライドスロープをランプで終えていた。
+    expect(
+      formatMetric("flols_geometry", {
+        key: "kuznetsov",
+        glideslope_deg: 4.0,
+        landing_course_offset_deg: -2.0,
+        deck_altitude_m: 22.0,
+        touchdown_target_m: 0.0,
+      }).text,
+    ).toBe("kuznetsov（グライドスロープ 4.0°、アングルドデッキ 左 2.0°、甲板高 72 ft、狙点 ランプ）");
+    expect(
+      formatMetric("flols_geometry", { source: "touchdown_reference_fallback" }).text,
+    ).toBe("未登録（接地点を基準に近似）");
+  });
+
   it("labels the break kinematics and gives the load factor its unit", () => {
     // 無次元の荷重倍数はキーに接尾辞が無い。"G" を付けないと「2.31」が
     // 何の数字か分からない。
