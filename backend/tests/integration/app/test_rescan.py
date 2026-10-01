@@ -1,4 +1,4 @@
-"""Rescanning old raw tracks for landings the database never stored.
+"""PostgreSQL integration scenarios for rescanning historical raw tracks.
 
 The history is recorded the way the old ingestor wrote it -- every sample,
 through ``TrackIngestor.handle_line`` with ``keep_all_tracks`` -- and the
@@ -13,10 +13,11 @@ from datetime import timedelta
 import httpx2 as httpx
 import pytest
 from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
-from app.models.entities import DcsObject, Flight, Landing
+from app.models.entities import DcsObject, Flight, Landing, LandingTrack
 from app.pipeline import LandingPipeline
 from app.rescan import FlightNotFound, rescan_flight
 from tests.case1 import fly_case1
@@ -25,20 +26,26 @@ from tests.helpers import create_test_schema, make_acmi_text, make_approach_samp
 from tests.test_track_retention import CARRIERS_YAML, ingest, landings, pipeline_for
 
 
-async def flight_id(session_factory) -> int:
+async def flight_id(session_factory: async_sessionmaker[AsyncSession]) -> int:
     async with session_factory() as session:
         return (await session.execute(select(Flight.id))).scalar_one()
 
 
-async def test_a_landing_that_was_never_stored_is_found_and_stored(session_factory) -> None:
+async def test_a_landing_that_was_never_stored_is_found_and_stored(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     lines = make_acmi_text(
         make_approach_samples(duration_before_s=900.0, ground_time_s=60.0), include_carrier=False
     ).splitlines()
-    await ingest(session_factory, lines, keep_all=True)
+    _ = await ingest(session_factory, lines, keep_all=True)
     (original,) = await landings(session_factory)
     async with session_factory() as session:
-        await session.execute(delete(Landing))
+        _ = await session.execute(delete(Landing))
         await session.commit()
+        # Deleting a landing also removes its stored approach track.
+        assert (
+            await session.execute(select(func.count()).select_from(LandingTrack))
+        ).scalar_one() == 0
     flight = await flight_id(session_factory)
     pipeline = pipeline_for(session_factory)
 
@@ -66,6 +73,7 @@ async def test_a_landing_that_was_never_stored_is_found_and_stored(session_facto
     # created at the first sample (t=100), the touchdown is 900 s later.
     async with session_factory() as session:
         flight_row = await session.get(Flight, flight)
+    assert flight_row is not None
     assert created.created_at == flight_row.created_at + timedelta(seconds=900.0)
 
     again = await rescan_flight(session_factory, pipeline, flight, apply=True)
@@ -75,7 +83,9 @@ async def test_a_landing_that_was_never_stored_is_found_and_stored(session_facto
     assert len(await landings(session_factory)) == 1
 
 
-async def test_a_trap_live_ingest_could_not_see_is_found(session_factory) -> None:
+async def test_a_trap_live_ingest_could_not_see_is_found(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     """The case this exists for. Until 2026-09-06 the deck height was never
     known to the detector, so a jet standing on CVN_73 read 22 m above the
     sea and no trap was ever stored. The raw track still holds it."""
@@ -118,11 +128,13 @@ async def test_a_trap_live_ingest_could_not_see_is_found(session_factory) -> Non
     assert rebuilt.approach_track == trap.approach_track
 
 
-async def test_stored_rows_it_cannot_find_are_reported_not_touched(session_factory) -> None:
+async def test_stored_rows_it_cannot_find_are_reported_not_touched(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     lines = make_acmi_text(
         make_approach_samples(duration_before_s=300.0, ground_time_s=30.0), include_carrier=False
     ).splitlines()
-    await ingest(session_factory, lines, keep_all=True)
+    _ = await ingest(session_factory, lines, keep_all=True)
     (real,) = await landings(session_factory)
     # An old row at an instant the jet was flying at a few hundred metres.
     assert real.touchdown_time is not None
@@ -148,13 +160,15 @@ async def test_stored_rows_it_cannot_find_are_reported_not_touched(session_facto
     assert report.landings[0].existing_landing_id == real.id
     assert report.stored_not_redetected == [junk_id]
     async with session_factory() as session:
-        assert (await session.get(Landing, junk_id)).grade == "CUT"
+        stored_junk = await session.get(Landing, junk_id)
+        assert stored_junk is not None
+        assert stored_junk.grade == "CUT"
         assert (await session.execute(select(func.count()).select_from(Landing))).scalar_one() == 2
 
 
-async def test_an_unknown_flight(session_factory) -> None:
+async def test_an_unknown_flight(session_factory: async_sessionmaker[AsyncSession]) -> None:
     with pytest.raises(FlightNotFound):
-        await rescan_flight(session_factory, pipeline_for(session_factory), 42, apply=False)
+        _ = await rescan_flight(session_factory, pipeline_for(session_factory), 42, apply=False)
 
 
 async def test_the_flights_and_rescan_endpoints(database_url: str) -> None:
@@ -174,7 +188,7 @@ async def test_the_flights_and_rescan_endpoints(database_url: str) -> None:
         make_approach_samples(duration_before_s=300.0, ground_time_s=30.0), include_carrier=False
     ).splitlines()
     async with app.router.lifespan_context(app):
-        await ingest(app.state.session_factory, lines, keep_all=True)
+        _ = await ingest(app.state.session_factory, lines, keep_all=True)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
             flights = await http.get("/api/v1/flights")
@@ -215,9 +229,9 @@ async def test_two_applied_rescans_of_one_flight_store_a_landing_once(database_u
         make_approach_samples(duration_before_s=300.0, ground_time_s=30.0), include_carrier=False
     ).splitlines()
     async with app.router.lifespan_context(app):
-        await ingest(app.state.session_factory, lines, keep_all=True)
+        _ = await ingest(app.state.session_factory, lines, keep_all=True)
         async with app.state.session_factory() as session:
-            await session.execute(delete(Landing))
+            _ = await session.execute(delete(Landing))
             await session.commit()
         flight = await flight_id(app.state.session_factory)
         transport = httpx.ASGITransport(app=app)
@@ -233,7 +247,9 @@ async def test_two_applied_rescans_of_one_flight_store_a_landing_once(database_u
     assert sorted(r.json()["new_landings"] for r in (first, second)) == [0, 1]
 
 
-async def test_a_contact_on_a_dropped_position_does_not_break_the_rescan(session_factory) -> None:
+async def test_a_contact_on_a_dropped_position_does_not_break_the_rescan(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     """A respawn: after its landing the jet is airborne once more, then
     reappears 170 km away standing on the ground. That first sample is
     dropped as a jump -- its time kept, its coordinates not -- and it is the
@@ -256,7 +272,7 @@ async def test_a_contact_on_a_dropped_position_does_not_break_the_rescan(session
         "#1041", f"101,T={far},OnGround=1",
         "#1042", f"101,T={far},OnGround=1",
     ]
-    await ingest(session_factory, lines, keep_all=True)
+    _ = await ingest(session_factory, lines, keep_all=True)
     (stored,) = await landings(session_factory)
 
     report = await rescan_flight(

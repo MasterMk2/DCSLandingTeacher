@@ -38,13 +38,13 @@ def database_url(tmp_path: Path) -> Iterator[str]:
     schema = f"dlt_backend_{uuid4().hex}"
     admin = create_sync_engine(test_url)
     with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        _ = connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     scoped_url = make_url(test_url).update_query_dict({"options": f"-csearch_path={schema}"})
     try:
         yield scoped_url.render_as_string(hide_password=False)
     finally:
         with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+            _ = connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         admin.dispose()
 
 
