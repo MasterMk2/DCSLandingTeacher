@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TypedDict
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -205,7 +206,7 @@ def test_websocket_receives_new_landing_events(settings) -> None:
     app = create_app(settings)
     with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as tc:
         # Events broadcast before connecting are replayed on connect.
-        asyncio.run(tc.app.state.notifier.broadcast_landing({"id": 7, "grade": "OK"}))
+        asyncio.run(app.state.notifier.broadcast_landing({"id": 7, "grade": "OK"}))
         with tc.websocket_connect("/api/ws/landings") as ws:
             message = ws.receive_json()
             assert message["type"] == "landing"
@@ -217,7 +218,7 @@ def test_websocket_receives_landing_update_messages(settings) -> None:
     app = create_app(settings)
     with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as tc:
         asyncio.run(
-            tc.app.state.notifier.broadcast_landing(
+            app.state.notifier.broadcast_landing(
                 {"id": 8, "grade": "OK", "outcome_status": "final"},
                 message_type="landing_update",
             )
@@ -303,7 +304,11 @@ async def test_detail_serves_every_stored_sample_field(client) -> None:
             assert any(v is not None for v in served), f"{field} dropped by the API"
 
 
-async def _stored_track(session_factory, landing_id: int) -> dict:
+class StoredTrack(TypedDict):
+    samples: list[dict[str, object]]
+
+
+async def _stored_track(session_factory, landing_id: int) -> StoredTrack:
     from app.models.entities import Landing
 
     async with session_factory() as session:

@@ -13,7 +13,7 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TypedDict, Unpack
+from typing import NotRequired, TypedDict, Unpack
 
 import httpx2
 from alembic import command
@@ -58,6 +58,16 @@ class ApiSettingsOverrides(TypedDict, total=False):
     auth_token: str
     grading_config_path: str
     import_max_upload_mb: int
+
+
+class AircraftTrack(TypedDict):
+    """Aircraft identity and samples rendered into an interleaved ACMI stream."""
+
+    obj_id: str
+    samples: list[TrackSample]
+    name: NotRequired[str]
+    pilot: NotRequired[str]
+    type: NotRequired[str]
 
 
 def database_url_for_test(tmp_path: Path, filename: str) -> str:
@@ -321,7 +331,7 @@ def make_acmi_text(
     if include_carrier:
         lines.append("#0")
         lines.append(
-            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
+            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,T={LON0}|{LAT0}|0|0|0|0"
         )
     for sample in samples:
         absolute = base_time + sample.time
@@ -347,7 +357,7 @@ def make_acmi_text(
 
 
 def make_acmi_text_multi(
-    aircraft: list[dict],
+    aircraft: list[AircraftTrack],
     *,
     include_carrier: bool = True,
     carrier_obj_id: str = "102",
@@ -369,10 +379,10 @@ def make_acmi_text_multi(
     if include_carrier:
         lines.append("#0")
         lines.append(
-            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,T={LON0}|{LAT0}|{DECK_ALTITUDE_M}|0|0|0"
+            f"{carrier_obj_id},Type=Sea+Watercraft+AircraftCarrier,Name=CV-59,T={LON0}|{LAT0}|0|0|0|0"
         )
 
-    events: list[tuple[float, int, str, TrackSample, dict]] = []
+    events: list[tuple[float, int, str, TrackSample, AircraftTrack]] = []
     for index, spec in enumerate(aircraft):
         for _, sample in enumerate(spec["samples"]):
             absolute = base_time + sample.time

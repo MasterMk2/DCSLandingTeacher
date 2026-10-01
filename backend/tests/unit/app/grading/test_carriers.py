@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.detection.detector import analyze_track
 from app.detection.geometry import offset_position
@@ -130,7 +131,8 @@ def test_resolve_prefers_type_over_name() -> None:
     resolved = book.resolve("alpha", "type_bravo")
     assert resolved is not None and resolved.key == "bravo"
     # Name-only resolution still works when Type is absent.
-    assert book.resolve("alpha", None).key == "alpha"
+    by_name = book.resolve("alpha", None)
+    assert by_name is not None and by_name.key == "alpha"
 
 
 def test_resolve_logs_warning_on_fallback(caplog) -> None:
@@ -158,8 +160,8 @@ def test_yaml_values_are_documented_as_estimates() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _geometry(**overrides) -> FlolsGeometry:
-    values = dict(
+def _geometry() -> FlolsGeometry:
+    return FlolsGeometry(
         key="stennis",
         deck_altitude_m=DECK_ALTITUDE_M,
         ramp_along_m=-130.0,
@@ -167,8 +169,6 @@ def _geometry(**overrides) -> FlolsGeometry:
         glideslope_deg=3.5,
         landing_course_offset_deg=9.0,
     )
-    values.update(overrides)
-    return FlolsGeometry(**values)
 
 
 def _ramp_aligned_event(
@@ -317,7 +317,7 @@ def _carrier_context(name: str, type_str: str | None = None):
 
 def test_pipeline_metrics_record_resolved_geometry() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)
-    pipeline = LandingPipeline(None, CONFIG, carrier_geometry_book=book)
+    pipeline = LandingPipeline(async_sessionmaker(), CONFIG, carrier_geometry_book=book)
     context = _carrier_context("Stennis", "Sea+Watercraft+AircraftCarrier")
 
     analysis, result, _score = pipeline._grade(context)  # noqa: SLF001
@@ -332,7 +332,7 @@ def test_pipeline_metrics_record_resolved_geometry() -> None:
 
 def test_pipeline_metrics_record_fallback_for_unknown_carrier() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)
-    pipeline = LandingPipeline(None, CONFIG, carrier_geometry_book=book)
+    pipeline = LandingPipeline(async_sessionmaker(), CONFIG, carrier_geometry_book=book)
     context = _carrier_context("Mystery CV", "Sea+Watercraft+AircraftCarrier")
 
     analysis, result, _score = pipeline._grade(context)  # noqa: SLF001
@@ -342,7 +342,9 @@ def test_pipeline_metrics_record_fallback_for_unknown_carrier() -> None:
 
 
 def test_empty_book_behaves_like_legacy_approximation() -> None:
-    pipeline = LandingPipeline(None, CONFIG, carrier_geometry_book=CarrierGeometryBook({}))
+    pipeline = LandingPipeline(
+        async_sessionmaker(), CONFIG, carrier_geometry_book=CarrierGeometryBook({})
+    )
     context = _carrier_context("Stennis")
 
     analysis, result, _score = pipeline._grade(context)  # noqa: SLF001

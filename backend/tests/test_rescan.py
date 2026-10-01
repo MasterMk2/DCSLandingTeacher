@@ -21,7 +21,7 @@ from app.pipeline import LandingPipeline
 from app.rescan import FlightNotFound, rescan_flight
 from tests.case1 import fly_case1
 from tests.conftest import GRADING_YAML
-from tests.helpers import make_acmi_text, make_approach_samples
+from tests.helpers import create_test_schema, make_acmi_text, make_approach_samples
 from tests.test_track_retention import CARRIERS_YAML, ingest, landings, pipeline_for
 
 
@@ -106,6 +106,7 @@ async def test_a_trap_live_ingest_could_not_see_is_found(session_factory) -> Non
             await session.execute(select(DcsObject.id).where(DcsObject.acmi_id == "C1"))
         ).scalar_one()
     assert trap.carrier_object_id == ship
+    assert trap.metrics is not None
     assert trap.metrics["deck_frame"] == "moving_deck"
     assert trap.metrics["pattern_entry"] == "initial"
 
@@ -124,6 +125,7 @@ async def test_stored_rows_it_cannot_find_are_reported_not_touched(session_facto
     await ingest(session_factory, lines, keep_all=True)
     (real,) = await landings(session_factory)
     # An old row at an instant the jet was flying at a few hundred metres.
+    assert real.touchdown_time is not None
     async with session_factory() as session:
         junk = Landing(
             flight_id=real.flight_id,
@@ -155,13 +157,14 @@ async def test_an_unknown_flight(session_factory) -> None:
         await rescan_flight(session_factory, pipeline_for(session_factory), 42, apply=False)
 
 
-async def test_the_flights_and_rescan_endpoints(tmp_path) -> None:
+async def test_the_flights_and_rescan_endpoints(database_url: str) -> None:
     from app.api.main import create_app
     from app.config import Settings
 
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             carriers_config_path=str(CARRIERS_YAML),
@@ -190,7 +193,7 @@ async def test_the_flights_and_rescan_endpoints(tmp_path) -> None:
     assert missing.status_code == 404
 
 
-async def test_two_applied_rescans_of_one_flight_store_a_landing_once(tmp_path) -> None:
+async def test_two_applied_rescans_of_one_flight_store_a_landing_once(database_url: str) -> None:
     """A client that timed out and retried while the first rescan was still
     running: each decides "already stored?" from what it read at the start,
     so run side by side they would both store the landing."""
@@ -199,9 +202,10 @@ async def test_two_applied_rescans_of_one_flight_store_a_landing_once(tmp_path) 
     from app.api.main import create_app
     from app.config import Settings
 
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             carriers_config_path=str(CARRIERS_YAML),
