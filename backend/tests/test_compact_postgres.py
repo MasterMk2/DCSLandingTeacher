@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import os
 from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
@@ -20,10 +19,8 @@ GRADING_YAML = Path(__file__).resolve().parents[2] / 'config' / 'grading.yaml'
 
 
 @pytest.fixture
-def postgres_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    test_url = os.getenv('DLT_TEST_POSTGRES_URL')
-    if not test_url:
-        pytest.skip('DLT_TEST_POSTGRES_URL is required for PostgreSQL integration tests')
+def postgres_url(test_postgres_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    test_url = test_postgres_url
     monkeypatch.setenv('DLT_GRADING_CONFIG_PATH', str(GRADING_YAML))
 
     schema = f'dlt_compact_{uuid4().hex}'
