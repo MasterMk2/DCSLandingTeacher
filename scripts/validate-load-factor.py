@@ -26,7 +26,7 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend" / "src"))
 
 from app.grading.kinematics import fit_kinematics, reject_position_outliers  # noqa: E402
 
