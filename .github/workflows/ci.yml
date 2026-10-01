@@ -112,6 +112,9 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+      - name: SQLite to PostgreSQL migration tests
+        run: uv run pytest ../scripts/tests/test_migrate_sqlite.py -q
+
   compose:
     name: Validate Docker Compose
     runs-on: ubuntu-latest
