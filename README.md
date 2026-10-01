@@ -127,6 +127,9 @@ docker compose up --build
 `DLT_TACVIEW_PORT=31010` を明示してください。複数ソースの JSON 設定でも
 各ソースの `port` を指定できます。未使用だった `DLT_RECONNECT_*` は廃止しています。
 
+滑走路キャッシュは名前付きボリューム `runway_cache` の `/data/cache` に保存します。
+以前の匿名ボリュームの引き継ぎ方法は [滑走路キャッシュの手順](docs/runway-cache.md) を参照してください。
+
 ### データベースマイグレーション
 
 スキーマ管理には、Alembic を使用する `migration-job` を利用しています。
