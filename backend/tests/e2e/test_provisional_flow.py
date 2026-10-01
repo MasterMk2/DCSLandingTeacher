@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.grading.config import GradingConfig
 from app.ingest import TrackIngestor
-from app.models.entities import Landing
+from app.models.entities import DcsObject, Flight, Landing
 from app.pipeline import LandingPipeline
 from tests.helpers import make_acmi_text, make_approach_samples
 
@@ -244,19 +244,27 @@ async def test_startup_settles_provisional_rows_left_by_a_previous_run(
     from app.api.main import settle_orphaned_provisionals
 
     async with session_factory() as session:
+        flight = Flight()
+        session.add(flight)
+        await session.flush()
+        aircraft = DcsObject(
+            flight_id=flight.id, acmi_id="101", first_seen=0.0, last_seen=100.0
+        )
+        session.add(aircraft)
+        await session.flush()
         session.add_all(
             [
                 Landing(
-                    flight_id=1,
-                    object_id=1,
+                    flight_id=flight.id,
+                    object_id=aircraft.id,
                     kind="land",
                     outcome="full_stop",
                     outcome_status="provisional",
                     touchdown_time=100.0,
                 ),
                 Landing(
-                    flight_id=1,
-                    object_id=1,
+                    flight_id=flight.id,
+                    object_id=aircraft.id,
                     kind="land",
                     outcome="touch_and_go",
                     outcome_status="final",
