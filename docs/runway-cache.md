@@ -33,4 +33,4 @@ docker compose up -d api
 
 キャッシュを引き継がず DCSServerBot から再取得してもよい。同梱 exact seed のある
 マップは、再取得したライブキャッシュより exact seed を優先する。引き継ぎ後は
-`GET /api/v1/runways/theatres` で収録マップを確認する。
+`GET /api/v1/runways` で収録マップを確認する。

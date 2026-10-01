@@ -26,11 +26,15 @@ uv sync --frozen --no-install-project
 cp ../.env.example .env
 ```
 
+API はスキーマを作成しません。起動前に、設定した `DLT_DATABASE_URL` と同じ
+PostgreSQL の接続先へ [migration-job を適用](#データベースマイグレーションalembic) してください。
+新規 DB は migration-job の実行後に API を起動します。
+
 API 単体で動かす場合は ACMI 受信を無効化すると Tacview なしで起動できます:
 
 ```bash
-# Windows (cmd)
-set PYTHONPATH=src&& set DLT_ACMI_ENABLED=false&& set DLT_GRADING_CONFIG_PATH=../config/grading.yaml&& set DLT_CARRIERS_CONFIG_PATH=../config/carriers.yaml&& uv run uvicorn app.api.main:create_app --factory --port 8000
+# PowerShell
+$env:PYTHONPATH="src"; $env:DLT_ACMI_ENABLED="false"; $env:DLT_GRADING_CONFIG_PATH="../config/grading.yaml"; $env:DLT_CARRIERS_CONFIG_PATH="../config/carriers.yaml"; uv run uvicorn app.api.main:create_app --factory --port 8000
 # Linux
 PYTHONPATH=src DLT_ACMI_ENABLED=false DLT_GRADING_CONFIG_PATH=../config/grading.yaml DLT_CARRIERS_CONFIG_PATH=../config/carriers.yaml uv run uvicorn app.api.main:create_app --factory --port 8000
 ```
@@ -72,8 +76,21 @@ docker compose run --rm migration-job
 ```
 
 - スクリプト配置: [`migration-job/migrations/`](../migration-job/migrations/)
-- 既存の SQLite ボリュームは PostgreSQL へ自動移行されません。データを残す場合は
-  別途エクスポート・インポートしてから切り替えます。
+- 既存の SQLite ボリュームは自動移行されません。[移行 CLI と照合手順](sqlite-to-postgresql.md) に従って切り替えます。
+- [トラック整理](track-compaction.md) は PostgreSQL の保持窓と参照整合性を確認してから実行します。
+
+ローカルで migration-job を実行する場合は、backend の metadata を読み込めるようにします。
+接続情報は `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD` で設定します。
+
+```powershell
+cd migration-job
+$env:PYTHONPATH="../backend/src"
+uv sync --frozen --no-install-project
+uv run migration-job
+uv run migration-job-revision "add landing field"
+```
+
+revision コマンドは既存 head の次にファイルを作成します。テーブル変更は生成ファイルへ記述します。
 
 ## テスト
 
@@ -87,7 +104,24 @@ uv run pytest tests/unit/app/grading/test_land_grader.py -q   # 特定ファイ�
 
 - `asyncio_mode = "auto"` のため async テストはデコレータ不要
 - フィクスチャ: `tests/fixtures/sample.acmi`、共通ヘルパーは `tests/conftest.py` / `tests/helpers.py`
-- バックエンドの単体テストは一時 SQLite を使用する。実運用の接続先とスキーマ管理は PostgreSQL と `migration-job`。
+- DB を使う integration 層は PostgreSQL 専用です。検証専用 DB の URL を `DLT_TEST_POSTGRES_URL` に設定して実行します。未設定の場合は integration テストをスキップします。
+- PostgreSQL テストはテストごとに専用スキーマを作り、Alembic の head を適用して終了時に削除します。検証先に実運用 DB を指定しないでください。単体テストの一部は一時 SQLite を使います。
+- Windows の PostgreSQL 非同期テストと WebSocket クライアントは psycopg が対応する selector loop を使用します。
+
+```powershell
+cd backend
+$env:DLT_TEST_POSTGRES_URL="postgresql+psycopg://<user>:<password>@localhost:5432/<test-db>"
+uv run pytest -q
+```
+
+migration-job 側でも同じ検証用 URL と `PYTHONPATH=../backend/src` を指定します。
+`uv run pytest -q` は空 DB の upgrade/check/downgrade、再実行、既存データの補完、
+意図した schema drift の検出を確認します。移行 CLI は次の独立したテストです。
+
+```powershell
+cd migration-job
+uv run pytest ../scripts/tests/test_migrate_sqlite.py -q
+```
 
 ### フロントエンド（vitest）
 
@@ -119,7 +153,7 @@ docker compose down -v        # データも削除
 フロントエンド単体イメージ（nginx 構成、任意）:
 
 ```bash
-docker build -f docker/frontend.Dockerfile -t dlt-frontend .
+docker build -f docker/frontend/Dockerfile -t dlt-frontend .
 ```
 
 ## CI
@@ -128,9 +162,9 @@ docker build -f docker/frontend.Dockerfile -t dlt-frontend .
 
 | ジョブ | 内容 |
 |---|---|
-| backend | Python 3.11 / `uv sync --frozen --no-install-project` → `uv run ruff check .` → `uv run pytest -q` |
+| backend | Python 3.11 / PostgreSQL 18 / `uv sync --frozen --no-install-project` → `uv run ruff check .` → `uv run pytest -q` |
 | frontend | Node 20 / `npm ci` → `npm run build` → `npm test` |
-| migration-job | Python 3.11 / `uv sync --frozen --no-install-project` → `uv run ruff check .` → `uv run basedpyright` → `uv run pytest -q` |
+| migration-job | Python 3.11 / PostgreSQL 18 / backend metadata / 同期・Ruff・basedpyright・migration テスト・SQLite 移行 CLI テスト |
 | compose | PostgreSQL 環境変数を設定して `docker compose config --quiet` → `docker compose build` |
 
 ローカルで CI と同じことを確認するには上記コマンドをそのまま実行してください。シークレットは不要です。

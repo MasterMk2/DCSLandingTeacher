@@ -14,19 +14,12 @@ Tacview の ACMI データストリームから記録・評価し、ブラウザ
 - Web UI での閲覧
   - 着陸履歴ダッシュボード（プレイヤー / 機体 / 場所 / グレード等でフィルタ）
   - **GCA（PAR）スコープ風ビュー**：最終進入の方位角・仰角軌跡をレーダースコープ風に描画
-  - トップダウン軌跡ビュー、時系列チャート（偏差・速度・AOA・降下率）
+  - トップダウン・3D 軌跡ビュー、時系列チャート（偏差・速度・AOA・降下率）
+  - 空母 Case I パターンの測定・講評と、艦の座標系での軌跡表示
   - 着陸検出のリアルタイム通知（WebSocket）
   - CSV エクスポート
 
 要件の詳細は [`plans/requirements.md`](./plans/requirements.md)、実装構成は [`docs/architecture.md`](./docs/architecture.md) を参照してください。
-
-## スクリーンショット
-
-<!-- TODO: 公開前に実際のスクリーンショットを差し替えてください -->
-
-| ダッシュボード | GCA スコープ | 時系列チャート |
-| :---: | :---: | :---: |
-| ![dashboard](docs/images/dashboard.png) | ![gca-scope](docs/images/gca-scope.png) | ![timeseries](docs/images/timeseries.png) |
 
 ## システム構成（概要）
 
@@ -100,7 +93,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-- `.env.example` をコピーした設定では、ブラウザで `http://localhost:8080` を開くと Web UI が表示されます。`DLT_PORT` を設定しない場合、Compose 側の既定値は `8080` です
+- `.env.example` をコピーした設定では、ブラウザで `http://localhost:8000` を開くと Web UI が表示されます。`DLT_PORT` を設定しない場合、Compose 側の既定値は `8080` です
 - PostgreSQL データは名前付きボリューム `postgres_data` に永続化されます
 - `config/grading.yaml` は読み取り専用でマウントされます。評価閾値を編集した後に再評価 API を呼び出すと、変更がすぐに反映されます
 - Linux では `host.docker.internal` が `extra_hosts` 設定によりホスト OS を指します（DCS + Tacview が同一ホストで動いている場合の既定値）
@@ -139,6 +132,11 @@ Compose は、PostgreSQL の起動後に `migration-job` を一度実行して�
 ```bash
 docker compose run --rm migration-job  # 未適用マイグレーションの適用
 ```
+
+既存の SQLite データを残す場合は [SQLite → PostgreSQL 移行手順](docs/sqlite-to-postgresql.md) を参照してください。
+生の航跡の保持範囲と、安全に不要な track を整理する方法は [トラック整理手順](docs/track-compaction.md) にあります。
+指定した設定が欠落した場合は、イメージ内の同梱設定へ切り替えて WARNING を記録します。
+ホストの設定ファイルは同梱版より優先され、滑走路 exact seed はライブキャッシュより優先されます。
 
 詳細な環境変数一覧は [`.env.example`](.env.example) を参照してください。
 

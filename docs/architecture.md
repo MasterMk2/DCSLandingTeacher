@@ -11,45 +11,46 @@ flowchart LR
     ING --> PARSER[ACMI Parser<br/>app.acmi.parser]
     PARSER --> DETECTOR[Landing Detector<br/>app.detection]
     DETECTOR --> GRADER[LSO / Land Grader<br/>app.grading]
-    GRADER --> DB[(SQLite)]
+    GRADER --> DB[(PostgreSQL)]
     PARSER -- 進入区間生データ --> DB
     API[FastAPI Server<br/>app.api] --> DB
-    API -- "REST + WebSocket (/api)" --> UI[React Frontend]
+    API -- "REST + WebSocket (/api/v1)" --> UI[React Frontend]
     UI --> SHEET[CSV エクスポート]
 ```
 
-本番（Docker / `docker-compose.yml`）では React フロントエンドをビルドした成果物
-（`frontend/dist`）を FastAPI が静的配信する **1 コンテナ構成**です。
+本番（Docker / `docker-compose.yml`）では reverse-proxy が frontend と API へ転送します。
+React の成果物は frontend の nginx が配信し、API は `9001` で待ち受けます。
+PostgreSQL と、起動前にスキーマを更新する migration-job は別サービスです。
 開発時は Vite dev server が `/api` をバックエンドへプロキシします（`frontend/vite.config.ts`）。
 
-## バックエンド（backend/app）
+## バックエンド（backend/src/app）
 
 | モジュール | 責務 |
 |---|---|
-| [`acmi/stream.py`](../backend/app/acmi/stream.py) | Tacview Realtime Telemetry への TCP 接続。XtraLib ハンドシェイク（`handshake.py`）、自動再接続（指数バックオフ）。ハンドシェイク直後の圧縮ストリーム（gzip / zlib / raw deflate）を先頭バイトから自動判別して透過展開する（Issue #2）。展開失敗時はエラーログを出し、接続断として再接続する |
-| [`acmi/parser.py`](../backend/app/acmi/parser.py) | ACMI 2.2 Text の行解釈: Time ヘッダ管理、`-`/`+` オブジェクト更新行、イベント行 |
-| [`acmi/file_reader.py`](../backend/app/acmi/file_reader.py) | 保存済み .acmi / .acmi.zip ファイルの再生（テスト・再評価用） |
-| [`ingest.py`](../backend/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給。生の航跡（`tracks`）は着陸の前後だけを書く（下記「生の航跡の保持」） |
-| [`retention.py`](../backend/app/retention.py) | 生の航跡をどこまで残すかの定義（rebuild が読む範囲と、取り込み・一括縮小が残す範囲）。三者がずれないよう、ここだけで決める |
-| [`rescan.py`](../backend/app/rescan.py) | DB に残る生の航跡を今の検出器で洗い直し、記録されていない着陸を拾う（`POST /api/v1/flights/{id}/rescan`）。ライブ取り込みと同じ判定で接地を探し、rebuild と同じ切り方で検出し直す |
-| [`compact.py`](../backend/app/compact.py) | 保持の仕組みより前に記録された DB を、残す範囲だけの新しいファイルへ一度だけ縮める CLI（`python -m app.compact`、アプリ停止中に実行） |
-| [`importer.py`](../backend/app/importer.py) | ACMI ファイルインポート（`POST /api/import`）。アップロードされた記録をリアルタイムと同一の ingest→検出→採点パイプラインでバックグラウンド処理し、ジョブ状態を管理。既存着陸との重複は `ReferenceTime`＋タッチダウン時刻＋機体 ID で判定してスキップ |
-| [`api/imports.py`](../backend/app/api/imports.py) | インポート REST エンドポイント（認証対象）: `POST /api/import`、`GET /api/imports`、`GET /api/imports/{id}` |
-| [`detection/`](../backend/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
-| [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与。BURBLE のみヒューリスティック検出（下記「BURBLE 検出について」） |
-| [`grading/carrier_pattern.py`](../backend/app/grading/carrier_pattern.py) | 空母 Case I パターンの読み取り（測定と講評のみ）。着艦区域の座標系を艦自身の座標系（x = 艦首方向、y = 右舷）へ剛体変換し、陸上のパターン解析（`pattern.py`）でブレイク（キスオフ）とダウンウィンドを切り出したうえで、アビーム・90・ウェイク・グルーブ時間・接地時の沈下（フレアの有無）を測る |
-| [`grading/land_grader.py`](../backend/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
-| [`grading/pattern.py`](../backend/app/grading/pattern.py) | 対地トラックによる進入の区間分割（イニシャル / ブレイク / ダウンウィンド / ベース / ファイナル）と、オーバーヘッドパターン固有のメトリクス（旋回明けの軸ずれ、ダウンウィンド方位・高度、ブレイクの高度変動と **G・バンク角・進入速度・旋回量**）。G 系は測定のみで採点しない |
-| [`grading/kinematics.py`](../backend/app/grading/kinematics.py) | 進入軌跡（滑走路座標系の位置 ~5 Hz）の局所 2 次フィットから速度・加速度を導き、法線荷重倍数（G）と旋回率を各サンプルに付ける。ACMI に加速度計の値は無いのでここで導く。採点・再採点のたびに計算し直す。実記録の Roll との突き合わせは [`grading-references.md`](grading-references.md) を参照 |
-| [`grading/config.py`](../backend/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
-| [`grading/carriers.py`](../backend/app/grading/carriers.py) | `config/carriers.yaml`（艦別の着艦区域ジオメトリ、Issue #3）の読み込みと解決。米空母の値は MOOSE AIRBOSS から（アングルドデッキは左舷へ 9.14°、グライドスロープの終点は 3 番ワイヤーの 2 m 上）。**このサーバの実トラップでは未検証**（`validated: false`） |
-| [`grading/deviations.py`](../backend/app/grading/deviations.py) | 進入区間の偏差（残距離・グライドスロープ偏差・横ずれ）。空母は **甲板と一緒に動く座標系**: 各サンプル時刻の艦位置・艦首方位から目標ワイヤーを置き直し、高さは甲板から測る（Tacview の AGL は海面基準なので使わない）。G の導出用に、接地時刻で固定した地面座標（`fixed_along` / `fixed_lateral`）も併せて持つ |
-| [`pipeline.py`](../backend/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）と、生の航跡からの作り直し（rebuild）も担当 |
-| [`rebuild.py`](../backend/app/rebuild.py) | 保存済みの着陸を DB の生の航跡（`tracks`）から作り直すための読み戻し。機体のサンプル・同じフライトの全空母・地面基準（最寄りの艦か静的オブジェクト）をライブ取り込みと同じ形で組み立て、今の検出器が切り出したイベントのうち保存時刻 ±2 秒のものだけを同じ着陸とみなす |
-| [`models/`](../backend/app/models/) | SQLAlchemy (async, aiosqlite) エンティティ。着陸の進入区間（FR-7 再評価要件）は別テーブル `landing_tracks` に zlib 圧縮した JSON で持ち、`Landing.approach_track` から列のように読み書きする。`landings` の行の途中に数百 KB の JSON があると、一覧が並べ替え・絞り込みに使う後ろの列を読むたびにそれを読み飛ばすことになるため（合成 1,723 件で一覧 1,025 ms → 11 ms）。着陸行を消すと進入区間も消えるトリガー付き。スキーマは Alembic マイグレーションで管理（[`migrations/`](../backend/migrations/)、起動時自動適用） |
-| [`api/routes.py`](../backend/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
-| [`api/notifier.py`](../backend/app/api/notifier.py) | WebSocket 接続管理・着陸通知のブロードキャスト |
-| [`api/main.py`](../backend/app/api/main.py) | アプリケーションファクトリ。lifespan で DB 初期化・ACMI クライアント起動。CORS、SPA 静的配信 |
+| [`acmi/stream.py`](../backend/src/app/acmi/stream.py) | Tacview Realtime Telemetry への TCP 接続。XtraLib ハンドシェイク（`handshake.py`）、自動再接続（指数バックオフ）。ハンドシェイク直後の圧縮ストリーム（gzip / zlib / raw deflate）を先頭バイトから自動判別して透過展開する（Issue #2）。展開失敗時はエラーログを出し、接続断として再接続する |
+| [`acmi/parser.py`](../backend/src/app/acmi/parser.py) | ACMI 2.2 Text の行解釈: Time ヘッダ管理、`-`/`+` オブジェクト更新行、イベント行 |
+| [`acmi/file_reader.py`](../backend/src/app/acmi/file_reader.py) | 保存済み .acmi / .acmi.zip ファイルの再生（テスト・再評価用） |
+| [`ingest.py`](../backend/src/app/ingest.py) | パース結果から機体ごとのサンプルリングバッファを維持し、検出器へ供給。生の航跡（`tracks`）は着陸の前後だけを書く（下記「生の航跡の保持」） |
+| [`retention.py`](../backend/src/app/retention.py) | 生の航跡をどこまで残すかの定義（rebuild が読む範囲と、取り込み・一括縮小が残す範囲）。三者がずれないよう、ここだけで決める |
+| [`rescan.py`](../backend/src/app/rescan.py) | DB に残る生の航跡を今の検出器で洗い直し、記録されていない着陸を拾う（`POST /api/v1/flights/{id}/rescan`）。ライブ取り込みと同じ判定で接地を探し、rebuild と同じ切り方で検出し直す |
+| [`compact.py`](../backend/src/app/compact.py) | 保持の仕組みより前に記録された DB を、保持窓外の track を PostgreSQL 上で削除する CLI（`python -m app.compact`、アプリ停止中に実行） |
+| [`importer.py`](../backend/src/app/importer.py) | ACMI ファイルインポート（`POST /api/import`）。アップロードされた記録をリアルタイムと同一の ingest→検出→採点パイプラインでバックグラウンド処理し、ジョブ状態を管理。既存着陸との重複は `ReferenceTime`＋タッチダウン時刻＋機体 ID で判定してスキップ |
+| [`api/imports.py`](../backend/src/app/api/imports.py) | インポート REST エンドポイント（認証対象）: `POST /api/import`、`GET /api/imports`、`GET /api/imports/{id}` |
+| [`detection/`](../backend/src/app/detection/) | WOW 相当判定・タッチダウン検出、空母/空港の識別、ボルター/タッチアンドゴー/full-stop の分類（`classify.py`）、FLOLS 幾何計算（`geometry.py`） |
+| [`grading/lso_grader.py`](../backend/src/app/grading/lso_grader.py) | 空母着艦への米海軍式 LSO グレード＋ファクター付与。BURBLE のみヒューリスティック検出（下記「BURBLE 検出について」） |
+| [`grading/carrier_pattern.py`](../backend/src/app/grading/carrier_pattern.py) | 空母 Case I パターンの読み取り（測定と講評のみ）。着艦区域の座標系を艦自身の座標系（x = 艦首方向、y = 右舷）へ剛体変換し、陸上のパターン解析（`pattern.py`）でブレイク（キスオフ）とダウンウィンドを切り出したうえで、アビーム・90・ウェイク・グルーブ時間・接地時の沈下（フレアの有無）を測る |
+| [`grading/land_grader.py`](../backend/src/app/grading/land_grader.py) | 陸上着陸への A〜E 簡易評点 |
+| [`grading/pattern.py`](../backend/src/app/grading/pattern.py) | 対地トラックによる進入の区間分割（イニシャル / ブレイク / ダウンウィンド / ベース / ファイナル）と、オーバーヘッドパターン固有のメトリクス（旋回明けの軸ずれ、ダウンウィンド方位・高度、ブレイクの高度変動と **G・バンク角・進入速度・旋回量**）。G 系は測定のみで採点しない |
+| [`grading/kinematics.py`](../backend/src/app/grading/kinematics.py) | 進入軌跡（滑走路座標系の位置 ~5 Hz）の局所 2 次フィットから速度・加速度を導き、法線荷重倍数（G）と旋回率を各サンプルに付ける。ACMI に加速度計の値は無いのでここで導く。採点・再採点のたびに計算し直す。実記録の Roll との突き合わせは [`grading-references.md`](grading-references.md) を参照 |
+| [`grading/config.py`](../backend/src/app/grading/config.py) | `config/grading.yaml` の読み込み（閾値はすべて外部化） |
+| [`grading/carriers.py`](../backend/src/app/grading/carriers.py) | `config/carriers.yaml`（艦別の着艦区域ジオメトリ、Issue #3）の読み込みと解決。米空母の値は MOOSE AIRBOSS から（アングルドデッキは左舷へ 9.14°、グライドスロープの終点は 3 番ワイヤーの 2 m 上）。**このサーバの実トラップでは未検証**（`validated: false`） |
+| [`grading/deviations.py`](../backend/src/app/grading/deviations.py) | 進入区間の偏差（残距離・グライドスロープ偏差・横ずれ）。空母は **甲板と一緒に動く座標系**: 各サンプル時刻の艦位置・艦首方位から目標ワイヤーを置き直し、高さは甲板から測る（Tacview の AGL は海面基準なので使わない）。G の導出用に、接地時刻で固定した地面座標（`fixed_along` / `fixed_lateral`）も併せて持つ |
+| [`pipeline.py`](../backend/src/app/pipeline.py) | 検出 → 採点 → DB 保存 → WebSocket 通知の一連パイプライン。再評価（regrade）と、生の航跡からの作り直し（rebuild）も担当 |
+| [`rebuild.py`](../backend/src/app/rebuild.py) | 保存済みの着陸を DB の生の航跡（`tracks`）から作り直すための読み戻し。機体のサンプル・同じフライトの全空母・地面基準（最寄りの艦か静的オブジェクト）をライブ取り込みと同じ形で組み立て、今の検出器が切り出したイベントのうち保存時刻 ±2 秒のものだけを同じ着陸とみなす |
+| [`models/`](../backend/src/app/models/) | SQLAlchemy (async, psycopg / PostgreSQL) エンティティ。着陸の進入区間（FR-7 再評価要件）は別テーブル `landing_tracks` に zlib 圧縮した JSON で持ち、`Landing.approach_track` から列のように読み書きする。`landings` の行の途中に数百 KB の JSON があると、一覧が並べ替え・絞り込みに使う後ろの列を読むたびにそれを読み飛ばすことになるため。着陸行の削除は外部キーの `ON DELETE CASCADE` で進入区間へ連鎖する。スキーマは [`migration-job/migrations/`](../migration-job/migrations/) の Alembic で管理し、API 起動前に別ジョブで適用する |
+| [`api/routes.py`](../backend/src/app/api/routes.py) | REST + WebSocket エンドポイント（下記 API セクション） |
+| [`api/notifier.py`](../backend/src/app/api/notifier.py) | WebSocket 接続管理・着陸通知のブロードキャスト |
+| [`api/main.py`](../backend/src/app/api/main.py) | アプリケーションファクトリ。lifespan で DB 接続・ACMI クライアント起動。CORS と REST/WebSocket を提供 |
 
 ### リアルタイム処理フロー
 
@@ -59,7 +60,7 @@ flowchart LR
    機体とその着陸の艦について書く）
 3. 検出器が接地（WOW）を検出すると、進入区間を切り出す（陸上・空母とも既定 300 秒 / 8 nm。
    空母は Case I のブレイク＝キスオフまで入るように。空母のイベントは艦自身の航跡も持つ）
-4. パイプラインが空母/陸地を判定して対応グレーダで採点し、SQLite に保存
+4. パイプラインが空母/陸地を判定して対応グレーダで採点し、PostgreSQL に保存
 5. `LandingNotifier` が接続中の全 WebSocket クライアントへ `{"type": "landing", ...}` を送信。
    タッチダウン直後は outcome 未確定のため `outcome_status: "provisional"` として即時通知し、
    full-stop 滞地時間の経過などで確定した時点で同一レコードを更新する
@@ -73,7 +74,7 @@ flowchart LR
 本番 DB は `tracks` が 8,778 万行（2026-09-05 計測）、ファイルが約 11 GB になっていた
 （1 行あたり約 120 バイトはローカルの実記録での実測値で、この 2 つの数字と合う）。
 
-今は [`retention.py`](../backend/app/retention.py) の定義に従い、次だけを書く:
+今は [`retention.py`](../backend/src/app/retention.py) の定義に従い、次だけを書く:
 
 - **機体**: 着陸ごとに「初接地の 420 秒前〜接地の 120 秒後」（rebuild が読む範囲の
   両側に 60 秒の余裕）。直近 600 秒ぶんの生サンプルをメモリに持ち、窓の終わりを
@@ -111,7 +112,7 @@ flowchart LR
 甲板風（WOD）相当のフィールドは存在しないため、風データに基づく BURBLE
 検出はこのデータソースでは不可能。
 
-そのため [`grading/lso_grader.py`](../backend/app/grading/lso_grader.py) では、
+そのため [`grading/lso_grader.py`](../backend/src/app/grading/lso_grader.py) では、
 バーブル特有の**接地直前の沈下率急増**をヒューリスティック検出する:
 進入終盤の安定基準区間（既定 12 秒）に対し、接地直前 3 秒の派生沈下率平均が
 閾値（既定 +1.5 m/s）以上増加した場合に minor ファクター BURBLE を付与する。
@@ -135,12 +136,14 @@ flowchart LR
 ## デプロイ構成（Docker）
 
 ```
-docker/backend.Dockerfile   # Node で frontend/dist をビルド → Python 3.11-slim ランタイムに同梱
-docker/frontend.Dockerfile  # （任意）nginx 配信に分離したい場合の代替イメージ
-docker-compose.yml          # 単一サービス。SQLite は名前付きボリューム /data に永続化
+docker/backend/Dockerfile   # Python 3.11 API、src と同梱設定
+docker/frontend/Dockerfile  # Node で frontend/dist をビルド → nginx 配信
+docker/migration-job/Dockerfile # Alembic と backend metadata
+docker/reverse-proxy/       # frontend / API への転送
+docker-compose.yml          # reverse-proxy / frontend / api / migration-job / db
 ```
 
-- コンテナ内では `DLT_DATABASE_URL=sqlite+aiosqlite:////data/dlt.db` を使用（ボリューム永続化）
+- PostgreSQL は `postgres_data`、滑走路キャッシュは `runway_cache` の名前付きボリュームに保存する
 - `config/grading.yaml` はイメージに焼き込まれるほか、compose 実行時はホスト側を
   読み取り専用マウントするため、閾値調整が即反映される
 - Tacview ホストの既定値は `host.docker.internal`（Linux は `extra_hosts: host-gateway` で解決）
@@ -159,13 +162,13 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
 | POST | `/api/v1/flights/{id}/rescan` | そのフライトの生の航跡から、記録されていない着陸を探す。既定は下見、`?apply=true` で採点して記録（通知はしない）。記録済みの着陸には触らない |
 | POST | `/api/import` | ACMI ファイルインポート（multipart、バックグラウンドジョブ。認証対象） |
 | GET | `/api/imports` / `/api/imports/{id}` | インポートジョブの一覧・進捗（認証対象） |
-| WebSocket | `/api/ws/landings` | 着陸通知＋インポート完了通知（`ping` → `pong`） |
+| WebSocket | `/api/v1/ws/landings` | 着陸通知＋インポート完了通知（`ping` → `pong`） |
 
 ### 簡易トークン認証（Issue #8）
 
-[`app/api/auth.py`](../backend/app/api/auth.py) に共有トークン認証を実装している。
+[`app/api/auth.py`](../backend/src/app/api/auth.py) に共有トークン認証を実装している。
 
-- [`config.py`](../backend/app/config.py) の `auth_token`（環境変数 `DLT_AUTH_TOKEN`）
+- [`config.py`](../backend/src/app/config.py) の `auth_token`（環境変数 `DLT_AUTH_TOKEN`）
   が**空の場合は認証無効**で、従来どおり誰でもアクセスできる（デフォルト）
 - 設定時、`/api` 配下の REST エンドポイント（landings 系。ルーター
   `protected_router` に `Depends(require_auth)` で適用）は
@@ -173,8 +176,8 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
   未提示は 401、誤りは 403
 - WebSocket はブラウザからヘッダを付けられないため `?token=<token>` クエリ
   パラメータで判定し（`ws_token_ok`）、不一致ならハンドシェイクを拒否する
-- `/api/health` は死活監視用に認証対象外。SPA 静的配信（`frontend/dist`
-  マウント）も `/api` 外のため対象外
+- `/api/v1/health` と互換 alias `/api/health` は死活監視用に認証対象外。
+  フロントエンドの静的配信は別の nginx サービスが担当する
 - トークン比較は定数時間比較（`secrets.compare_digest`）
 - フロントエンド側は [`auth/token.ts`](../frontend/src/auth/token.ts) で
   localStorage にトークンを保持し、REST クライアントは `X-Auth-Token`、
@@ -183,12 +186,12 @@ docker-compose.yml          # 単一サービス。SQLite は名前付きボリ�
   （[`components/TokenPrompt.tsx`](../frontend/src/components/TokenPrompt.tsx)）
   を表示する。ナビバーの「認証設定」ボタンで消去・再入力可能
 
-> WebSocket のパスはルーター共通プレフィックスにより **`/api/ws/landings`** に統一されている。
+> WebSocket のパスはルーター共通プレフィックスにより **`/api/v1/ws/landings`** に統一されている。
 > フロントエンドもこのパスを使用する。
 
 ## 設定
 
-すべて環境変数（プレフィックス `DLT_`、[`backend/app/config.py`](../backend/app/config.py)）と
+すべて環境変数（プレフィックス `DLT_`、[`backend/src/app/config.py`](../backend/src/app/config.py)）と
 YAML（[`config/grading.yaml`](../config/grading.yaml)、
 [`config/carriers.yaml`](../config/carriers.yaml)）で外部化されている。一覧は [`.env.example`](../.env.example) 参照。
 
@@ -204,7 +207,9 @@ YAML（[`config/grading.yaml`](../config/grading.yaml)、
 
 `.github/workflows/ci.yml` が push / PR ごとに以下を実行する:
 
-- backend: Python 3.11 で `pip install -e ".[dev]"` → `ruff check` → `pytest`
+- backend: Python 3.11 と PostgreSQL 18、`uv sync --frozen --no-install-project` → `uv run ruff check .` → `uv run pytest -q`
 - frontend: Node 20 で `npm ci` → `npm run build`（tsc 含む）→ `vitest run`
+- migration-job: PostgreSQL 18 上の upgrade/check/downgrade とデータ移行テスト、Ruff、basedpyright
+- compose: 設定検証と全サービスのビルド
 
 シークレット不要の公開リポジトリ向け構成。

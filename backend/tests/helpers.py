@@ -108,11 +108,11 @@ async def create_async_test_schema(engine: AsyncEngine) -> None:
 def make_api_settings(
     tmp_path: Path, *, database_filename: str = "api.db", **overrides: Unpack[ApiSettingsOverrides]
 ) -> Settings:
-    """Build API settings backed by a disposable SQLite database.
+    """Build API settings backed by a disposable test database.
 
     Args:
         tmp_path: Test-owned directory in which to create the database.
-        database_filename: SQLite filename relative to ``tmp_path``.
+        database_filename: Local unit-test filename relative to ``tmp_path``.
         **overrides: Explicit supported ``Settings`` values required by a test scenario.
     """
     settings = Settings(

@@ -299,4 +299,3 @@ def test_the_geometry_book_resolves_the_hull_names_dcs_actually_emits() -> None:
 
     assert book.resolve("LHA_Tarawa", dcs_type) is None
     assert book.resolve("USS_Arleigh_Burke_IIa", "Sea+Watercraft+Warship") is None
-

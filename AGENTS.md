@@ -46,7 +46,7 @@ Frontend (from frontend/):
 
 - Entry point is a factory. To run the API without Tacview from PowerShell in `backend/`: `$env:PYTHONPATH = "src"; $env:DLT_ACMI_ENABLED = "false"; $env:DLT_GRADING_CONFIG_PATH = "../config/grading.yaml"; $env:DLT_CARRIERS_CONFIG_PATH = "../config/carriers.yaml"; uv run uvicorn app.api.main:create_app --factory --port 8000`.
 - Config paths and `.env` are **CWD-relative**. Running from `backend/`, use `DLT_GRADING_CONFIG_PATH=../config/grading.yaml` and `DLT_CARRIERS_CONFIG_PATH=../config/carriers.yaml`; create `backend/.env` when using the example environment file. The default `DLT_DATABASE_URL` targets local PostgreSQL.
-- `DLT_ACMI_ENABLED=false` starts the API without the Tacview TCP client (otherwise it retries 127.0.0.1:31010 in the background forever).
+- `DLT_ACMI_ENABLED=false` starts the API without the Tacview TCP client. Native single-source defaults connect to 127.0.0.1:42674; Compose defaults use host.docker.internal:42674. Existing 31010 installations require an explicit port.
 - All settings are `DLT_`-prefixed env vars (`backend/src/app/config.py`); full list in `.env.example`.
 
 ## API conventions
@@ -60,6 +60,13 @@ Frontend (from frontend/):
 - Do not silently change grading or carrier-geometry values without checking the relevant specification.
 - Do not lower `DLT_DCSSB_REQUEST_SPACING_MS` unless the specification explicitly requires it.
 - Do not add local ACMI recordings, databases, or import data to version control.
+
+## Runway geometry
+
+- Host grading/carrier files take priority. Missing files fall back with WARNING to the copies bundled outside the `/app/config` mount. Existing malformed files remain errors.
+- Host seed files take priority over bundled seeds for the same theatre. Exact seeds take priority over live caches; missing host maps remain available from bundled seeds. Cache files live in `/data/cache` on Compose's `runway_cache` volume.
+- Keep coordinate conversion independent of theatre names. DCS capture supplies geographic coordinates; live conversion derives meridian convergence from the returned geometry. Map-specific corrections would drift between capture, provider, and grading.
+- DCSServerBot sweeps call the live DCS hook on the simulation thread. Preserve `DLT_DCSSB_REQUEST_SPACING_MS`; lowering the spacing increases simulation-thread work and can affect server frame time.
 
 ## Workflow
 
