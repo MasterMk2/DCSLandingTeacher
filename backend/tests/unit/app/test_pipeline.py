@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.detection.detector import analyze_track
 from app.grading.carriers import (
@@ -37,7 +38,7 @@ def _carrier_context(name: str, type_str: str | None = None):
 
 def test_pipeline_metrics_record_resolved_geometry() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)
-    pipeline = LandingPipeline(None, CONFIG, carrier_geometry_book=book)
+    pipeline = LandingPipeline(async_sessionmaker(), CONFIG, carrier_geometry_book=book)
     context = _carrier_context("Stennis", "Sea+Watercraft+AircraftCarrier")
 
     analysis, result, _score = pipeline._grade(context)  # noqa: SLF001
@@ -51,7 +52,7 @@ def test_pipeline_metrics_record_resolved_geometry() -> None:
 
 def test_pipeline_metrics_record_fallback_for_unknown_carrier() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)
-    pipeline = LandingPipeline(None, CONFIG, carrier_geometry_book=book)
+    pipeline = LandingPipeline(async_sessionmaker(), CONFIG, carrier_geometry_book=book)
     context = _carrier_context("Mystery CV", "Sea+Watercraft+AircraftCarrier")
 
     analysis, result, _score = pipeline._grade(context)  # noqa: SLF001
@@ -61,7 +62,9 @@ def test_pipeline_metrics_record_fallback_for_unknown_carrier() -> None:
 
 
 def test_empty_book_behaves_like_legacy_approximation() -> None:
-    pipeline = LandingPipeline(None, CONFIG, carrier_geometry_book=CarrierGeometryBook({}))
+    pipeline = LandingPipeline(
+        async_sessionmaker(), CONFIG, carrier_geometry_book=CarrierGeometryBook({})
+    )
     context = _carrier_context("Stennis")
 
     analysis, result, _score = pipeline._grade(context)  # noqa: SLF001
