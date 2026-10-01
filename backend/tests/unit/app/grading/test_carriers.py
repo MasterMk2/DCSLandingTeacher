@@ -140,10 +140,10 @@ def test_resolve_logs_warning_on_fallback(caplog) -> None:
     assert any("not in geometry book" in rec.message for rec in caplog.records)
 
 
-def test_missing_config_file_yields_empty_book(tmp_path) -> None:
+def test_missing_config_file_uses_bundled_book(tmp_path) -> None:
     book = load_carrier_geometry_book(tmp_path / "absent.yaml")
-    assert len(book) == 0
-    assert book.resolve("Kuznetsov") is None
+    assert len(book) > 0
+    assert book.resolve("Kuznetsov") is not None
 
 
 def test_yaml_values_are_documented_as_estimates() -> None:

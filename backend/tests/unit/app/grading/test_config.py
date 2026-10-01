@@ -31,18 +31,8 @@ def test_land_glideslope_defaults_to_three_degrees() -> None:
 def test_code_defaults_agree_with_the_shipped_yaml() -> None:
     """``_DEFAULTS`` and ``config/grading.yaml`` must carry the same numbers.
 
-    This is not tidiness. ``load_grading_config()`` falls back to ``_DEFAULTS``
-    without a word when the configured path is missing, and in production it
-    IS missing -- the container mounts an empty directory over /app/config, so
-    the defaults in code are the live configuration and the YAML is inert.
-    Any value that lives only in the YAML is therefore silently absent from
-    the running server.
-
-    That is how ``lso_grading.factors`` shipped as ``{}``: every carrier
-    landing came out "OK" with the comment "On centerline, on glidepath, on
-    speed." because not one factor could fire. No test noticed, because every
-    LSO test loads the YAML (``CONFIG`` above) and none exercised the path
-    production actually runs.
+    Partial host configuration fills missing thresholds from ``_DEFAULTS``.
+    Those thresholds must agree with a complete bundled configuration.
 
     Compares thresholds only. Prose (``details``) is deliberately kept in the
     YAML alone, so it is excluded rather than duplicated.

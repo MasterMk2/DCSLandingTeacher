@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from app.configuration_files import resolve_config_file
+
 DEFAULT_CONFIG_PATH = Path("config") / "grading.yaml"
 
 _DEFAULTS: dict[str, Any] = {
@@ -329,10 +331,8 @@ def apply_config_overrides(config: GradingConfig, overrides: dict[str, Any]) -> 
 
 
 def load_grading_config(path: str | Path | None = None) -> GradingConfig:
-    """Load the grading configuration; falls back to defaults when absent."""
-    target = Path(path) if path is not None else DEFAULT_CONFIG_PATH
-    if not target.is_file():
-        return GradingConfig({})
+    """Load host grading configuration, or the bundled file with a warning."""
+    target = resolve_config_file(path if path is not None else DEFAULT_CONFIG_PATH, "grading.yaml")
     with open(target, encoding="utf-8") as stream:
         data = yaml.safe_load(stream) or {}
     if not isinstance(data, dict):

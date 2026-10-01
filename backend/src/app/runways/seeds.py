@@ -1,29 +1,27 @@
-"""Resolve configured runway seed geometry.
+"""Resolve host runway seeds before the copy shipped outside the config mount.
 
-A sweep can only happen while the map is loaded on a DCS server (the terrain
-files themselves are encrypted, and DCSServerBot's ``/airbase`` runs Lua in the
-running mission), so a theatre nobody is flying right now cannot be captured on
-demand. The way an import of an old recording still resolves is that the sweep
-was captured *once*, committed, and shipped.
-
-Two directories, in priority order:
-
-- the writable cache (``DLT_RUNWAY_CACHE_DIR``), where live sweeps are stored;
-- the configured, read-only seed directory.
-
-Git holds the canonical copy in ``config/runways/``. The deployment mounts
-``config/`` at ``/app/config`` rather than placing data in a Python package.
+Exact captures take priority over live sweeps in the runway provider. Host
+seed files take priority over their bundled copies, including partial mounts.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from logging import getLogger
+
+from app.configuration_files import BUNDLED_CONFIG_DIR
+
+logger = getLogger(__name__)
+BUNDLED_SEED_DIR = BUNDLED_CONFIG_DIR / "runways"
 
 
-def resolve_seed_dir(configured: str | Path | None) -> Path | None:
-    """Configured runway seed directory, or ``None`` when it is unavailable."""
+def resolve_seed_dir(configured: str | Path | None) -> Path:
+    """Return the existing configured directory or the bundled seed directory."""
     if configured:
         target = Path(configured)
         if target.is_dir():
             return target
-    return None
+    if not BUNDLED_SEED_DIR.is_dir():
+        raise FileNotFoundError(f"runway seeds missing: {configured}; bundled copy missing: {BUNDLED_SEED_DIR}")
+    logger.warning("runway seeds missing: %s; using bundled copy: %s", configured, BUNDLED_SEED_DIR)
+    return BUNDLED_SEED_DIR

@@ -133,12 +133,13 @@ def test_dry_run_counts_retained_tracks_without_deleting(postgres_url: str) -> N
     assert 'dry run' in output.getvalue()
 
 
-def test_missing_grading_configuration_prevents_execution(
+def test_missing_host_and_bundled_grading_configuration_prevents_execution(
     postgres_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_tracks(postgres_url)
     original = _track_ids(postgres_url)
     monkeypatch.setenv('DLT_GRADING_CONFIG_PATH', str(tmp_path / 'missing.yaml'))
+    monkeypatch.setattr('app.configuration_files.BUNDLED_CONFIG_DIR', tmp_path / 'absent')
 
     with pytest.raises(CompactError, match='configuration is missing'):
         compact(

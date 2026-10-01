@@ -49,10 +49,12 @@ class RunwayProvider:
         *,
         server_name: str = "",
         seed_dir: str | Path | None = None,
+        fallback_seed_dir: str | Path | None = None,
     ) -> None:
         self._client = client
         self._cache_dir = Path(cache_dir)
         self._seed_dir = Path(seed_dir) if seed_dir else None
+        self._fallback_seed_dir = Path(fallback_seed_dir) if fallback_seed_dir else None
         self._server_name = server_name
         self._memory: dict[str, list[Runway]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -74,7 +76,15 @@ class RunwayProvider:
         if self._seed_dir is None:
             return None
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in theatre)
-        return self._seed_dir / f"runways-{safe or 'unknown'}.json"
+        filename = f"runways-{safe or 'unknown'}.json"
+        target = self._seed_dir / filename
+        if target.is_file() or self._fallback_seed_dir is None:
+            return target
+        fallback = self._fallback_seed_dir / filename
+        if fallback.is_file():
+            logger.warning("runway seed missing: %s; using bundled copy: %s", target, fallback)
+            return fallback
+        return target
 
     @staticmethod
     def _seed_is_exact(path: Path) -> bool:
@@ -395,13 +405,16 @@ class RunwayProvider:
         return None if listed_any else fallback
 
     def _read_pool_dir(
-        self, directory: Path, *, exact_only: bool = False
+        self, directory: Path, *, exact_only: bool = False,
+        missing_from: Path | None = None,
     ) -> list[list[Runway]]:
         """Load every cache file in ``directory`` that is not already in memory."""
         pools: list[list[Runway]] = []
         if not directory.is_dir():
             return pools
         for path in sorted(directory.glob("runways-*.json")):
+            if missing_from is not None and (missing_from / path.name).is_file():
+                continue
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
@@ -416,6 +429,11 @@ class RunwayProvider:
             theatre = data.get("theatre") or path.stem
             if theatre in self._memory:
                 continue
+            if missing_from is not None:
+                logger.warning(
+                    "runway seed missing: %s; using bundled copy: %s",
+                    missing_from / path.name, path,
+                )
             runways = [Runway.from_dict(r) for r in data.get("runways", [])]
             self._memory[theatre] = runways
             pools.append(runways)
@@ -439,9 +457,15 @@ class RunwayProvider:
         pools = list(self._memory.values())
         if self._seed_dir is not None:
             pools += self._read_pool_dir(self._seed_dir, exact_only=True)
+        if self._fallback_seed_dir is not None:
+            pools += self._read_pool_dir(
+                self._fallback_seed_dir, exact_only=True, missing_from=self._seed_dir,
+            )
         pools += self._read_pool_dir(self._cache_dir)
         if self._seed_dir is not None:
             pools += self._read_pool_dir(self._seed_dir)
+        if self._fallback_seed_dir is not None:
+            pools += self._read_pool_dir(self._fallback_seed_dir, missing_from=self._seed_dir)
         return pools
 
     async def resolve(

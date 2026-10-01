@@ -16,7 +16,6 @@ import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TextIO
 
 from sqlalchemy import Connection, create_engine, inspect, text
@@ -47,9 +46,10 @@ class CompactReport:
 
 def _detection_config() -> DetectionConfig:
     settings = Settings()
-    if not Path(settings.grading_config_path).is_file():
-        raise CompactError('grading configuration is missing; retention cannot be determined safely')
-    return load_grading_config(settings.grading_config_path).to_detection_config()
+    try:
+        return load_grading_config(settings.grading_config_path).to_detection_config()
+    except FileNotFoundError as exc:
+        raise CompactError('grading configuration is missing; retention cannot be determined safely') from exc
 
 
 def keep_windows(

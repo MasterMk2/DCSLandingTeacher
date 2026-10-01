@@ -31,7 +31,7 @@ from app.models.entities import Landing
 from app.pipeline import LandingPipeline
 from app.runways.dcssb import DcssbClient
 from app.runways.provider import RunwayProvider
-from app.runways.seeds import resolve_seed_dir
+from app.runways.seeds import BUNDLED_SEED_DIR, resolve_seed_dir
 
 logger = getLogger(__name__)
 
@@ -341,7 +341,10 @@ def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
             logger.info("DCSSB not configured; land grading uses estimated geometry")
             return None
         logger.info("DCSSB not configured; using configured runway geometry (%s)", seed_dir)
-        return RunwayProvider(None, settings.runway_cache_dir, seed_dir=seed_dir)
+        return RunwayProvider(
+            None, settings.runway_cache_dir, seed_dir=seed_dir,
+            fallback_seed_dir=BUNDLED_SEED_DIR,
+        )
     client = DcssbClient(
         settings.dcssb_base_url,
         api_prefix=settings.dcssb_api_prefix,
@@ -355,6 +358,7 @@ def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
         settings.runway_cache_dir,
         server_name=settings.dcssb_server_name,
         seed_dir=seed_dir,
+        fallback_seed_dir=BUNDLED_SEED_DIR,
     )
 
 

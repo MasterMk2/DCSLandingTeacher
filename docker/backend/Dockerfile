@@ -35,6 +35,9 @@ COPY --from=builder --chown=appuser:appuser /app/src /app/src
 
 COPY --chown=appuser:appuser config/grading.yaml /app/config/grading.yaml
 COPY --chown=appuser:appuser config/carriers.yaml /app/config/carriers.yaml
+COPY --chown=appuser:appuser config/grading.yaml /app/src/app/bundled_config/grading.yaml
+COPY --chown=appuser:appuser config/carriers.yaml /app/src/app/bundled_config/carriers.yaml
+COPY --chown=appuser:appuser config/runways /app/src/app/bundled_config/runways
 
 VOLUME ["/data"]
 

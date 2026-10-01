@@ -118,7 +118,7 @@ def _matches(patterns: list[str], value: str | None) -> bool:
 class CarrierGeometryBook:
     """Resolves carrier name/type pairs to :class:`FlolsGeometry`."""
 
-    def __init__(self, entries: dict[str, FlolsGeometry]) -> None:
+    def __init__(self, entries: dict[str, tuple[list[str], list[str], FlolsGeometry]]) -> None:
         # Keep declaration order so the first match wins.
         self._entries = entries
         #: (name, type) pairs already reported as unknown. The miss is a
@@ -157,10 +157,10 @@ class CarrierGeometryBook:
 
 
 def load_carrier_geometry_book(path: str | Path | None = None) -> CarrierGeometryBook:
-    """Load ``carriers.yaml``; an empty book when the file is absent."""
-    target = Path(path) if path is not None else DEFAULT_CARRIERS_PATH
-    if not target.is_file():
-        return CarrierGeometryBook({})
+    """Load host carrier geometry, or the bundled file with a warning."""
+    from app.configuration_files import resolve_config_file
+
+    target = resolve_config_file(path if path is not None else DEFAULT_CARRIERS_PATH, "carriers.yaml")
     with open(target, encoding="utf-8") as stream:
         data = yaml.safe_load(stream) or {}
     if not isinstance(data, dict):
