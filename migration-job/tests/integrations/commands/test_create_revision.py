@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from alembic.config import Config
@@ -73,3 +75,31 @@ def test_create_revision_preserves_existing_history(tmp_path: Path) -> None:
     assert revisions['0009_landing_tracks'] == '0008_landing_identity'
     assert revisions['0008_landing_identity'] == '0007_import_jobs'
     assert revisions['0001_baseline'] is None
+
+
+def test_revision_cli_generates_file_and_rejects_bad_arguments(tmp_path: Path) -> None:
+    """CLI が一時プロジェクトへ revision を生成し、不正な引数を拒否する。"""
+    shutil.copytree(MIGRATIONS_DIR, tmp_path / 'migrations')
+    shutil.copy(PROJECT_ROOT / 'alembic.ini', tmp_path / 'alembic.ini')
+    cli_path = tmp_path / 'src/migration_job/commands/create_revision.py'
+    cli_path.parent.mkdir(parents=True)
+    shutil.copy(PROJECT_ROOT / 'src/migration_job/commands/create_revision.py', cli_path)
+    result = subprocess.run(
+        [sys.executable, str(cli_path), 'cli probe'],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert list((tmp_path / 'migrations/versions').glob('0010_cli_probe*.py'))
+    for arguments in [[], ['one', 'two'], ['---']]:
+        invalid = subprocess.run(
+            [sys.executable, str(cli_path), *arguments],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert invalid.returncode != 0
+    assert len(list((tmp_path / 'migrations/versions').glob('0010_*.py'))) == 1

@@ -54,6 +54,7 @@ def create_revision(message: str, config: Config) -> None:
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit('usage: migration-job-revision "revision message"')
+    create_revision(sys.argv[1], Config(str(ALEMBIC_INI)))
 
 
 if __name__ == '__main__':
