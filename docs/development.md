@@ -99,14 +99,19 @@ revision コマンドは既存 head の次にファイルを作成します。�
 ```bash
 cd backend
 uv run pytest -q                 # 全テスト
+uv run pytest tests/unit -q      # DB サーバー不要の単体テスト
 uv run pytest tests/unit/app/grading/test_land_grader.py -q   # 特定ファイル
 ```
 
 - `asyncio_mode = "auto"` のため async テストはデコレータ不要
 - フィクスチャ: `tests/fixtures/sample.acmi`、共通ヘルパーは `tests/conftest.py` / `tests/helpers.py`
-- DB を使う integration 層は PostgreSQL 専用です。検証専用 DB の URL を `DLT_TEST_POSTGRES_URL` に設定して実行します。未設定の場合は integration テストをスキップします。
+- 共通DBフィクスチャを使うテストと圧縮処理のPostgreSQLテストは、PostgreSQLで実行します。`DLT_TEST_POSTGRES_URL` 未設定時は、共通fixtureがDockerで検証専用のPostgreSQL 18を自動起動し、接続先をテストセッションへ注入します。ローカル実行にはDockerの起動が必要です。サーバーを準備できない場合はskipせず、テストを失敗させます。
+- rescan の保存・連鎖削除・同時実行・API 連携は `tests/integration/app/test_rescan.py` で PostgreSQL を使って検証します。
 - PostgreSQL テストはテストごとに専用スキーマを作り、Alembic の head を適用して終了時に削除します。検証先に実運用 DB を指定しないでください。単体テストの一部は一時 SQLite を使います。
+- 自動起動するサーバーは `127.0.0.1` の空きポートに公開し、セッション終了時にコンテナーと一時データを削除します。`tests/unit` のみの実行ではDBサーバーを起動しません。
 - Windows の PostgreSQL 非同期テストと WebSocket クライアントは psycopg が対応する selector loop を使用します。
+
+既に検証専用PostgreSQLを用意している場合は、次のように接続先を指定します。指定時はDockerでの自動起動を行いません。CIもこの方式でPostgreSQLサービスを利用します。
 
 ```powershell
 cd backend
