@@ -13,11 +13,13 @@ from app.detection.geometry import offset_position
 from app.grading.carriers import (
     CarrierGeometryBook,
     FlolsGeometry,
+    fallback_geometry_payload,
     load_carrier_geometry_book,
 )
 from app.grading.config import load_grading_config
 from app.grading.deviations import ApproachAnalysis, build_approach_analysis
 from app.grading.lso_grader import grade_carrier_approach
+from app.pipeline import LandingPipeline
 from tests.conftest import GRADING_YAML
 from tests.helpers import (
     DECK_ALTITUDE_M,
@@ -25,6 +27,7 @@ from tests.helpers import (
     LON0,
     TrackSample,
     make_carrier_state,
+    make_approach_samples,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -300,6 +303,17 @@ def test_the_geometry_book_resolves_the_hull_names_dcs_actually_emits() -> None:
 
     assert book.resolve("LHA_Tarawa", dcs_type) is None
     assert book.resolve("USS_Arleigh_Burke_IIa", "Sea+Watercraft+Warship") is None
+
+def _carrier_context(name: str, type_str: str | None = None):
+    from app.ingest import LandingContext
+
+    carrier = make_carrier_state(name=name, type_str=type_str)
+    events = analyze_track(make_approach_samples(), DECK_ALTITUDE_M, {"C1": carrier})
+    assert len(events) == 1
+    return LandingContext(
+        flight_id=None, acmi_object_id="101", pilot=None, airframe=None, event=events[0]
+    )
+
 
 def test_pipeline_metrics_record_resolved_geometry() -> None:
     book = load_carrier_geometry_book(CARRIERS_YAML)

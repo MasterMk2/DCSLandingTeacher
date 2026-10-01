@@ -22,13 +22,14 @@ from app.detection.geometry import offset_position
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
-from app.models.database import create_engine, create_session_factory, init_db
+from app.models.database import create_engine, create_session_factory
 from app.models.entities import DcsObject, Landing, Track
 from app.pipeline import LandingPipeline
 from app.retention import BOUNCE_ALLOWANCE_S, rebuild_window, retention_window
 from tests.case1 import fly_case1
 from tests.conftest import GRADING_YAML
 from tests.helpers import LAT0, LON0, make_acmi_text, make_approach_samples
+from tests.helpers import create_async_test_schema
 
 CARRIERS_YAML = Path(__file__).resolve().parents[2] / "config" / "carriers.yaml"
 
@@ -60,7 +61,7 @@ async def ingest(session_factory, lines: list[str], *, keep_all: bool = False) -
 @pytest.fixture
 async def second_db(tmp_path):
     engine = create_engine(f"sqlite+aiosqlite:///{(tmp_path / 'full.db').as_posix()}")
-    await init_db(engine)
+    await create_async_test_schema(engine)
     yield create_session_factory(engine)
     await engine.dispose()
 
@@ -440,7 +441,7 @@ async def test_a_failed_batch_keeps_the_landing_window_for_the_next(tmp_path, se
 
     url = f"sqlite+aiosqlite:///{(tmp_path / 'locked.db').as_posix()}"
     engine = create_engine(url)
-    await init_db(engine)
+    await create_async_test_schema(engine)
 
     @event.listens_for(engine.sync_engine, "connect")
     def _no_wait(dbapi_connection, _record):  # noqa: ANN001

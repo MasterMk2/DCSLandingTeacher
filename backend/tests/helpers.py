@@ -8,12 +8,16 @@ the origin ``(LAT0, LON0)`` with course ~000 (north). Touchdown happens at
 from __future__ import annotations
 
 import math
+import asyncio
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TypedDict, Unpack
 
 import httpx2
+from alembic import command
+from alembic.config import Config
 from fastapi.applications import FastAPI
 from sqlalchemy import create_engine as create_sync_engine
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -56,8 +60,23 @@ class ApiSettingsOverrides(TypedDict, total=False):
     import_max_upload_mb: int
 
 
+def database_url_for_test(tmp_path: Path, filename: str) -> str:
+    """Return the active PostgreSQL integration schema or a local unit database."""
+    return os.getenv("DLT_TEST_ACTIVE_POSTGRES_URL") or (
+        f"sqlite+aiosqlite:///{(tmp_path / filename).as_posix()}"
+    )
+
+
 def create_test_schema(database_url: str) -> None:
-    """Create the disposable SQLite schema owned by an integration test."""
+    """Prepare a disposable schema using production migrations on PostgreSQL."""
+    if database_url.startswith("postgresql"):
+        config = Config()
+        config.set_main_option(
+            "script_location", str(Path(__file__).resolve().parents[2] / "migration-job/migrations")
+        )
+        config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+        command.upgrade(config, "head")
+        return
     engine = create_sync_engine(database_url.replace("sqlite+aiosqlite", "sqlite"))
     try:
         Base.metadata.create_all(engine)
@@ -66,7 +85,12 @@ def create_test_schema(database_url: str) -> None:
 
 
 async def create_async_test_schema(engine: AsyncEngine) -> None:
-    """Create all application tables in a disposable async test database."""
+    """Prepare the schema without blocking the asynchronous test loop."""
+    if engine.dialect.name == "postgresql":
+        await asyncio.to_thread(
+            create_test_schema, engine.url.render_as_string(hide_password=False)
+        )
+        return
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -81,10 +105,9 @@ def make_api_settings(
         database_filename: SQLite filename relative to ``tmp_path``.
         **overrides: Explicit supported ``Settings`` values required by a test scenario.
     """
-    database_path = (tmp_path / database_filename).as_posix()
     settings = Settings(
         acmi_enabled=False,
-        database_url=f"sqlite+aiosqlite:///{database_path}",
+        database_url=database_url_for_test(tmp_path, database_filename),
         **overrides,
     )
     create_test_schema(settings.database_url)

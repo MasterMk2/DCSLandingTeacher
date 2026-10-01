@@ -33,6 +33,19 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: dlt_test
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: dlt_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U dlt_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DLT_TEST_POSTGRES_URL: postgresql+psycopg://dlt_test:test-password@127.0.0.1:5432/dlt_test
     defaults:
       run:
         working-directory: backend
@@ -61,8 +74,20 @@ jobs:
   migration-job:
     name: Migration job
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: dlt_test
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: dlt_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U dlt_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       PYTHONPATH: ../backend/src
+      DLT_TEST_POSTGRES_URL: postgresql+psycopg://dlt_test:test-password@127.0.0.1:5432/dlt_test
     defaults:
       run:
         working-directory: migration-job

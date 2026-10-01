@@ -210,12 +210,11 @@ async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
     assert len(tracks) == 1
 
 
-async def test_ingest_batches_commits(tmp_path) -> None:
+async def test_ingest_batches_commits(database_url: str) -> None:
     """Pending writes are committed only when max_batch_size is reached."""
     from sqlalchemy.orm import Session
 
-    db_path = (tmp_path / "batch.db").as_posix()
-    engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
+    engine = create_engine(database_url)
     await create_async_test_schema(engine)
 
     commit_count = {"n": 0}
@@ -262,19 +261,11 @@ async def test_ingest_close_without_data_is_noop(session_factory) -> None:
     await ingestor.close()  # must not raise even though nothing was written
 
 
-async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> None:
-    """A batch commits once ``max_batch_age_s`` elapses, not just at count.
-
-    Regression for Issue #18/#20: with a count-only trigger, a handful of
-    objects updating a few times a second can hold the write transaction
-    open far longer than another writer's SQLite busy_timeout (e.g. the
-    ACMI file import), which then fails with "database is locked" even
-    though it never touches more than max_batch_size rows itself.
-    """
+async def test_ingest_flushes_on_batch_age_even_below_batch_size(database_url: str) -> None:
+    """A small batch becomes visible once its maximum age elapses."""
     import asyncio
 
-    db_path = (tmp_path / "batch_age.db").as_posix()
-    engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
+    engine = create_engine(database_url)
     await create_async_test_schema(engine)
     session_factory = create_session_factory(engine)
 
@@ -326,7 +317,7 @@ async def test_ingest_flushes_on_batch_age_even_below_batch_size(tmp_path) -> No
         await engine.dispose()
 
 
-async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> None:
+async def test_ingest_holds_no_write_transaction_between_commits(database_url: str) -> None:
     """定常状態の更新でバッチ中に書き込みロックを取らないこと。
 
     毎更新で走る `session.get()` が autoflush を誘発して Track の INSERT を
@@ -340,8 +331,7 @@ async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> No
     """
     from sqlalchemy.orm import Session  # noqa: F401
 
-    db_path = (tmp_path / "lock.db").as_posix()
-    engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
+    engine = create_engine(database_url)
     await create_async_test_schema(engine)
     session_factory = create_session_factory(engine)
 
@@ -381,7 +371,7 @@ async def test_ingest_holds_no_write_transaction_between_commits(tmp_path) -> No
         await engine.dispose()
 
 
-async def test_a_failed_write_does_not_wedge_the_ingestor(tmp_path) -> None:
+async def test_a_failed_write_does_not_wedge_the_ingestor(database_url: str) -> None:
     """A write failure has to discard the batch, not keep it.
 
     The session.flush() calls that fetch row ids for foreign keys raise before
@@ -391,30 +381,26 @@ async def test_a_failed_write_does_not_wedge_the_ingestor(tmp_path) -> None:
     just calls run() again on the same ingestor, so one "database is locked"
     would wedge ingestion into a permanent reconnect loop storing nothing.
     """
-    db_path = (tmp_path / "wedge.db").as_posix()
-    url = f"sqlite+aiosqlite:///{db_path}"
+    url = database_url
 
     engine = create_engine(url)
     await create_async_test_schema(engine)
 
-    # Fail immediately instead of waiting out the 5 s busy timeout.
+    # PostgreSQL refuses a blocked write within the test's timeout.
     @event.listens_for(engine.sync_engine, "connect")
     def _no_wait(dbapi_connection, _record):  # noqa: ANN001
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA busy_timeout=0")
+        cursor.execute("SET lock_timeout = '100ms'")
         cursor.close()
 
     session_factory = create_session_factory(engine)
     ingestor = TrackIngestor(session_factory, keep_all_tracks=True)
     lines = (FIXTURES / "sample.acmi").read_text(encoding="utf-8").splitlines()
 
-    # Hold SQLite's single write lock from an unrelated connection: an
-    # uncommitted write to a scratch table keeps it until we roll back.
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE TABLE _lock_probe (x INTEGER)"))
+    # A separate transaction blocks flight creation until it rolls back.
     blocker_engine = create_engine(url)
     blocker = await blocker_engine.connect()
-    await blocker.execute(text("INSERT INTO _lock_probe VALUES (1)"))
+    await blocker.execute(text("LOCK TABLE flights IN ACCESS EXCLUSIVE MODE"))
 
     with pytest.raises(Exception):
         for line in lines:

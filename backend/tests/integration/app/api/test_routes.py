@@ -203,7 +203,7 @@ async def test_regrade_without_track_conflicts(client) -> None:
 
 def test_websocket_receives_new_landing_events(settings) -> None:
     app = create_app(settings)
-    with TestClient(app) as tc:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as tc:
         # Events broadcast before connecting are replayed on connect.
         asyncio.run(tc.app.state.notifier.broadcast_landing({"id": 7, "grade": "OK"}))
         with tc.websocket_connect("/api/ws/landings") as ws:
@@ -215,7 +215,7 @@ def test_websocket_receives_new_landing_events(settings) -> None:
 def test_websocket_receives_landing_update_messages(settings) -> None:
     """Provisional -> final confirmations arrive as ``landing_update``."""
     app = create_app(settings)
-    with TestClient(app) as tc:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as tc:
         asyncio.run(
             tc.app.state.notifier.broadcast_landing(
                 {"id": 8, "grade": "OK", "outcome_status": "final"},

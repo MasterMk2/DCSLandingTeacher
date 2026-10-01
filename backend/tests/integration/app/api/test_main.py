@@ -12,15 +12,13 @@ from app.api import create_app
 from app.api.main import API_V1, API_VERSION, _settle_stale_provisionals
 from app.config import Settings
 from app.models import entities  # noqa: F401
-from app.models.base import Base
 from app.models.database import create_engine
 from app.models.entities import DcsObject, Flight, Landing
-from tests.helpers import create_test_schema
+from tests.helpers import create_test_schema, create_async_test_schema, database_url_for_test
 
 
 def make_static_settings(tmp_path: Path) -> Settings:
-    db_path = (tmp_path / "static.db").as_posix()
-    settings = Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}")
+    settings = Settings(acmi_enabled=False, database_url=database_url_for_test(tmp_path, "static.db"))
     create_test_schema(settings.database_url)
     return settings
 
@@ -50,15 +48,15 @@ async def test_api_only_mode_when_dist_missing(tmp_path: Path) -> None:
 
 
 def make_health_settings(tmp_path, **overrides) -> Settings:
-    db_path = (tmp_path / "health.db").as_posix()
-    return Settings(acmi_enabled=False, database_url=f"sqlite+aiosqlite:///{db_path}", **overrides)
+    return Settings(
+        acmi_enabled=False, database_url=database_url_for_test(tmp_path, "health.db"), **overrides
+    )
 
 
 async def test_health_endpoint_reports_ok(tmp_path) -> None:
     settings = make_health_settings(tmp_path)
     schema_engine = create_engine(settings.database_url)
-    async with schema_engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    await create_async_test_schema(schema_engine)
     await schema_engine.dispose()
 
     app = create_app(settings)

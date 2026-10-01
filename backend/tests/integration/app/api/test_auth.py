@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import WebSocketDisconnect
+import asyncio
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
@@ -86,7 +87,7 @@ async def test_rest_accepts_x_auth_token_header(tmp_path) -> None:
 
 def test_ws_accepts_valid_query_token(tmp_path) -> None:
     app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
-    with TestClient(app) as test_client:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:
         with test_client.websocket_connect("/api/ws/landings?token=secret") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
@@ -94,7 +95,7 @@ def test_ws_accepts_valid_query_token(tmp_path) -> None:
 
 def test_ws_rejects_missing_or_wrong_token(tmp_path) -> None:
     app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="secret"))
-    with TestClient(app) as test_client:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:
         with pytest.raises(WebSocketDisconnect):
             with test_client.websocket_connect("/api/ws/landings"):
                 pass
@@ -105,7 +106,7 @@ def test_ws_rejects_missing_or_wrong_token(tmp_path) -> None:
 
 def test_ws_allows_anonymous_when_auth_disabled(tmp_path) -> None:
     app = create_app(make_api_settings(tmp_path, database_filename="auth.db"))
-    with TestClient(app) as test_client:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:
         with test_client.websocket_connect("/api/ws/landings") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
@@ -115,7 +116,7 @@ def test_ws_connection_revoked_when_auth_enabled_after_connect(tmp_path) -> None
     """Issue #25: enabling auth after a connection was established (while auth
     was off) must not leave the stale connection open."""
     app = create_app(make_api_settings(tmp_path, database_filename="auth.db"))
-    with TestClient(app) as test_client:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:
         with test_client.websocket_connect("/api/ws/landings") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
@@ -132,7 +133,7 @@ def test_ws_connection_revoked_when_auth_enabled_after_connect(tmp_path) -> None
 def test_ws_connection_revoked_on_token_rotation(tmp_path) -> None:
     """Issue #25: rotating the server token must invalidate old connections."""
     app = create_app(make_api_settings(tmp_path, database_filename="auth.db", auth_token="old"))
-    with TestClient(app) as test_client:
+    with TestClient(app, backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:
         with test_client.websocket_connect("/api/ws/landings?token=old") as websocket:
             websocket.send_text("ping")
             assert websocket.receive_json() == {"type": "pong"}
