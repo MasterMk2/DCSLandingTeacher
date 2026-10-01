@@ -8,6 +8,7 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
+from app.models import Base
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
@@ -27,7 +28,7 @@ def run_migrations() -> None:
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
-            target_metadata=None,
+            target_metadata=Base.metadata,
         )
 
         with context.begin_transaction():

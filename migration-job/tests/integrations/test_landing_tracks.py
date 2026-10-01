@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
@@ -94,6 +95,26 @@ def test_empty_postgres_database_upgrades_to_head(postgres_db: tuple[Engine, Con
     assert version == REVISION_0009
     tables = set(inspect(engine).get_table_names())
     assert {'flights', 'objects', 'landings', 'landing_tracks'} <= tables
+
+
+def test_migrated_schema_matches_backend_models(
+    postgres_db: tuple[Engine, Config], tmp_path: Path
+) -> None:
+    _, config = postgres_db
+
+    command.upgrade(config, 'head')
+
+    command.check(config)
+
+    migration_copy = tmp_path / 'migrations'
+    shutil.copytree(MIGRATIONS_DIR, migration_copy)
+    config.set_main_option('script_location', str(migration_copy))
+    revision = command.revision(
+        config, message='metadata probe', rev_id='0010_metadata_probe', autogenerate=True
+    )
+    assert revision is not None and not isinstance(revision, list)
+    assert Path(revision.path).parent == migration_copy / 'versions'
+    assert Path(revision.path).is_file()
 
 
 def test_0009_moves_existing_json_to_compressed_track(
