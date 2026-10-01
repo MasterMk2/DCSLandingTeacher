@@ -14,7 +14,7 @@ class TacviewSource(BaseModel):
     id: str = Field(..., description="Unique source identifier (e.g., 'server1', 'caucasus-main')")
     name: str = Field(..., description="Display name (e.g., 'Caucasus Main', 'NTTR Training')")
     host: str = Field(default="127.0.0.1", description="Tacview server host/IP")
-    port: int = Field(default=31010, description="Tacview server port")
+    port: int = Field(default=42674, description="Tacview server port")
     password: str = Field(default="", description="Handshake password (empty if unprotected)")
     client_name: str = Field(default="DCSLandingTeacher", description="Client name for handshake")
     idle_timeout: float = Field(default=60.0, description="Idle timeout in seconds (0 to disable)")
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # Tacview realtime telemetry stream (ACMI 2.2 Text over TCP)
     # Multi-source configuration (new): JSON array of TacviewSource objects.
-    # Example: DLT_TACVIEW_SOURCES_JSON='[{"id":"s1","name":"Main","host":"10.0.0.1","port":31010}]'
+    # Example: DLT_TACVIEW_SOURCES_JSON='[{"id":"s1","name":"Main","host":"10.0.0.1","port":42674}]'
     tacview_sources_json: str = Field(
         default="",
         description="JSON string of Tacview source configurations",
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # Legacy single-source settings (used when tacview_sources_json is empty).
     tacview_host: str = "127.0.0.1"
-    tacview_port: int = 31010
+    tacview_port: int = 42674
     tacview_client_name: str = "DCSLandingTeacher"
     tacview_password: str = ""
 
@@ -52,10 +52,6 @@ class Settings(BaseSettings):
 
     # Disable to run API-only without the background ACMI client
     acmi_enabled: bool = True
-
-    # Automatic reconnection backoff
-    reconnect_initial_delay: float = 1.0
-    reconnect_max_delay: float = 30.0
 
     # Grading thresholds (YAML); relative to the working directory.
     grading_config_path: str = "config/grading.yaml"

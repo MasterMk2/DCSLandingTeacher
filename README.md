@@ -123,6 +123,10 @@ docker compose up --build
 | `DLT_AUTH_TOKEN` | （空） | 簡易トークン認証の共有トークン。空なら認証なし（既定）。詳細は「簡易トークン認証」の節を参照 |
 | `DLT_IMPORT_MAX_UPLOAD_MB` | `200` | ACMI ファイルインポートのアップロードサイズ上限（MB）。詳細は「ACMI ファイルのインポート」の節を参照 |
 
+既存の Tacview 設定で `31010` を使っている場合は、`.env` に
+`DLT_TACVIEW_PORT=31010` を明示してください。複数ソースの JSON 設定でも
+各ソースの `port` を指定できます。未使用だった `DLT_RECONNECT_*` は廃止しています。
+
 ### データベースマイグレーション
 
 スキーマ管理には、Alembic を使用する `migration-job` を利用しています。

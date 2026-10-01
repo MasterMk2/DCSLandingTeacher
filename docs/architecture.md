@@ -7,7 +7,7 @@
 
 ```mermaid
 flowchart LR
-    DCS[DCS Dedicated Server + Tacview] -- "ACMI TCP 31010" --> ING[ACMI Ingest<br/>app.acmi.stream]
+    DCS[DCS Dedicated Server + Tacview] -- "ACMI TCP 42674" --> ING[ACMI Ingest<br/>app.acmi.stream]
     ING --> PARSER[ACMI Parser<br/>app.acmi.parser]
     PARSER --> DETECTOR[Landing Detector<br/>app.detection]
     DETECTOR --> GRADER[LSO / Land Grader<br/>app.grading]
