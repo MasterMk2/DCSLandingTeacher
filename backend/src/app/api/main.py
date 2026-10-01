@@ -362,11 +362,13 @@ def _build_runway_provider(settings: Settings) -> RunwayProvider | None:
     )
 
 
-async def _handle_app_error(_request: Request, exc: AppError) -> JSONResponse:
+async def _handle_app_error(_request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, AppError)
     return error_envelope(exc.status_code, exc.error_code, exc.message, exc.details)
 
 
-async def _handle_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+async def _handle_validation_error(_request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RequestValidationError)
     return error_envelope(
         422, "VALIDATION_ERROR", "Request validation failed", {"errors": exc.errors()}
     )
