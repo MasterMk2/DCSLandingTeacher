@@ -587,10 +587,11 @@ def _cut_approach(
     config: DetectionConfig,
     kind: str = "carrier",
     wow: list[bool | None] | None = None,
+    heights: list[float | None] | None = None,
 ) -> list[TrackSample]:
     """Walk backwards from touchdown collecting the final-approach segment.
 
-    The walk stops at the previous ground contact when there is one. A
+    The walk stops at the previous ground contact or low-pass climb-out. A
     circuit begins where the last one ended, so anything before that belongs
     to a different arrival -- and the land window is now wide enough
     (300 s / 8 nm) to reach back into it, which would draw two loops on the
@@ -606,6 +607,11 @@ def _cut_approach(
         distance_m = max(distance_m, config.carrier_approach_distance_m)
     start_index = touchdown_index
     limit_time = touchdown.time - window_s
+    climbed_out = False
+    departure_index: int | None = None
+    # A brief recovery inside the outcome-observation window may still be
+    # part of this final. Infer a separate pass only outside that window.
+    separate_before = samples[touchdown_index].time - config.touch_and_go_max_dwell_s
     for j in range(touchdown_index - 1, -1, -1):
         sample = samples[j]
         if sample.time < limit_time:
@@ -621,8 +627,28 @@ def _cut_approach(
             break
         if wow is not None and wow[j] is True:
             # A previous touchdown / roll-out: this circuit started here.
+            departure_index = None
             break
+        if heights is not None and (height := heights[j]) is not None:
+            if height <= config.bounce_merge_agl_m:
+                if climbed_out and departure_index is None and sample.time < separate_before:
+                    # A low approach may miss WOW (or be a go-around).
+                    # Remember its departure, but finish walking this low
+                    # excursion: an observed contact takes precedence.
+                    departure_index = start_index
+                # Pair the climb with this low excursion only. A recovery
+                # near touchdown must not qualify a much older low pass.
+                climbed_out = False
+            elif departure_index is not None:
+                break
+            elif not climbed_out:
+                vertical = _vertical_speed(samples, j)
+                climbed_out = (
+                    vertical is not None and vertical > config.climb_out_vertical_ms
+                )
         start_index = j
+    if departure_index is not None:
+        start_index = departure_index
     tail_limit = touchdown.time + config.post_touchdown_tail_s
     end_index = touchdown_index
     for j in range(touchdown_index + 1, len(samples)):
@@ -659,6 +685,10 @@ def analyze_track(
     surfaces = _reference_surfaces(
         samples, carriers, config, deck_altitude_for, ground_altitude_m
     )
+    heights = [
+        compute_agl(s, surface, config, trust_sample_agl=not on_deck)
+        for s, (surface, on_deck) in zip(samples, surfaces)
+    ]
     wow = [
         is_on_deck(s, surface, config, trust_sample_agl=not on_deck)
         for s, (surface, on_deck) in zip(samples, surfaces)
@@ -704,10 +734,7 @@ def analyze_track(
         airborne_since_contact = False
         peak_agl = 0.0
         for j in range(index + 1, len(samples)):
-            surface_j, on_deck_j = surfaces[j]
-            agl = compute_agl(
-                samples[j], surface_j, config, trust_sample_agl=not on_deck_j
-            )
+            agl = heights[j]
             if wow[j] is False:
                 airborne_since_contact = True
                 peak_agl = max(peak_agl, agl or 0.0)
@@ -733,7 +760,7 @@ def analyze_track(
         if kind == "carrier" and outcome == "touch_and_go":
             outcome = "bolter"
 
-        approach = _cut_approach(samples, index, touchdown, config, kind, wow)
+        approach = _cut_approach(samples, index, touchdown, config, kind, wow, heights)
         approach_pattern = _classify_approach_pattern(approach)
         if outcome != "full_stop" or current_time is None:
             finalized = True
