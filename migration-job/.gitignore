@@ -1,0 +1,29 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Python packaging and virtual environments
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Coverage and test outputs
+.coverage
+coverage.xml
+htmlcov/
+
+# Local environment and secrets
+.env
+.env.*
+secrets/
+
+# Local OS and editor noise
+.DS_Store
+Thumbs.db

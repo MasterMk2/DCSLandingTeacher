@@ -94,6 +94,7 @@ async def test_the_record_starts_before_the_kissoff(session_factory) -> None:
 async def test_the_case_i_pattern_is_read_relative_to_the_moving_ship(session_factory) -> None:
     landing, expect, _ = await _trap(session_factory)
     m = landing.metrics
+    assert m is not None
 
     assert landing.approach_pattern == "overhead"
     assert m["deck_frame"] == "moving_deck"
@@ -109,7 +110,9 @@ async def test_the_case_i_pattern_is_read_relative_to_the_moving_ship(session_fa
     assert m["pattern_break_entry_agl_m"] == pytest.approx(800.0 * FT, abs=5.0)
     # Downwind parallel to the ship's heading -- not 9 deg off it, which is
     # what measuring it along the angled deck would report.
-    assert m["pattern_downwind_course_error_deg"] < 1.0
+    course_error = m["pattern_downwind_course_error_deg"]
+    assert isinstance(course_error, (int, float))
+    assert course_error < 1.0
     assert m["pattern_downwind_abeam_m"] == pytest.approx(expect["abeam_m"], abs=30.0)
     assert m["pattern_abeam_distance_m"] == pytest.approx(expect["abeam_m"], abs=30.0)
     assert m["pattern_abeam_altitude_m"] == pytest.approx(expect["downwind_alt_m"], abs=5.0)
@@ -140,6 +143,7 @@ async def test_a_pass_flown_on_the_ball_grades_ok(session_factory) -> None:
 
     assert landing.factors == []
     assert landing.grade == "OK"
+    assert landing.metrics is not None
     samples = landing.approach_track["samples"]
     at_touchdown = min(samples, key=lambda s: abs(s["time"] - landing.touchdown_time))
     # Height above the DECK: the jet's reference point is ~2-3 m up when the
@@ -157,6 +161,8 @@ async def test_a_firm_trap_is_what_a_carrier_jet_is_built_for(session_factory) -
     """No flare on the boat: ~690 fpm on the ball is correct, not "hard"."""
     landing, expect, _ = await _trap(session_factory)
     m = landing.metrics
+    assert m is not None
+    assert landing.comment is not None
 
     assert m["touchdown_descent_rate_fpm"] == pytest.approx(expect["groove_sink_fpm"], rel=0.05)
     assert m["ramp_sink_ratio"] == pytest.approx(1.0, abs=0.1)
@@ -167,12 +173,19 @@ async def test_a_firm_trap_is_what_a_carrier_jet_is_built_for(session_factory) -
 async def test_a_flare_at_the_ramp_is_called_out_but_not_graded(session_factory) -> None:
     landing, _, _ = await _trap(session_factory, flare=True)
     m = landing.metrics
+    assert m is not None
+    assert landing.comment is not None
 
-    assert m["ramp_sink_ratio"] < 0.5
+    sink_ratio = m["ramp_sink_ratio"]
+    assert isinstance(sink_ratio, (int, float))
+    assert sink_ratio < 0.5
     assert "ランプで沈下を止めた" in landing.comment
     # Measured and spoken to, never scored: nothing calibrates it here.
     assert landing.grade == "OK"
-    assert all(f["name"] != "FLARE" for f in landing.factors)
+    assert landing.factors is not None
+    for factor in landing.factors:
+        assert isinstance(factor, dict)
+        assert factor["name"] != "FLARE"
 
 
 @pytest.mark.parametrize(
@@ -182,6 +195,8 @@ async def test_groove_time_outside_15_to_19_s_is_named(
     session_factory, groove_s: float, verdict: str
 ) -> None:
     landing, _, _ = await _trap(session_factory, groove_s=groove_s)
+    assert landing.metrics is not None
+    assert landing.comment is not None
 
     assert landing.metrics["pattern_groove_verdict"] == verdict
     assert f"（{verdict}: 基準 15〜19 秒）" in landing.comment
@@ -197,6 +212,8 @@ async def test_a_straight_in_has_no_case_i_groove_to_time(session_factory) -> No
     """
     landing, _, _ = await _trap(session_factory, fly_straight_in())
     m = landing.metrics
+    assert m is not None
+    assert landing.comment is not None
 
     assert landing.kind == "carrier"
     assert m["deck_frame"] == "moving_deck"
@@ -245,12 +262,16 @@ async def test_the_circuit_after_a_bolter_has_no_kissoff(session_factory) -> Non
     """
     case = fly_bolter_then_trap()
     bolter, trap = await _traps(session_factory, case)
+    assert bolter.metrics is not None
+    assert bolter.comment is not None
+    assert trap.comment is not None
 
     assert bolter.outcome == "bolter"
     assert bolter.metrics["pattern_entry"] == "initial"
     assert "ブレイク（キスオフ）" in bolter.comment
 
     m = trap.metrics
+    assert m is not None
     assert trap.outcome == "full_stop"
     assert m["pattern_starts_from_deck"] is True
     assert m["pattern_entry"] == "turn"
@@ -272,6 +293,8 @@ async def test_the_circuit_after_a_waveoff_is_the_one_measured(session_factory) 
     case = fly_waveoff_then_trap()
     (trap,) = await _traps(session_factory, case)
     m = trap.metrics
+    assert m is not None
+    assert trap.comment is not None
 
     assert m["pattern_low_pass_time"] == pytest.approx(case.expect["waveoff_time"], abs=6.0)
     assert m["pattern_entry"] == "turn"
@@ -285,6 +308,7 @@ async def test_the_circuit_after_a_waveoff_is_the_one_measured(session_factory) 
 async def test_a_regrade_reads_the_same_pattern_back(session_factory) -> None:
     """Everything the pattern needs is in the stored track (FR-7)."""
     landing, _, pipeline = await _trap(session_factory)
+    assert landing.metrics is not None
     before = dict(landing.metrics)
 
     payload = await pipeline.regrade(landing)
@@ -303,19 +327,21 @@ async def test_a_regrade_reads_the_same_pattern_back(session_factory) -> None:
     assert payload["approach_pattern"] == "overhead"
 
 
-async def test_the_detail_api_serves_the_pattern_in_the_ships_frame(tmp_path) -> None:
+async def test_the_detail_api_serves_the_pattern_in_the_ships_frame(database_url: str) -> None:
     """The plan view draws a Case I up the ship's heading, from these."""
-    import httpx
+    import httpx2 as httpx
 
     from app.api.main import create_app
     from app.config import Settings
+    from tests.helpers import create_test_schema
 
     # The default carriers path is relative to the repo root and does not
     # resolve from backend/; without the book no deck exists and no trap
     # can be detected at all, so name the real file.
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             carriers_config_path=str(CARRIERS_YAML),

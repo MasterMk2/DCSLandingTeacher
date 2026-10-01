@@ -44,11 +44,12 @@ GitHub Issue として起票する際のたねリストとして利用してく�
 - 複数機が同時に最終進入している場合、進入区間のサンプル切り出しが機体単位で
   正しく分離できるか検証・設計する（現在は機体別バッファで分離。同一機の連続進入が主な懸念）
 
-### DB マイグレーション導入
+### DB マイグレーション（対応済み）
 - **種別**: 設計 / ラベル: `infrastructure`, `database`
-- 現状は `init_db` による CREATE TABLE のみ。スキーマ変更時に既存 SQLite データが
-  保持できないため、Alembic 等のマイグレーション導入を検討する
-- 受け入れ条件: スキーマ変更後も旧 DB ファイルが自動アップグレードされる
+- PostgreSQL のスキーマは `migration-job/` の Alembic プロジェクトで管理し、Compose は
+  DB の正常起動後に migration job を実行してから API を起動する
+- 旧 SQLite ボリュームは自動移行しない。データを保持する移行が必要になった場合は、
+  エクスポート・インポート手順を別途設計する
 
 ## 要件確認
 
@@ -120,7 +121,8 @@ GitHub Issue として起票する際のたねリストとして利用してく�
     SELECT が走る可能性
   - `_maybe_detect_landing`: **航空機の全更新ごとに** `analyze_track` を
     バッファ全体（最大 600 秒分）へ再実行 + 強制 flush（commit）
-  - `_flush(force=True)` が SQLite 単一ライタのコミットを大量発生させる
+- テストで使う SQLite と実運用の PostgreSQL では書き込み特性が異なるため、実運用の
+  性能は PostgreSQL を対象に計測する
 - 対応案:
   - 検出のトリガーを絞る: AGL/on_ground 変化や降下率が閾値近い場合のみ
     `analyze_track` を実行（フル再解析は接地候補時のみ）
@@ -176,11 +178,11 @@ GitHub Issue として起票する際のたねリストとして利用してく�
 
 ## その他（実装タスク由来）
 
-### README スクリーンショットの差し替え
+### README スクリーンショットの追加
 - **種別**: ドキュメント / ラベル: `documentation`
-- README のスクリーンショット枠（`docs/images/*.png` プレースホルダ）に実際の画面を配置する
+- README に実際の画面を追加する
 
 ### WebSocket パスの表記ゆれ解消（対応済み: Issue #11）
 - **種別**: ドキュメント / ラベル: `documentation`
-- ドキュメント・コメント内の WebSocket パス表記を実際のパス `/api/ws/landings` に統一した
+- ドキュメント・コメント内の WebSocket パス表記を正規パス `/api/v1/ws/landings` に統一した
   （要件定義書 plans/requirements.md 自体には該当表記がなく、履歴資料として変更不要と判断）

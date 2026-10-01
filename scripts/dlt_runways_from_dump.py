@@ -15,15 +15,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "backend"))
+sys.path.insert(0, str(REPO_ROOT / "backend" / "src"))
 
 from app.runways.dcssb import _convergence_deg, _parse_airbase  # noqa: E402
 from app.runways.provider import CACHE_VERSION  # noqa: E402
 
 
-def convert(dump: dict) -> dict:
+def convert(dump: dict[str, Any]) -> dict[str, Any]:
     from app.runways.models import EXACT_FIELDS
 
     theatre = dump.get("theatre") or "unknown"

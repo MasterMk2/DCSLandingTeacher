@@ -1,0 +1,731 @@
+"""Landing grading pipeline: detection event -> grade -> DB -> notification.
+
+Connects the ingestor's landing listener to the graders and persistence
+(FR-3, FR-4, FR-7). The raw approach segment with computed deviations is
+stored alongside the evaluation so thresholds can be re-applied later via
+``POST /api/landings/{id}/regrade`` without re-parsing any ACMI data.
+"""
+
+from __future__ import annotations
+
+import math
+
+from datetime import datetime, timezone
+from logging import getLogger
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.detection.detector import LandingEvent
+from app.grading.carriers import (
+    CarrierGeometryBook,
+)
+from app.grading.config import GradingConfig
+from app.grading.deviations import ApproachAnalysis, build_approach_analysis
+from app.grading.land_grader import LandGradeResult, grade_land_landing
+from app.grading.lso_grader import LsoGradeResult, grade_carrier_approach
+from app.grading.pattern import effective_approach_pattern
+from app.ingest import LandingContext
+from app.models.entities import DcsObject, Flight, Landing
+
+logger = getLogger(__name__)
+
+
+def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> None:
+    """Re-anchor the stored deviations to a (possibly changed) reference slope.
+
+    ``glideslope_deviation`` is metres above/below the ideal path, so it is a
+    function of the reference angle. Changing the angle without recomputing
+    it would leave the charts drawing an ideal line that the plotted
+    deviations no longer refer to.
+    """
+    if abs(slope_deg - analysis.glideslope_deg) < 1e-9:
+        return
+    analysis.glideslope_deg = slope_deg
+    tan_slope = math.tan(math.radians(slope_deg))
+    for sample in analysis.samples:
+        if sample.agl is not None:
+            sample.glideslope_deviation = sample.agl - sample.distance_to_go * tan_slope
+
+# 3 (2026-09-08): v2 に加え、進入区間の最大高度が 100 ft 未満のホップには
+# 成績を付けない (min_flight_agl_m)。数 m 浮いて降りただけのヘリが
+# 降下率＋センターラインだけで 100/A になっていた。既存の着陸は再採点で
+# 反映される。
+# 4 (2026-09-25): 軌跡から荷重倍数 (G) と旋回率を導いて approach_track の
+# 各サンプルに持たせ、ブレイクの G (ピーク・定常値・変動・バンク角・
+# 進入速度・旋回量) をパターンのメトリクスに出す。測定のみで点数は
+# 変えない --- 既存の着陸を再採点しても成績は動かず、数字が増えるだけ。
+# 5 (2026-09-26): ブレイク脚を「ダウンウィンド前 90 秒の中で最後に 90 度
+# 以上回った連続旋回」に限る (pattern.BreakBounds)。それまでは初期方向に
+# 揃った点まで遡っていたので、角度付きイニシャルやパターン前の機動が
+# 丸ごと「ブレイク」になっていた。ブレイクの高度変動の採点対象が変わる
+# ので、再採点で点数が動く着陸がある (本番 872 件で判定対象 726 → 約 610)。
+# 6 (2026-09-26): 位置の飛び (leave-one-out 残差が 10 m または 0.1 秒分を
+# 超えるサンプル) を G の導出から外す (kinematics.reject_position_outliers)。
+# 点数には触らない --- G は測定のみ --- が、G のピーク値と系列が変わる。
+# 7 (2026-09-26): 空母を Case I パターンごと記録・解析する。取り込み窓を
+# 陸上と同じ 300 秒 / 8 nm に広げ (ブレイク = キスオフが入る)、偏差は
+# 甲板と一緒に動く座標系で、甲板からの高さで、左舷 9.14 度のアングルド
+# デッキと 3 番ワイヤーを基準に測る (carriers.yaml を AIRBOSS の値に)。
+# FAST / SLOW の基準速度は接地前 60 秒に限る。パターンは測定と講評のみ。
+# 陸上では艦載機 (F/A-18・F-14 等) に専用の接地降下率バンドを当てる
+# (フレアしない接地が前提のため)。既存の空母の行は再採点しても接地前
+# 60 秒・旧座標系のままなので、パターンは出ない。
+GRADING_VERSION = "7"
+
+
+def _row_approach_pattern(
+    event: LandingEvent, result: LandGradeResult | LsoGradeResult
+) -> str | None:
+    """``landings`` 行に書く進入パターン。
+
+    採点側が軌跡から決め直した値が正で、検出器のラベル
+    (``event.approach_pattern``) は取り込み時の見込みでしかない。書き戻さ
+    ないと、詳細画面が「オーバーヘッド」と表示したまま採点だけが別の
+    判断で動く、という食い違いが残る。空母も Case I のダウンウィンドを
+    艦の座標系で読めたかどうかで決める (読めない旧形式は検出器のまま)。
+    """
+    return result.metrics.get("approach_pattern") or event.approach_pattern
+
+
+def _runway_venue(analysis: ApproachAnalysis) -> str | None:
+    """``"Nellis 03L"`` from a resolved runway, or ``None``.
+
+    Reads the analysis rather than the runway object so a re-grade produces
+    the same label from the stored ``approach_track`` without going back to
+    the DCS server.
+    """
+    geometry = analysis.geometry
+    if not geometry or geometry.get("kind") != "runway":
+        return None
+    airbase = str(geometry.get("airbase") or "").strip()
+    if not airbase:
+        return None
+    return f"{airbase} {str(geometry.get('name') or '').strip()}".strip()
+
+
+def _venue_name(event: LandingEvent, analysis: ApproachAnalysis) -> str | None:
+    """Where the landing happened, for the list view and the venue filter.
+
+    Carrier landings have always carried the ship's name; land landings
+    carried nothing and the table printed a literal "空港". That was survivable
+    while every recording came off one map -- there was only one airfield it
+    could sensibly be -- and is not once a second theatre is flown. The
+    airfield name exists only on the resolved runway, so a landing graded
+    against the touchdown-derived approximation still has no venue, which is
+    honest: nothing knows where it was.
+    """
+    if event.kind == "carrier":
+        return event.carrier_name
+    return _runway_venue(analysis)
+
+
+def _write_graded_event(
+    landing: Landing,
+    event: LandingEvent,
+    analysis: ApproachAnalysis,
+    result: LandGradeResult | LsoGradeResult,
+    score: float | None,
+) -> str | None:
+    """Overwrite a stored row with a fresh detection + grade of it.
+
+    Shared by the provisional -> final confirmation and by the rebuild from
+    raw tracks: both re-detect the landing, so both have to refresh
+    everything the detection decides, not just the grade. Returns the venue
+    name written.
+    """
+    landing.kind = event.kind
+    landing.outcome = event.outcome
+    landing.outcome_status = "final"
+    # The touchdown itself moves between analyses: bounces absorbed after the
+    # first report shift it to the last contact of the sequence, and a
+    # re-detection may place the contact a sample apart. Refresh everything
+    # derived from it, or the row keeps describing a different instant.
+    touchdown = event.touchdown
+    landing.touchdown_time = touchdown.time
+    landing.latitude = touchdown.latitude
+    landing.longitude = touchdown.longitude
+    landing.altitude = touchdown.altitude
+    landing.heading = touchdown.heading
+    landing.speed = touchdown.speed
+    landing.descent_rate = touchdown.descent_rate_ms
+    landing.grade = result.grade
+    landing.score = score
+    landing.comment = result.comment
+    landing.factors = result.factors_payload()
+    landing.metrics = dict(result.metrics)
+    landing.approach_track = analysis.as_dict()
+    landing.approach_pattern = _row_approach_pattern(event, result)
+    # The touchdown moved, so the runway may have too -- but never clear a
+    # venue we already had: a re-resolve that comes back empty (the sweep
+    # expired, the bot went away) is missing information, not evidence the
+    # airfield changed.
+    venue_name = _venue_name(event, analysis) or landing.venue_name
+    landing.venue_name = venue_name
+    if not landing.airframe and analysis.airframe:
+        landing.airframe = analysis.airframe
+    landing.grading_version = GRADING_VERSION
+    landing.graded_at = _utcnow()
+    return venue_name
+
+
+def _touchdown_epoch(
+    reference_time: str | None, mission_time: float | None
+) -> float | None:
+    """Wall-clock epoch of a touchdown (Issue D-1).
+
+    ACMI times are seconds since mission start; the wall-clock instant is
+    ``ReferenceTime`` (ISO-8601 in the global object) plus that offset.
+    Returns ``None`` when the header is missing or unparsable so clients can
+    fall back to displaying the raw mission time.
+    """
+    if reference_time is None or mission_time is None:
+        return None
+    try:
+        base = datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return base.timestamp() + mission_time
+
+
+class LandingPipeline:
+    """Grade detected landings, persist them, and fan out notifications."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        grading_config: GradingConfig,
+        notifier: Any | None = None,
+        carrier_geometry_book: CarrierGeometryBook | None = None,
+        runway_provider: Any | None = None,
+        grading_config_path: Any | None = None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._config = grading_config
+        self._notifier = notifier
+        # Per-carrier FLOLS geometry (Issue #3); an empty book means every
+        # carrier uses the legacy touchdown-referenced approximation.
+        self._geometry_book = carrier_geometry_book or CarrierGeometryBook({})
+        # Real runway geometry for land landings; ``None`` falls back to the
+        # touchdown-referenced approximation.
+        self._runway_provider = runway_provider
+        # Source path so the config can be reloaded at runtime (Issue #40).
+        self._config_path = Path(grading_config_path) if grading_config_path is not None else None
+
+    def reload_config(self) -> None:
+        """Reload grading thresholds from disk without restarting (Issue #40).
+
+        New landings use the fresh values immediately. A missing path (config
+        built in-memory) is a no-op so tests and embedded configs are untouched.
+        """
+        if self._config_path is None or not self._config_path.is_file():
+            return
+        from app.grading.config import load_grading_config
+
+        self._config = load_grading_config(self._config_path)
+        logger.info("grading config reloaded from %s", self._config_path)
+
+    async def handle_landing(self, context: LandingContext) -> int | None:
+        """Grade + persist one detected landing; returns the row id.
+
+        Two-phase confirmation (Issue #5): a touchdown whose outcome is still
+        under observation (bolter / touch-and-go dwell) is persisted as
+        ``outcome_status="provisional"`` and broadcast immediately; the final
+        verdict arrives later via :meth:`finalize_landing`.
+        """
+        event = context.event
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
+        status = "final" if event.finalized else "provisional"
+        landing_id = await self._persist(context, analysis, result, score, status)
+
+        if self._notifier is not None and landing_id is not None:
+            try:
+                await self._notifier.broadcast_landing(
+                    self._payload(
+                        landing_id,
+                        context,
+                        result,
+                        score,
+                        status,
+                        _venue_name(event, analysis),
+                    ),
+                    message_type="landing",
+                )
+            except Exception:
+                logger.exception("landing notification failed")
+        return landing_id
+
+    async def record_rescanned_landing(
+        self, context: LandingContext, created_at: datetime | None
+    ) -> int | None:
+        """Grade + persist a landing the rescan found in old raw tracks.
+
+        The same grading and row as a live detection, minus the broadcast:
+        the landing happened long ago, and pushing it to the dashboard as a
+        ``landing`` message would put it at the top of every open list as
+        if it had just touched down. ``created_at`` is the rescan's estimate
+        of when it did, since that column is what the list shows and sorts
+        by.
+        """
+        event = context.event
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
+        return await self._persist(
+            context, analysis, result, score, "final", created_at=created_at
+        )
+
+    async def finalize_landing(self, landing_id: int, context: LandingContext) -> None:
+        """Confirm a provisional landing once its outcome is settled (Issue #5).
+
+        Re-grades the (now longer) approach segment, updates the stored row in
+        place, and broadcasts a ``landing_update`` message so connected
+        clients can replace the provisional entry.
+        """
+        event = context.event
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
+        async with self._session_factory() as session:
+            landing = await session.get(Landing, landing_id)
+            if landing is None:
+                logger.warning("cannot finalize landing #%d: row disappeared", landing_id)
+                return
+            venue_name = _write_graded_event(landing, event, analysis, result, score)
+            await session.commit()
+
+        if self._notifier is not None:
+            try:
+                await self._notifier.broadcast_landing(
+                    self._payload(
+                        landing_id, context, result, score, "final", venue_name
+                    ),
+                    message_type="landing_update",
+                )
+            except Exception:
+                logger.exception("landing update notification failed")
+
+    # ------------------------------------------------------------------
+
+    def _resolve_geometry(self, event: LandingEvent):
+        """Per-carrier FLOLS geometry for this event (Issue #3)."""
+        if event.kind != "carrier":
+            return None
+        return self._geometry_book.resolve(event.carrier_name, event.carrier_type)
+
+    def deck_altitude_for(self, carrier: Any) -> float | None:
+        """Flight-deck height (MSL) of a tracked ship, for the DETECTOR.
+
+        The detector has to know how high the deck is before it can tell that
+        an aircraft is standing on one: Tacview's AGL is measured to the sea,
+        so a jet parked on a Nimitz reads ~22 m up and never satisfies the
+        weight-on-wheels test. The geometry book lives here, in the grading
+        layer, and the detector deliberately does not import it -- hence a
+        resolver handed down rather than a dependency.
+
+        ``None`` for a ship that is not in the book: better to detect no
+        carrier landing than to invent a deck height for an unknown hull.
+        """
+        geometry = self._geometry_book.resolve(
+            getattr(carrier, "name", None), getattr(carrier, "type", None)
+        )
+        return geometry.deck_altitude_m if geometry is not None else None
+
+    async def _resolve_runway(self, event: LandingEvent):
+        """Real runway geometry for a land landing (``None`` when unknown)."""
+        if event.kind != "land" or self._runway_provider is None:
+            return None
+        try:
+            return await self._runway_provider.resolve(
+                event.touchdown.latitude,
+                event.touchdown.longitude,
+                event.touchdown.heading,
+            )
+        except Exception:
+            logger.warning("runway lookup failed", exc_info=True)
+            return None
+
+    def _grade(
+        self,
+        context: LandingContext,
+        runway: Any | None = None,
+    ) -> tuple[ApproachAnalysis, LandGradeResult | LsoGradeResult, float | None]:
+        event = context.event
+        analysis = build_approach_analysis(
+            event,
+            self._config.glideslope_for(event.kind, event.approach_pattern),
+            geometry=self._resolve_geometry(event),
+            runway=runway,
+            airframe=context.airframe,
+        )
+        if event.kind == "carrier":
+            return analysis, grade_carrier_approach(analysis, self._config), None
+        # 進入パターンは軌跡から決め直す。検出器のラベル (取り込み時に
+        # ヘディング変化率だけで付けた見込み値) は ``analysis`` にヒントと
+        # して残したまま、基準スロープの選択と採点にはこちらを使う。
+        # 確定値は result.metrics["approach_pattern"] に載り、行にはそれを
+        # 書く (:meth:`_persist` / :meth:`finalize_landing`)。
+        _reapply_reference_slope(
+            analysis,
+            self._config.glideslope_for(
+                "land",
+                effective_approach_pattern(analysis, self._config.land_grading),
+            ),
+        )
+        result = grade_land_landing(analysis, self._config)
+        return analysis, result, result.score
+
+    def _payload(
+        self,
+        landing_id: int,
+        context: LandingContext,
+        result: LandGradeResult | LsoGradeResult,
+        score: float | None,
+        status: str,
+        # Required, not defaulted: the comment below is the whole reason
+        # this function exists, and a default is how a field gets dropped.
+        venue_name: str | None,
+    ) -> dict[str, Any]:
+        event = context.event
+        # This payload is inserted straight into the dashboard's list as a
+        # row, so it has to carry every field that row renders. It did not
+        # carry ``score`` -- the argument was accepted and dropped -- and the
+        # table called ``score.toFixed()`` on the resulting ``undefined``,
+        # which throws, unmounts the React tree and leaves a blank page. Any
+        # field added to the list view has to be added here too.
+        return {
+            "id": landing_id,
+            "flight_id": context.flight_id,
+            "source_id": context.source_id,
+            "source_name": context.source_id,
+            "kind": event.kind,
+            "outcome": event.outcome,
+            "outcome_status": status,
+            "created_at": _utcnow().isoformat(),
+            "grade": result.grade,
+            "score": score,
+            "approach_pattern": _row_approach_pattern(event, result),
+            "pilot": context.pilot,
+            "airframe": context.airframe,
+            "venue_name": venue_name,
+            # Mission-relative time (ACMI seconds since mission start).
+            "touchdown_time": event.touchdown.time,
+            # Wall-clock epoch (Issue D-1): ReferenceTime + mission time so
+            # clients can display the real-world datetime of the touchdown.
+            "touchdown_epoch": _touchdown_epoch(
+                context.flight_reference_time, event.touchdown.time
+            ),
+        }
+
+    async def _airframe_of(self, landing: Landing) -> str | None:
+        """ACMI name of the aircraft that flew this landing, or ``None``.
+
+        The landing's own column first. Falling straight through to the
+        ``objects`` row -- which is what this did -- launders the very value
+        the row is not allowed to be trusted for: Tacview reuses object ids,
+        so that row may by now describe a missile. Worse, ``regrade`` writes
+        the result back into ``approach_track``, so one re-grade turns the
+        mislabelled name into the "detected" one and the evidence of the
+        mix-up is gone.
+        """
+        from sqlalchemy import select
+
+        if landing.airframe:
+            return landing.airframe
+        if landing.object_id is None:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(DcsObject.name).where(DcsObject.id == landing.object_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def regrade(
+        self, landing: Landing, overrides: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Re-apply current thresholds to a stored approach track (FR-7).
+
+        ``overrides`` is an optional nested dict merged on top of the YAML
+        configuration for this single call (e.g. tightened HIGH threshold).
+        """
+        if not landing.approach_track:
+            raise ValueError("landing has no stored approach track")
+        config = self._config
+        if overrides:
+            from app.grading.config import apply_config_overrides
+
+            config = apply_config_overrides(config, overrides)
+        try:
+            analysis = ApproachAnalysis.from_dict(landing.approach_track)
+        except ValueError as exc:
+            # Corrupt stored JSON (Issue #44): report it instead of a raw 500.
+            from app.api.errors import AppError
+
+            raise AppError(422, "MALFORMED_APPROACH_TRACK", str(exc)) from exc
+        # 進入パターンと機体は landings / objects 側が正。approach_track に
+        # 入れるようにしたのは後からなので、それ以前に記録された着陸では
+        # 空のままになる。ここで補わないと、既存データの再採点だけ
+        # 「パターン不明・機体不明」で採点されて結果が食い違う。
+        #
+        # 補うのはあくまで **ヒント** としてのラベル。行の値が過去の再採点で
+        # 確定させた値であっても、オーバーヘッドかどうかは毎回軌跡から
+        # 決め直すので、古い誤ラベルが再採点のたびに勝ち続けることはない。
+        if analysis.approach_pattern in (None, "", "unknown"):
+            analysis.approach_pattern = landing.approach_pattern or "unknown"
+        if analysis.airframe is None:
+            analysis.airframe = await self._airframe_of(landing)
+        if landing.kind != "carrier":
+            # 基準スロープは設定から引き直す。保存済みの値を使い続けると
+            # `overhead_glideslope_deg` を変えても既存の着陸に反映されず、
+            # 「設定を変えて再採点」が効かない。
+            #
+            # パターンは軌跡から決め直したものを使う: 行に入っている値
+            # (検出器のラベル) で基準スロープを選ぶと、採点が使うパターン
+            # と食い違ったままスロープだけ別物になる。
+            _reapply_reference_slope(
+                analysis,
+                config.glideslope_for(
+                    "land",
+                    effective_approach_pattern(analysis, config.land_grading),
+                ),
+            )
+        if landing.kind == "carrier":
+            result = grade_carrier_approach(analysis, config)
+            score = None
+        else:
+            result = grade_land_landing(analysis, config)
+            score = result.score
+
+        async with self._session_factory() as session:
+            # The caller may hold the entity in a different session; merge it.
+            landing = await session.merge(landing)
+            landing.approach_track = analysis.as_dict()
+            landing.grade = result.grade
+            landing.score = score
+            landing.comment = result.comment
+            landing.factors = result.factors_payload()
+            landing.metrics = dict(result.metrics)
+            # 採点側が軌跡から決め直したパターンを行にも反映する。ここを
+            # 書かないと、詳細画面のラベルだけ検出器の見込み値のまま残り、
+            # 採点は別の判断で動く。
+            landing.approach_pattern = (
+                result.metrics.get("approach_pattern") or landing.approach_pattern
+            )
+            # 機体名を持っていない古い行は、ここで焼き付けて自己修復させる。
+            # 0008 の backfill は「そのとき approach_track に機体名があった行」
+            # しか埋められず、後から採点し直して初めて機体名が入った行が
+            # 取り残される (実測 2 件)。再採点は analysis.airframe を既に
+            # 持っているので、書くのが自然な場所はここ。
+            if not landing.airframe and analysis.airframe:
+                landing.airframe = analysis.airframe
+            # Rows graded before land landings carried a venue have the
+            # airfield sitting unused in their stored approach_track; a
+            # re-grade is where it costs nothing to bring it out.
+            if not landing.venue_name:
+                landing.venue_name = _runway_venue(analysis)
+            landing.grading_version = GRADING_VERSION
+            landing.graded_at = _utcnow()
+            await session.commit()
+            approach_pattern = landing.approach_pattern
+        return {
+            "id": landing.id,
+            "grade": result.grade,
+            "score": score,
+            "comment": result.comment,
+            "factors": result.factors_payload(),
+            "metrics": dict(result.metrics),
+            "approach_pattern": approach_pattern,
+        }
+
+    async def rebuild(self, landing: Landing) -> dict[str, Any]:
+        """Detect and grade a stored landing again from the raw ``tracks``.
+
+        Unlike :meth:`regrade`, nothing stored on the row is re-used: the
+        aircraft's samples (and those of every carrier in the flight) are
+        read back from ``tracks`` around the touchdown, the current detector
+        cuts the approach again with today's windows and frames, and the
+        result replaces the row, down to which ship it names -- which is how
+        a carrier trap recorded with a 60 s window gets the rest of its
+        Case I back (see :mod:`app.rebuild`).
+
+        Raises :class:`~app.api.errors.AppError` (409) when the raw samples
+        are gone or no longer contain a landing at the stored time -- e.g.
+        the objects that hit the water beside a ship and were once stored as
+        "carrier landings", which today's detector rejects.
+        """
+        from app.api.errors import AppError
+        from app.detection.classify import ObjectClass, classify_object_type
+        from app.rebuild import redetect
+
+        if landing.touchdown_time is None:
+            raise AppError(409, "NO_TOUCHDOWN_TIME", "landing has no touchdown time")
+        touchdown_time = landing.touchdown_time
+        async with self._session_factory() as session:
+            aircraft = await session.get(DcsObject, landing.object_id)
+            flight = await session.get(Flight, landing.flight_id)
+            found = await redetect(
+                session,
+                landing.object_id,
+                landing.flight_id,
+                touchdown_time,
+                self._config.to_detection_config(),
+                self.deck_altitude_for,
+            )
+        if aircraft is None or not found.samples:
+            raise AppError(
+                409,
+                "NO_RAW_TRACK",
+                f"no raw track samples for landing #{landing.id} "
+                f"between t={found.start:.1f} and t={found.end:.1f}",
+            )
+        # Live ingest only runs detection for aircraft (a leading "Air+"): an
+        # ejected pilot is Ground+Light+Human+Air+Parachutist, and rows like
+        # that were stored as landings before the classifier was fixed. Both
+        # landings in the local real recording are such rows. Re-cutting
+        # them would re-create exactly the row the classifier now refuses,
+        # so refuse here too and leave the row as it is. (If the ACMI id was
+        # later reused by a non-aircraft, this refuses a real landing: the
+        # safe failure -- nothing is written.)
+        if classify_object_type(aircraft.type) != ObjectClass.AIRCRAFT:
+            raise AppError(
+                409,
+                "NOT_AN_AIRCRAFT",
+                f"landing #{landing.id} belongs to {aircraft.type!r}, "
+                "which live ingest does not treat as an aircraft",
+            )
+        event = found.event
+        if event is None:
+            raise AppError(
+                409,
+                "REBUILD_NO_MATCH",
+                f"the raw track of landing #{landing.id} holds no landing at "
+                f"t={touchdown_time:.1f}; the row was left unchanged",
+            )
+        ships = found.ships
+        carrier_row_id = (
+            ships[event.carrier_obj_id][0] if event.carrier_obj_id in ships else None
+        )
+        context = LandingContext(
+            flight_id=landing.flight_id,
+            acmi_object_id=aircraft.acmi_id,
+            pilot=landing.pilot or aircraft.pilot,
+            airframe=landing.airframe or aircraft.name,
+            event=event,
+            object_row_id=landing.object_id,
+            carrier_row_id=carrier_row_id,
+            source_id=landing.source_id,
+            flight_reference_time=flight.reference_time if flight else None,
+        )
+        analysis, result, score = self._grade(context, await self._resolve_runway(event))
+        async with self._session_factory() as session:
+            row = await session.merge(landing)
+            _write_graded_event(row, event, analysis, result, score)
+            row.carrier_object_id = carrier_row_id
+            await session.commit()
+            approach_pattern = row.approach_pattern
+        return {
+            "id": landing.id,
+            "grade": result.grade,
+            "score": score,
+            "comment": result.comment,
+            "factors": result.factors_payload(),
+            "metrics": dict(result.metrics),
+            "approach_pattern": approach_pattern,
+            "kind": event.kind,
+            "outcome": event.outcome,
+            "touchdown_time": event.touchdown.time,
+            "approach_samples": len(analysis.samples),
+            "approach_start_time": (
+                analysis.samples[0].time if analysis.samples else None
+            ),
+        }
+
+    # ------------------------------------------------------------------
+
+    async def _persist(
+        self,
+        context: LandingContext,
+        analysis: ApproachAnalysis,
+        result: LandGradeResult | LsoGradeResult,
+        score: float | None,
+        outcome_status: str = "final",
+        created_at: datetime | None = None,
+    ) -> int | None:
+        event: LandingEvent = context.event
+        touchdown = event.touchdown
+        async with self._session_factory() as session:
+            # Row ids come from the ingestor: the ingest transaction may not
+            # be committed yet, so re-querying could miss the rows.
+            carrier_row_id = context.carrier_row_id
+            if carrier_row_id is None:
+                carrier_row_id = await self._resolve_object_row(
+                    session, context.flight_id, event.carrier_obj_id
+                )
+            aircraft_row_id = context.object_row_id
+            if aircraft_row_id is None:
+                aircraft_row_id = await self._resolve_object_row(
+                    session, context.flight_id, context.acmi_object_id
+                )
+            if aircraft_row_id is None or context.flight_id is None:
+                logger.warning(
+                    "cannot persist landing: missing object/flight rows (obj=%s)",
+                    context.acmi_object_id,
+                )
+                return None
+
+            venue = _venue_name(event, analysis)
+
+            landing = Landing(
+                flight_id=context.flight_id,
+                source_id=context.source_id,
+                object_id=aircraft_row_id,
+                carrier_object_id=carrier_row_id,
+                kind=event.kind,
+                outcome=event.outcome,
+                outcome_status=outcome_status,
+                touchdown_time=touchdown.time,
+                venue_name=venue,
+                latitude=touchdown.latitude,
+                longitude=touchdown.longitude,
+                altitude=touchdown.altitude,
+                heading=touchdown.heading,
+                speed=touchdown.speed,
+                descent_rate=touchdown.descent_rate_ms,
+                grade=result.grade,
+                score=score,
+                comment=result.comment,
+                factors=result.factors_payload(),
+                metrics=dict(result.metrics),
+                approach_track=analysis.as_dict(),
+                approach_pattern=_row_approach_pattern(event, result),
+                # 誰が何で降りたかは着陸そのものの事実なので、着陸行に
+                # 焼き付ける。objects 行は ACMI ID が使い回されると別の
+                # オブジェクトに上書きされ、後からミサイル名に化ける。
+                pilot=context.pilot,
+                airframe=context.airframe,
+                grading_version=GRADING_VERSION,
+                graded_at=_utcnow(),
+            )
+            if created_at is not None:
+                landing.created_at = created_at
+            session.add(landing)
+            await session.commit()
+            await session.refresh(landing)
+            logger.info("landing #%d graded %s (%s)", landing.id, result.grade, event.kind)
+            return landing.id
+
+    async def _resolve_object_row(
+        self, session: AsyncSession, flight_id: int | None, acmi_id: str | None
+    ) -> int | None:
+        from sqlalchemy import select
+
+        if flight_id is None or not acmi_id:
+            return None
+        result = await session.execute(
+            select(DcsObject.id).where(
+                DcsObject.flight_id == flight_id,
+                DcsObject.acmi_id == acmi_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)

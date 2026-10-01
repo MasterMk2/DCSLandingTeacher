@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from app.detection.geometry import haversine_m, offset_position
-from app.runways.dcssb import _parse_airbase
+from app.runways.dcssb import DcssbClient, _parse_airbase
 from app.runways.models import (
     Runway,
     match_runway,
@@ -24,6 +26,7 @@ from app.runways.models import (
     runway_pair_from_dcs,
 )
 from app.runways.provider import CACHE_VERSION, RunwayProvider
+from tests.helpers import create_test_schema
 
 # --- a Nellis-shaped airfield -------------------------------------------------
 # Two parallel strips, 03L/21R and 03R/21L. The spacing and the stagger are
@@ -50,7 +53,7 @@ NELLIS_AIRBASE = {
 }
 
 
-def _nellis_detail() -> dict:
+def _nellis_detail() -> dict[str, Any]:
     along = math.radians(GRID_HEADING)
     right = math.radians(GRID_HEADING + 90.0)
     return {
@@ -178,22 +181,23 @@ def test_a_long_landing_stays_on_the_strip_it_actually_touched() -> None:
 # --- theatre selection --------------------------------------------------------
 
 
-class _FakeBot:
+class _FakeBot(DcssbClient):
     """DCSServerBot, as much of it as :class:`RunwayProvider` uses."""
 
     def __init__(
         self,
         servers: dict[str, str],
-        airbases: dict[str, list[dict]] | None = None,
+        airbases: dict[str, list[dict[str, Any]]] | None = None,
         runways: dict[str, list[Runway]] | None = None,
     ) -> None:
+        super().__init__("http://unused.invalid")
         self._servers = servers  # server name -> theatre it is running
         self._airbases = airbases or {}  # theatre -> airbase listing
         self._runways = runways or {}  # theatre -> swept runways
         self.swept: list[str] = []
         self.listed: list[str] = []
 
-    async def list_servers(self) -> list[dict]:
+    async def list_servers(self) -> list[dict[str, Any]]:
         return [
             {"name": name, "mission": {"theatre": theatre}}
             for name, theatre in self._servers.items()
@@ -208,7 +212,7 @@ class _FakeBot:
                 return name
         return None
 
-    async def fetch_airbases(self, server_name: str) -> list[dict]:
+    async def fetch_airbases(self, server_name: str) -> list[dict[str, Any]]:
         self.listed.append(server_name)
         return self._airbases.get(self._servers.get(server_name, ""), [])
 
@@ -366,7 +370,7 @@ async def test_a_local_sweep_wins_over_the_shipped_copy(tmp_path) -> None:
         length_m=3050.0,
         width_m=45.0,
     )
-    local = Runway(**{**shipped.__dict__, "airbase": "Nellis (swept here)"})
+    local = replace(shipped, airbase="Nellis (swept here)")
     _write_pool(seeds, "Nevada", [shipped])
     _write_pool(cache, "Nevada", [local])
 
@@ -493,7 +497,7 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
     only works when the provider is handed in by a test proves nothing about a
     server whose provider is built from settings.
     """
-    import httpx
+    import httpx2 as httpx
 
     from app.api.main import create_app
     from app.config import Settings
@@ -503,11 +507,12 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
         acmi_enabled=False,
-        # No DCSServerBot at all: shipped geometry has to stand on its own.
+        # No DCSServerBot at all: configured seed geometry has to stand on its own.
         dcssb_base_url="",
         runway_cache_dir=str(tmp_path / "cache"),
         runway_seed_dir=str(seeds),
     )
+    create_test_schema(settings.database_url)
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -518,7 +523,7 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
             assert listing.status_code == 200
             body = listing.json()
             assert body["can_sweep"] is False and body["running"] == []
-            assert body["theatres"] == [
+            assert [item for item in body["theatres"] if item["theatre"] == "Nevada"] == [
                 {
                     "theatre": "Nevada",
                     "runways": 4,
@@ -527,6 +532,8 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
                 }
             ]
 
+            # Missing host maps remain available from the bundled exact seeds.
+            assert "Caucasus" in {item["theatre"] for item in body["theatres"]}
             export = await http.get("/api/v1/runways/Nevada")
             assert export.status_code == 200
             assert {r["name"] for r in export.json()["runways"]} == {
@@ -535,7 +542,8 @@ async def test_the_api_lists_and_exports_shipped_geometry(tmp_path) -> None:
                 "03R",
                 "21L",
             }
-            assert (await http.get("/api/v1/runways/Syria")).status_code == 404
+            assert (await http.get("/api/v1/runways/Syria")).status_code == 200
+            assert (await http.get("/api/v1/runways/UnknownTestTheatre")).status_code == 404
 
 
 # --- geometry and names as DCS actually reports them ---------------------------
@@ -646,7 +654,7 @@ def _records(*rows):
     }
 
 
-def _airbase_at(x: float, z: float) -> dict:
+def _airbase_at(x: float, z: float) -> dict[str, Any]:
     return {"id": "AB", "name": "AB", "lat": 32.0, "lng": 34.9, "alt": 10.0,
             "position": {"y": 10.0, "x": x, "z": z}, "runwayList": []}
 

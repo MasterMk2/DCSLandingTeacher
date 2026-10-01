@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.detection.detector import TrackSample, analyze_track
 from app.grading.config import GradingConfig
@@ -11,12 +12,12 @@ from app.ingest import TrackIngestor
 from app.models.entities import Landing
 from app.pipeline import LandingPipeline
 from tests.helpers import DECK_ALTITUDE_M, LAT0, LON0, make_carrier_state
-from tests.test_provisional_flow import RecordingNotifier
+from tests.e2e.test_provisional_flow import RecordingNotifier
 
 
 def _low_pass_then_landing() -> list[TrackSample]:
     """A 5.8 m pass, climb-out, circuit, then a real touchdown at t=200."""
-    samples = []
+    samples: list[TrackSample] = []
     for t in range(-60, 226):
         if t <= 0:
             height = 5.8 - t * 4.0
@@ -42,13 +43,15 @@ def test_low_pass_climb_out_starts_a_new_circuit(carrier: bool) -> None:
         carriers = {"C1": make_carrier_state(altitude=0.0)}
         # Tacview AGL over water measures to the sea, including deck height.
         samples = [replace(s, agl=s.altitude) for s in samples]
-    kwargs = dict(
+    offline = analyze_track(
+        samples, ground_altitude_m=DECK_ALTITUDE_M, carriers=carriers,
+        deck_altitude_for=lambda _: DECK_ALTITUDE_M,
+    )
+    live = analyze_track(
+        [s for s in samples if s.time <= 200], current_time=200,
         ground_altitude_m=DECK_ALTITUDE_M, carriers=carriers,
         deck_altitude_for=lambda _: DECK_ALTITUDE_M,
     )
-
-    offline = analyze_track(samples, **kwargs)
-    live = analyze_track([s for s in samples if s.time <= 200], current_time=200, **kwargs)
 
     assert len(offline) == len(live) == 1  # A low pass is not a touchdown.
     for event in (offline[0], live[0]):
@@ -78,7 +81,7 @@ def test_small_low_altitude_recovery_does_not_cut_the_final(heights: list[float]
 
 
 def test_carrier_surface_change_without_a_climb_does_not_cut_the_approach() -> None:
-    samples = []
+    samples: list[TrackSample] = []
     for sample in _low_pass_then_landing():
         if 0 <= sample.time < 175:
             height = 5.8
@@ -86,6 +89,7 @@ def test_carrier_surface_change_without_a_climb_does_not_cut_the_approach() -> N
             height = max(0.0, 5.8 * (200 - sample.time) / 25)
         else:
             height = sample.agl
+            assert height is not None
         altitude = DECK_ALTITUDE_M + height
         # Leaving the carrier's proximity changes deck-relative height to
         # sea AGL, crossing 15 m with no actual climb. Return for the final.
@@ -124,7 +128,9 @@ def test_recent_recovery_does_not_qualify_an_older_slow_climb() -> None:
     assert event.approach[0].time == 0.0
 
 
-async def test_live_low_pass_then_touch_and_go_keeps_one_separate_record(session_factory) -> None:
+async def test_live_low_pass_then_touch_and_go_keeps_one_separate_record(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     notifier = RecordingNotifier()
     pipeline = LandingPipeline(session_factory, GradingConfig({}), notifier=notifier)
     ingestor = TrackIngestor(
