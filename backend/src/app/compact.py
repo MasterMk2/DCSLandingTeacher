@@ -1,235 +1,241 @@
-"""Compact an existing database down to the raw tracks retention keeps.
+"""Remove old raw tracks that the current landing retention policy would not keep.
 
-The ingestor now writes an aircraft's samples only around its landings
-(app/retention.py), but a database recorded before that still holds every
-sample of every object -- the production one passed 87 million rows. This
-copies it into a new file keeping, of ``tracks``, only what retention would
-have kept: each landing's window for the aircraft and for the ship it landed
-on, and every static. Every other table is copied whole.
+Run with the application stopped. The default is a read-only dry run::
 
-Run it with the application STOPPED, after the rescan (app/rescan.py) has
-had its one look at the full history -- windows are all that survive::
+    python -m app.compact
 
-    python -m app.compact /data/dlt.db           # build + verify <db>.compact
-    python -m app.compact /data/dlt.db --swap    # ...and put it in place
-
-Without ``--swap`` the original is never touched. With it, the original is
-renamed to ``<db>.pre-compact-<UTC time>`` (not deleted: removing it is the
-operator's decision) and the compact copy takes its name.
-
-Plain ``sqlite3`` rather than the async engine: one connection, one pass,
-no event loop. The ``tracks`` pass is a single sequential scan with a lookup
-into a small in-memory table of windows per row, all inside SQLite.
+Take and verify a PostgreSQL backup before executing. A successful delete is
+transactional; PostgreSQL disk space is reclaimed separately with VACUUM or
+maintenance appropriate to the deployment.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sqlite3
 import sys
-import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
+
+from sqlalchemy import Connection, create_engine, inspect, text
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Settings
 from app.detection.classify import ObjectClass, classify_object_type
 from app.detection.detector import DetectionConfig
 from app.grading.config import load_grading_config
-from app.grading.packaged import resolve_config_path
 from app.retention import retention_window
 
-#: Stand-in for "all of time" in the windows table (SQLite REAL).
 _ALWAYS = 1e300
+_REQUIRED_TABLES = {'alembic_version', 'flights', 'objects', 'tracks', 'landings'}
 
 
 class CompactError(RuntimeError):
-    pass
+    """The database cannot be compacted safely."""
+
+
+@dataclass(frozen=True)
+class CompactReport:
+    before: int
+    keep: int
+    delete: int
+    after: int | None = None
 
 
 def _detection_config() -> DetectionConfig:
-    """The detection windows the running app (and so the rebuild) uses."""
     settings = Settings()
-    path = resolve_config_path(settings.grading_config_path, "grading.yaml")
-    return load_grading_config(path).to_detection_config()
+    if not Path(settings.grading_config_path).is_file():
+        raise CompactError('grading configuration is missing; retention cannot be determined safely')
+    return load_grading_config(settings.grading_config_path).to_detection_config()
 
 
 def keep_windows(
-    connection: sqlite3.Connection, detection: DetectionConfig
+    connection: Connection, detection: DetectionConfig
 ) -> dict[int, list[tuple[float, float]]]:
-    """object row id -> merged spans of ``tracks`` to keep.
-
-    What the ingestor keeps: each landing's window for its aircraft and for
-    the ship it names, and every static whole.
-    """
+    """Return merged spans for landing aircraft, their carriers, and statics."""
     windows: dict[int, list[tuple[float, float]]] = defaultdict(list)
-    for object_id, type_ in connection.execute("SELECT id, type FROM objects"):
-        if classify_object_type(type_) == ObjectClass.STATIC:
+    for object_id, object_type in connection.execute(text('SELECT id, type FROM objects')):
+        if classify_object_type(object_type) == ObjectClass.STATIC:
             windows[object_id].append((-_ALWAYS, _ALWAYS))
-    landings = connection.execute(
-        "SELECT object_id, carrier_object_id, touchdown_time FROM landings "
-        "WHERE touchdown_time IS NOT NULL"
-    ).fetchall()
-    for object_id, carrier_object_id, touchdown in landings:
-        # The stored touchdown stands in for the first contact too; the
-        # retention slack covers a bounce sequence many times over.
+    for object_id, carrier_id, touchdown in connection.execute(
+        text(
+            'SELECT object_id, carrier_object_id, touchdown_time FROM landings '
+            'WHERE touchdown_time IS NOT NULL'
+        )
+    ):
         span = retention_window(touchdown, touchdown, detection)
         windows[object_id].append(span)
-        if carrier_object_id is not None:
-            windows[carrier_object_id].append(span)
+        if carrier_id is not None:
+            windows[carrier_id].append(span)
+
     merged: dict[int, list[tuple[float, float]]] = {}
     for object_id, spans in windows.items():
         spans.sort()
-        out: list[tuple[float, float]] = []
+        result: list[tuple[float, float]] = []
         for start, end in spans:
-            if out and start <= out[-1][1]:
-                out[-1] = (out[-1][0], max(out[-1][1], end))
+            if result and start <= result[-1][1]:
+                result[-1] = (result[-1][0], max(result[-1][1], end))
             else:
-                out.append((start, end))
-        merged[object_id] = out
+                result.append((start, end))
+        merged[object_id] = result
     return merged
 
 
-def _schema(connection: sqlite3.Connection) -> tuple[list[tuple[str, str]], list[str]]:
-    """(table name, CREATE TABLE) pairs, and the CREATE INDEX / CREATE TRIGGER
-    statements to run once the data is in -- all verbatim."""
-    rows = connection.execute(
-        "SELECT type, name, sql FROM sqlite_master "
-        "WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
-    ).fetchall()
-    tables = [(name, sql) for type_, name, sql in rows if type_ == "table"]
-    after_copy = [sql for type_, _name, sql in rows if type_ in ("index", "trigger")]
-    others = [name for type_, name, _sql in rows if type_ not in ("table", "index", "trigger")]
-    if others:
-        raise CompactError(f"unexpected schema objects (views?): {others}")
-    return tables, after_copy
+def _verify_schema(connection: Connection) -> None:
+    tables = set(inspect(connection).get_table_names())
+    missing = _REQUIRED_TABLES - tables
+    if missing:
+        raise CompactError(f'database schema is incomplete: {sorted(missing)}')
+    versions = connection.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
+    if versions != ['0009_landing_tracks']:
+        raise CompactError('database must be at the supported Alembic revision')
 
 
-def compact(source: Path, *, swap: bool, out=sys.stdout) -> Path:
-    started = time.monotonic()
-    if not source.is_file():
-        raise CompactError(f"{source} does not exist")
-    target = source.with_name(source.name + ".compact")
-    for leftover in (target, Path(f"{target}-wal"), Path(f"{target}-shm")):
-        leftover.unlink(missing_ok=True)
+def _orphan_count(connection: Connection) -> int:
+    return connection.execute(
+        text(
+            'SELECT COUNT(*) FROM tracks AS t '
+            'LEFT JOIN objects AS o ON o.id = t.object_id '
+            'LEFT JOIN flights AS f ON f.id = t.flight_id '
+            'WHERE o.id IS NULL OR f.id IS NULL'
+        )
+    ).scalar_one()
+
+
+def _install_windows(connection: Connection, detection: DetectionConfig) -> None:
+    connection.execute(
+        text(
+            'CREATE TEMP TABLE compact_keep_windows '
+            '(object_id bigint NOT NULL, starts double precision NOT NULL, '
+            'ends double precision NOT NULL) ON COMMIT DROP'
+        )
+    )
+    rows = [
+        {'object_id': object_id, 'starts': start, 'ends': end}
+        for object_id, spans in keep_windows(connection, detection).items()
+        for start, end in spans
+    ]
+    if rows:
+        connection.execute(
+            text(
+                'INSERT INTO compact_keep_windows (object_id, starts, ends) '
+                'VALUES (:object_id, :starts, :ends)'
+            ),
+            rows,
+        )
+    connection.execute(
+        text('CREATE INDEX ON compact_keep_windows (object_id, starts, ends)')
+    )
+    connection.execute(text('ANALYZE compact_keep_windows'))
+
+
+_KEPT_TRACK = (
+    'EXISTS (SELECT 1 FROM compact_keep_windows AS k '
+    'WHERE k.object_id = t.object_id AND t.mission_time BETWEEN k.starts AND k.ends)'
+)
+
+
+def _count_tracks(connection: Connection) -> tuple[int, int]:
+    before = connection.execute(text('SELECT COUNT(*) FROM tracks')).scalar_one()
+    keep = connection.execute(
+        text(f'SELECT COUNT(*) FROM tracks AS t WHERE {_KEPT_TRACK}')
+    ).scalar_one()
+    if keep > before:
+        raise CompactError('retention count exceeds the track count')
+    return before, keep
+
+
+def compact(
+    database_url: str,
+    *,
+    execute: bool = False,
+    backup_confirmed: bool = False,
+    application_stopped: bool = False,
+    max_delete: int | None = None,
+    out: TextIO = sys.stdout,
+) -> CompactReport:
+    """Preview or atomically delete tracks outside the shared retention windows."""
+    if make_url(database_url).get_backend_name() != 'postgresql':
+        raise CompactError('only PostgreSQL databases are supported')
+    if execute and (not backup_confirmed or not application_stopped):
+        raise CompactError('execution requires a verified backup and a stopped application')
+    if max_delete is not None and max_delete < 0:
+        raise CompactError('max_delete must be nonnegative')
 
     detection = _detection_config()
-    src = sqlite3.connect(source, isolation_level=None)
+    engine = create_engine(database_url)
     try:
-        busy, _log, _done = src.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        if busy:
-            raise CompactError("the database is in use: stop the application first")
-        tables, after_copy = _schema(src)
-        names = [name for name, _ in tables]
-        if "tracks" not in names or "landings" not in names:
-            raise CompactError(f"{source} is not a DCS Landing Teacher database")
+        with engine.begin() as connection:
+            if execute:
+                # Refuse an active writer; hold the locks until verification and commit.
+                connection.execute(
+                    text(
+                        'LOCK TABLE flights, objects, landings, tracks '
+                        'IN SHARE ROW EXCLUSIVE MODE NOWAIT'
+                    )
+                )
+            _verify_schema(connection)
+            if _orphan_count(connection):
+                raise CompactError('tracks contain missing flight or object references')
+            _install_windows(connection, detection)
+            before, keep = _count_tracks(connection)
+            delete = before - keep
+            print(f'tracks: total={before:,}, keep={keep:,}, delete={delete:,}', file=out)
+            keep_sample = connection.execute(
+                text(f'SELECT t.id FROM tracks AS t WHERE {_KEPT_TRACK} ORDER BY t.id LIMIT 10')
+            ).scalars().all()
+            delete_sample = connection.execute(
+                text(f'SELECT t.id FROM tracks AS t WHERE NOT {_KEPT_TRACK} ORDER BY t.id LIMIT 10')
+            ).scalars().all()
+            print(f'keep sample ids: {keep_sample}', file=out)
+            print(f'delete sample ids: {delete_sample}', file=out)
 
-        dest = sqlite3.connect(target, isolation_level=None)
-        for _name, sql in tables:
-            dest.execute(sql)
-        dest.close()
+            if not execute:
+                print('dry run: no tracks deleted', file=out)
+                return CompactReport(before, keep, delete)
+            if max_delete is not None and delete > max_delete:
+                raise CompactError(f'delete count {delete:,} exceeds max_delete {max_delete:,}')
+            if before and not keep:
+                raise CompactError('all tracks would be deleted; inspect the retention inputs')
 
-        windows = keep_windows(src, detection)
-        src.execute("ATTACH DATABASE ? AS compact", (str(target),))
-        src.execute("CREATE TEMP TABLE keep_windows (object_id INTEGER, start REAL, finish REAL)")
-        src.executemany(
-            "INSERT INTO temp.keep_windows VALUES (?, ?, ?)",
-            [(oid, start, end) for oid, spans in windows.items() for start, end in spans],
-        )
-        src.execute("CREATE INDEX temp.ix_keep ON keep_windows (object_id, start)")
-
-        # Hold the write lock for the whole copy: nothing may change the
-        # source between the counts below and the copy they verify.
-        src.execute("BEGIN IMMEDIATE")
-        before = {name: src.execute(f'SELECT COUNT(*) FROM main."{name}"').fetchone()[0]
-                  for name in names}
-        for name in names:
-            if name == "tracks":
-                continue
-            src.execute(f'INSERT INTO compact."{name}" SELECT * FROM main."{name}"')
-        print(f"tracks: scanning {before['tracks']:,} rows ...", file=out, flush=True)
-        src.execute(
-            'INSERT INTO compact."tracks" SELECT t.* FROM main."tracks" AS t NOT INDEXED '
-            "WHERE EXISTS (SELECT 1 FROM temp.keep_windows AS k "
-            "WHERE k.object_id = t.object_id AND t.mission_time BETWEEN k.start AND k.finish)"
-        )
-        src.execute("COMMIT")
-        src.execute("DETACH DATABASE compact")
+            connection.execute(text(f'DELETE FROM tracks AS t WHERE NOT {_KEPT_TRACK}'))
+            after = connection.execute(text('SELECT COUNT(*) FROM tracks')).scalar_one()
+            if after != keep or _orphan_count(connection):
+                raise CompactError('post-delete count or reference verification failed')
+            print(f'verified: tracks={after:,}; parent references intact', file=out)
+            return CompactReport(before, keep, delete, after)
+    except SQLAlchemyError as error:
+        raise CompactError('database operation failed; changes were rolled back') from error
     finally:
-        src.close()
-
-    dest = sqlite3.connect(target, isolation_level=None)
-    try:
-        for sql in after_copy:
-            dest.execute(sql)
-        after = {name: dest.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
-                 for name in names}
-        problems = [
-            f"{name}: {before[name]} -> {after[name]}"
-            for name in names
-            if name != "tracks" and before[name] != after[name]
-        ]
-        integrity = dest.execute("PRAGMA integrity_check").fetchone()[0]
-        if integrity != "ok":
-            problems.append(f"integrity_check: {integrity}")
-        # Reported, not fatal: the copy is row-for-row, so any orphan was
-        # already in the original (checking that one would scan all of it).
-        orphans = dest.execute("PRAGMA foreign_key_check").fetchall()
-        if orphans:
-            print(
-                f"note: {len(orphans)} rows reference a missing parent, as in the "
-                f"original (e.g. {orphans[:3]})",
-                file=out,
-            )
-        dest.execute("PRAGMA journal_mode=WAL")
-    finally:
-        dest.close()
-    if problems:
-        raise CompactError("verification failed, nothing swapped: " + "; ".join(problems))
-
-    source_mb = os.path.getsize(source) / 1e6
-    target_mb = os.path.getsize(target) / 1e6
-    print(
-        f"tracks {before['tracks']:,} -> {after['tracks']:,} rows; "
-        f"file {source_mb:,.1f} MB -> {target_mb:,.1f} MB; "
-        f"other tables copied whole ({', '.join(n for n in names if n != 'tracks')}); "
-        f"{time.monotonic() - started:.0f} s",
-        file=out,
-    )
-    if not swap:
-        print(f"built {target} (original untouched; --swap to put it in place)", file=out)
-        return target
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    kept = source.with_name(f"{source.name}.pre-compact-{stamp}")
-    # The checkpoint emptied the WAL; its files still belong to the old
-    # database and must not be picked up by the new one under the same name.
-    for suffix in ("", "-wal", "-shm"):
-        old = Path(f"{source}{suffix}")
-        if old.exists():
-            old.rename(Path(f"{kept}{suffix}"))
-    target.rename(source)
-    print(f"swapped: {source} is the compact copy; the original is {kept}", file=out)
-    return source
+        engine.dispose()
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("database", type=Path, help="path of the SQLite database file")
-    parser.add_argument(
-        "--swap",
-        action="store_true",
-        help="replace the database with the compact copy (the original is kept, renamed)",
-    )
+    parser = argparse.ArgumentParser(description='Preview or remove unneeded PostgreSQL tracks')
+    parser.add_argument('--execute', action='store_true', help='delete tracks after a fresh count')
+    parser.add_argument('--backup-confirmed', action='store_true', help='a verified backup exists')
+    parser.add_argument('--application-stopped', action='store_true', help='all application writers stopped')
+    parser.add_argument('--max-delete', type=int, help='abort if more than this many tracks would go')
     args = parser.parse_args(argv)
     try:
-        compact(args.database, swap=args.swap)
+        database_url = os.getenv('DLT_DATABASE_URL')
+        if not database_url:
+            raise CompactError('set DLT_DATABASE_URL to the target PostgreSQL database')
+        compact(
+            database_url,
+            execute=args.execute,
+            backup_confirmed=args.backup_confirmed,
+            application_stopped=args.application_stopped,
+            max_delete=args.max_delete,
+        )
     except CompactError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f'error: {error}', file=sys.stderr)
         return 1
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())
