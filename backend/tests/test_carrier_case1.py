@@ -303,19 +303,21 @@ async def test_a_regrade_reads_the_same_pattern_back(session_factory) -> None:
     assert payload["approach_pattern"] == "overhead"
 
 
-async def test_the_detail_api_serves_the_pattern_in_the_ships_frame(tmp_path) -> None:
+async def test_the_detail_api_serves_the_pattern_in_the_ships_frame(database_url: str) -> None:
     """The plan view draws a Case I up the ship's heading, from these."""
-    import httpx
+    import httpx2 as httpx
 
     from app.api.main import create_app
     from app.config import Settings
+    from tests.helpers import create_test_schema
 
     # The default carriers path is relative to the repo root and does not
     # resolve from backend/; without the book no deck exists and no trap
     # can be detected at all, so name the real file.
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             carriers_config_path=str(CARRIERS_YAML),

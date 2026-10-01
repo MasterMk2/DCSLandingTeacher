@@ -300,15 +300,17 @@ async def test_a_row_whose_raw_track_is_gone_says_so(session_factory) -> None:
     assert raised.value.error_code == "NO_RAW_TRACK"
 
 
-async def test_the_rebuild_endpoint(tmp_path) -> None:
-    import httpx
+async def test_the_rebuild_endpoint(database_url: str) -> None:
+    import httpx2 as httpx
 
     from app.api.main import create_app
     from app.config import Settings
+    from tests.helpers import create_test_schema
 
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             carriers_config_path=str(CARRIERS_YAML),
