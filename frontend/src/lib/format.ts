@@ -142,7 +142,8 @@ function flolsGeometryText(geometry: Record<string, unknown>): string {
   const deck = num("deck_altitude_m");
   if (deck !== null) parts.push(`甲板高 ${Math.round(mToFt(deck))} ft`);
   // 0 は「グライドスロープをランプで終える」旧来の値 (それ自体が意味を持つ)。
-  const target = num("touchdown_target_m");
+  // 保存時点でこのフィールドがなかった記録も backend の from_dict と同じ 0 にする。
+  const target = "touchdown_target_m" in geometry ? num("touchdown_target_m") : 0;
   if (target !== null) {
     parts.push(target > 0 ? `狙点 ランプから ${Math.round(mToFt(target))} ft` : "狙点 ランプ");
   }

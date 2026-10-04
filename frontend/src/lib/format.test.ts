@@ -173,6 +173,30 @@ describe("formatMetric", () => {
     ).toBe("未登録（接地点を基準に近似）");
   });
 
+  it("uses the ramp for persisted carrier geometry without a touchdown target", () => {
+    // touchdown_target_m が保存されていない旧データも backend と同じ 0 として扱う。
+    expect(
+      formatMetric("flols_geometry", {
+        key: "kuznetsov",
+        glideslope_deg: 4.0,
+        landing_course_offset_deg: -2.0,
+        deck_altitude_m: 22.0,
+      }),
+    ).toEqual({
+      label: "採点に使った着艦幾何",
+      text: "kuznetsov（グライドスロープ 4.0°、アングルドデッキ 左 2.0°、甲板高 72 ft、狙点 ランプ）",
+    });
+  });
+
+  it.each([null, "79", Number.NaN, Number.POSITIVE_INFINITY])(
+    "does not infer a ramp target from an explicitly invalid value: %s",
+    (touchdown_target_m) => {
+      expect(
+        formatMetric("flols_geometry", { key: "kuznetsov", touchdown_target_m }).text,
+      ).toBe("kuznetsov");
+    },
+  );
+
   it("labels the break kinematics and gives the load factor its unit", () => {
     // 無次元の荷重倍数はキーに接尾辞が無い。"G" を付けないと「2.31」が
     // 何の数字か分からない。
