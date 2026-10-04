@@ -1,0 +1,6 @@
+# Frontend local dependencies and generated outputs
+node_modules/
+dist/
+coverage/
+.vite/
+.vitest/

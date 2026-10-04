@@ -22,8 +22,8 @@ from typing import Any
 
 import yaml
 
-# Add backend to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+# Resolve application imports from the repository's src layout.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend" / "src"))
 
 from app.acmi.file_reader import iter_acmi_lines  # noqa: E402
 from app.acmi.parser import AcmiParser  # noqa: E402
@@ -32,8 +32,7 @@ from app.detection.detector import (  # noqa: E402
     TrackSample,
     analyze_track,
 )
-from app.detection.geometry import haversine_m, transform_to_frame  # noqa: E402
-from app.grading.carriers import CarrierGeometryBook, load_carrier_geometry_book  # noqa: E402
+from app.detection.geometry import transform_to_frame  # noqa: E402
 
 
 @dataclass
@@ -146,6 +145,8 @@ class CarrierGeometryValidator:
                 # Analyze for landings
                 for carrier_id, carrier_obj in carriers.items():
                     carrier_state = self._build_carrier_state(parser, carrier_id)
+                    if carrier_state is None:
+                        continue
                     ground_alt = self._estimate_deck_altitude(carrier_state)
                     if ground_alt is None:
                         continue
@@ -294,7 +295,7 @@ class CarrierGeometryValidator:
             return 9.0  # Default for angled deck
 
         # Average heading in final approach
-        avg_heading = statistics.mean(s.heading for s in approach_samples)
+        avg_heading = statistics.mean(s.heading for s in approach_samples if s.heading is not None)
         offset = (avg_heading - carrier_heading + 180) % 360 - 180
         return offset
 
@@ -380,7 +381,7 @@ def main():
     aggregated = validator.aggregate_measurements(all_measurements)
 
     # Output results
-    output_data = {
+    output_data: dict[str, Any] = {
         "version": 2,
         "validated": {},
     }
