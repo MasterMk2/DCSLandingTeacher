@@ -60,3 +60,19 @@ def test_explicit_native_database_url_takes_precedence_over_components(
         postgres_db="compose_test",
     )
     assert settings.database_url == explicit
+
+
+def test_compose_pins_cache_when_full_example_environment_is_used(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[4]
+    _ = (tmp_path / '.env').write_bytes((root / '.env.example').read_bytes())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('DLT_RUNWAY_CACHE_DIR', raising=False)
+    assert Settings().runway_cache_dir == 'cache'
+    environment = cast(
+        dict[str, str],
+        yaml.safe_load((root / 'docker-compose.yml').read_text())['services']['api']['environment'],
+    )
+    monkeypatch.setenv('DLT_RUNWAY_CACHE_DIR', environment['DLT_RUNWAY_CACHE_DIR'])
+    assert Settings().runway_cache_dir == '/data/cache'

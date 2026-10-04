@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  text-encoding:
+    name: Git text encoding (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check actual staging, BOM preservation and checkout
+        run: python -m unittest discover -s scripts/tests -p test_git_text_attributes.py -v
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

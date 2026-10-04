@@ -40,3 +40,15 @@ class ComposeSmokeSafety(unittest.TestCase):
     def test_short_websocket_read_is_rejected(self):
         with self.assertRaises(AssertionError):
             smoke.read_exact(io.BytesIO(b"a"), 2)
+
+    def test_full_example_keeps_relative_cache_override_for_regression(self):
+        example = (Path(__file__).parents[2] / '.env.example').read_text()
+        result = smoke.example_environment_for_ci(example)
+        self.assertIn('DLT_RUNWAY_CACHE_DIR=cache\n', result)
+        self.assertIn('DLT_ACMI_ENABLED=false\n', result)
+        self.assertIn('DLT_DCSSB_BASE_URL=\n', result)
+        original_keys = {line.split('=', 1)[0] for line in example.splitlines()
+                         if line and not line.startswith('#')}
+        result_keys = {line.split('=', 1)[0] for line in result.splitlines()
+                       if line and not line.startswith('#')}
+        self.assertEqual(original_keys, result_keys)

@@ -39,6 +39,22 @@ def read_exact(stream, size: int) -> bytes:
     return value
 
 
+def example_environment_for_ci(example: str) -> str:
+    """Use the whole operator example, overriding only isolated-test safety values."""
+    overrides = {
+        'DLT_ACMI_ENABLED': 'false',
+        'DLT_DCSSB_BASE_URL': '',
+        'DLT_AUTH_TOKEN': '',
+        'DLT_DATABASE_URL': 'postgresql+psycopg://stale@127.0.0.1:9/stale',
+    }
+    lines = []
+    for line in example.splitlines():
+        key = line.split('=', 1)[0]
+        lines.append(f'{key}={overrides.pop(key)}' if key in overrides else line)
+    lines.extend(f'{key}={value}' for key, value in overrides.items())
+    return '\n'.join(lines) + '\n'
+
+
 def websocket_ping(port: int) -> None:
     """Check the reverse proxy's Upgrade path and an application-level round trip."""
     key = base64.b64encode(b"dlt-ci-smoke-key").decode()
@@ -91,8 +107,9 @@ def main() -> None:
         subprocess.run([*command, *args], cwd=root, check=True, timeout=180)
 
     config = root / ".env"
-    # No telemetry connection, no real data. The stale URL must be overridden by Compose.
-    config.write_text("DLT_ACMI_ENABLED=false\nDLT_DATABASE_URL=postgresql+psycopg://stale@127.0.0.1:9/stale\n")
+    # Retain every example setting, especially the native relative cache path.
+    # No telemetry connection or real data; Compose must override both stale paths.
+    config.write_text(example_environment_for_ci((root / '.env.example').read_text()))
     port = 18080
     try:
         compose("up", "-d")
@@ -105,13 +122,15 @@ def main() -> None:
         websocket_ping(port)
         marker = "ci-cache-" + project
         compose("exec", "-T", "api", "python", "-c",
-                "from pathlib import Path; import os,sys; p=Path(os.environ['DLT_RUNWAY_CACHE_DIR']); "
+                "from pathlib import Path; import sys; from app.config import Settings; "
+                "p=Path(Settings().runway_cache_dir); assert p==Path('/data/cache'); "
                 "p.mkdir(parents=True,exist_ok=True); (p/'.ci-smoke').write_text(sys.argv[1])", marker)
         compose("up", "-d", "--no-deps", "--force-recreate", "api", "reverse-proxy")
         wait_for_health(port)
         compose("exec", "-T", "api", "python", "-c",
-                "from pathlib import Path; import os,sys; "
-                "assert (Path(os.environ['DLT_RUNWAY_CACHE_DIR'])/'.ci-smoke').read_text()==sys.argv[1]", marker)
+                "from pathlib import Path; import sys; from app.config import Settings; "
+                "p=Path(Settings().runway_cache_dir); assert p==Path('/data/cache'); "
+                "assert (p/'.ci-smoke').read_text()==sys.argv[1]", marker)
         websocket_ping(port)
         print("Compose smoke passed: migration, reserved-password DB, API, SPA, WebSocket, cache recreation")
     finally:
