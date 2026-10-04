@@ -79,7 +79,10 @@ async def _save_upload(upload: UploadFile, max_bytes: int) -> Path:
     path = Path(raw_path)
     with open(path, "rb") as head:
         is_zip = head.read(2) == _ZIP_MAGIC
-    if is_zip:
+    # Keep a declared ZIP a ZIP even when its signature is damaged. Otherwise
+    # an ASCII corrupt header is parsed as plain ACMI and silently completes
+    # with zero results instead of reporting the archive error.
+    if is_zip or Path(upload.filename or "").suffix.lower() == ".zip":
         zip_path = path.with_suffix(".zip")
         os.replace(path, zip_path)
         return zip_path

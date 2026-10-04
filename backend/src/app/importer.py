@@ -4,18 +4,19 @@ Feeds uploaded files through the exact same ingest -> detection -> grading
 pipeline used for the real-time Tacview stream, so imported landings are
 indistinguishable from live ones (same grading, same WebSocket notifications).
 
-Jobs are tracked in memory: ``POST /api/import`` returns a job id immediately
-and the file is processed in a background task; clients poll
+Jobs are persisted and cached in memory: ``POST /api/import`` returns a job id
+immediately and the file is processed in a background task; clients poll
 ``GET /api/imports/{id}`` for progress.
 
 Duplicate protection: re-importing a file must not create a second copy of
 its landings. Before persisting, each detected touchdown is checked against
 existing rows by the combination
 
-    Flight.reference_time + Landing.touchdown_time + DcsObject.acmi_id
+    Flight.reference_time + Flight.recording_time
+    + Landing.touchdown_time + DcsObject.acmi_id
 
-(the ACMI ``ReferenceTime`` header identifies the recording, and object ids
-are stable within it). Matches are skipped and reported in the job summary.
+``RecordingTime`` distinguishes sessions of a mission; legacy rows without
+it remain possible matches. Matches are skipped and reported in the job summary.
 """
 
 from __future__ import annotations
@@ -27,15 +28,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.acmi.file_reader import iter_acmi_lines
 from app.detection.detector import DetectionConfig
 from app.ingest import LandingContext, TrackIngestor
-from app.models.entities import DcsObject, Flight, ImportJobRow, Landing, Track
+from app.models.entities import DcsObject, Flight, ImportJobRow, Landing, LandingTrack, Track
 from app.pipeline import LandingPipeline
 
 logger = getLogger(__name__)
@@ -88,7 +90,7 @@ def _as_aware(value: datetime | None) -> datetime | None:
 
 @dataclass
 class ImportJob:
-    """State of one ACMI file import (in-memory, not persisted)."""
+    """Cached state of one ACMI import, backed by ``ImportJobRow``."""
 
     id: str
     filename: str
@@ -244,6 +246,10 @@ class ImportJobManager:
         # the busy_timeout is exceeded. Serializing imports here removes the
         # import-vs-import case entirely.
         self._run_lock = asyncio.Lock()
+        self._tasks: dict[str, asyncio.Task[object]] = {}
+        # Repeated DELETE / unload beacons must not cancel the same task again
+        # while its ingestor is flushing and closing after the first cancel.
+        self._discard_lock: asyncio.Lock = asyncio.Lock()
         #: Ids discarded while their import was still running. run()'s
         #: finally consults this before persisting, so a discard cannot be
         #: undone by the task it cancelled finishing afterwards.
@@ -312,7 +318,7 @@ class ImportJobManager:
             id=row.id,
             filename=row.filename,
             status=row.status,
-            created_at=_as_aware(row.created_at),
+            created_at=cast(datetime, _as_aware(row.created_at)),
             started_at=_as_aware(row.started_at),
             finished_at=_as_aware(row.finished_at),
             frames_processed=row.frames_processed,
@@ -330,11 +336,19 @@ class ImportJobManager:
         Queues behind any import already running (see ``_run_lock``); the
         job stays "pending" until it actually acquires the lock and starts.
         """
-        async with self._run_lock:
-            job.status = "processing"
-            job.started_at = _utcnow()
+        task = asyncio.current_task()
+        if task is not None:
+            self._tasks[job.id] = task
+        try:
+            # A discard can arrive before BackgroundTasks starts this run.
+            if job.id in self._discarded:
+                return
+            # Pending jobs must survive a restart while queued behind a reader.
             await self._persist_job(job)
-            try:
+            async with self._run_lock:
+                job.status = "processing"
+                job.started_at = _utcnow()
+                await self._persist_job(job)
                 await self._process(job, Path(file_path))
                 job.status = "completed"
                 logger.info(
@@ -344,26 +358,20 @@ class ImportJobManager:
                     job.landings_detected,
                     job.duplicates_skipped,
                 )
-            except Exception as exc:
-                job.status = "failed"
-                job.error = str(exc)
-                logger.exception("import %s failed", job.id)
-            finally:
-                job.finished_at = _utcnow()
-                # Delete the spooled upload first: it is up to
-                # import_max_upload_mb of scratch data and must go regardless
-                # of what happens below. Persisting is a SQLite write and can
-                # raise "database is locked" like any other, and letting that
-                # escape the finally would leak the file, skip the completion
-                # broadcast, and replace whatever error was recorded above.
-                _remove_quietly(file_path)
+        except asyncio.CancelledError:
+            if job.id not in self._discarded:
+                raise
+        except Exception as exc:
+            job.status = "failed"
+            job.error = str(exc)
+            logger.exception("import %s failed", job.id)
+        finally:
+            job.finished_at = _utcnow()
+            # This also covers cancellation while waiting for _run_lock or
+            # failure of the initial progress write, before a reader exists.
+            _remove_quietly(file_path)
+            try:
                 if job.id in self._discarded:
-                    # discard() ran while this import was still going: it
-                    # already deleted the job row and everything the import
-                    # created, so re-persisting here would put the row back
-                    # and load_persisted() would resurrect the job -- with no
-                    # data behind it -- on the next restart.
-                    self._discarded.discard(job.id)
                     logger.info("import %s was discarded while running", job.id)
                 else:
                     try:
@@ -371,6 +379,9 @@ class ImportJobManager:
                     except Exception:  # noqa: BLE001 - progress is not the payload
                         logger.exception("could not persist final state of import %s", job.id)
                     await self._notify(job)
+            finally:
+                _ = self._tasks.pop(job.id, None)
+                self._discarded.discard(job.id)
 
     async def _process(self, job: ImportJob, path: Path) -> None:
         # The duplicate guard needs the ingestor (for the ACMI header), so the
@@ -450,6 +461,10 @@ class ImportJobManager:
         Flights cascade to their objects, tracks and landings, so removing the
         flights of this import's source removes the whole scratch dataset.
         """
+        async with self._discard_lock:
+            return await self._discard(job_id)
+
+    async def _discard(self, job_id: str) -> bool:
         source_id = import_source_id(job_id)
         # Tell a still-running run() not to write the job row back after we
         # delete it. ImportPanel fires discardImportOnUnload on pagehide
@@ -460,6 +475,16 @@ class ImportJobManager:
             "processing",
         ):
             self._discarded.add(job_id)
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            self._discarded.add(job_id)
+            _ = task.cancel()
+            try:
+                # _process flushes/closes its ingestor before cancellation
+                # finishes. Delete only after that last possible data write.
+                _ = await task
+            except asyncio.CancelledError:
+                pass
         async with self._session_factory() as session:
             flight_ids = select(Flight.id).where(Flight.source_id == source_id)
             # Delete the children explicitly. The ON DELETE CASCADE on these
@@ -467,13 +492,19 @@ class ImportJobManager:
             # PRAGMA foreign_keys=ON, and no ORM relationship cascade is
             # declared either, so relying on it would silently orphan every
             # track and landing of the discarded import.
-            deleted = (
-                await session.execute(delete(Landing).where(Landing.flight_id.in_(flight_ids)))
+            landing_ids = select(Landing.id).where(Landing.flight_id.in_(flight_ids))
+            _ = await session.execute(
+                delete(LandingTrack).where(LandingTrack.landing_id.in_(landing_ids))
+            )
+            deleted = cast(
+                CursorResult[tuple[object, ...]],
+                await session.execute(delete(Landing).where(Landing.flight_id.in_(flight_ids))),
             ).rowcount or 0
             await session.execute(delete(Track).where(Track.flight_id.in_(flight_ids)))
             await session.execute(delete(DcsObject).where(DcsObject.flight_id.in_(flight_ids)))
-            flights = (
-                await session.execute(delete(Flight).where(Flight.source_id == source_id))
+            flights = cast(
+                CursorResult[tuple[object, ...]],
+                await session.execute(delete(Flight).where(Flight.source_id == source_id)),
             ).rowcount or 0
             # The durable job row goes too (Issue #28 added it). Without this,
             # popping the in-memory entry below is only half a discard: the row
