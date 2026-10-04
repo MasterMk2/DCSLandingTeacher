@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
 
 
 class TacviewSource(BaseModel):
@@ -28,10 +29,16 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # PostgreSQL connection URL. Docker Compose supplies the container address.
+    # Native runs can supply a complete URL. Compose supplies individual parts
+    # and an empty URL so reserved characters in credentials are encoded safely.
     database_url: str = (
         "postgresql+psycopg://dcs_landing_teacher@localhost:5432/dcs_landing_teacher"
     )
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_user: str = "dcs_landing_teacher"
+    postgres_password: str = Field(default="", repr=False)
+    postgres_db: str = "dcs_landing_teacher"
 
     # Tacview realtime telemetry stream (ACMI 2.2 Text over TCP)
     # Multi-source configuration (new): JSON array of TacviewSource objects.
@@ -122,6 +129,20 @@ class Settings(BaseSettings):
     #: DCS server, so without these an import from a map nobody is flying
     #: cannot resolve at all. The deployment mounts this path from config/.
     runway_seed_dir: str = "config/runways"
+
+    @model_validator(mode="after")
+    def build_database_url(self) -> Settings:
+        if not self.database_url:
+            self.database_url = URL.create(
+                drivername="postgresql+psycopg",
+                username=self.postgres_user,
+                password=self.postgres_password,
+                host=self.postgres_host,
+                port=self.postgres_port,
+                database=self.postgres_db,
+            ).render_as_string(hide_password=False)
+        return self
+
     @property
     def tacview_sources(self) -> list[TacviewSource]:
         """Return parsed list of Tacview sources.

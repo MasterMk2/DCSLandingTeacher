@@ -45,7 +45,12 @@ services:
       - path: .env
         required: false
     environment:
-      DLT_DATABASE_URL: postgresql+psycopg://${DLT_POSTGRES_USER:?DLT_POSTGRES_USER must be set}:${DLT_POSTGRES_PASSWORD:?DLT_POSTGRES_PASSWORD must be set}@db:5432/${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
+      DLT_DATABASE_URL: ""
+      DLT_POSTGRES_HOST: db
+      DLT_POSTGRES_PORT: "5432"
+      DLT_POSTGRES_USER: ${DLT_POSTGRES_USER:?DLT_POSTGRES_USER must be set}
+      DLT_POSTGRES_PASSWORD: ${DLT_POSTGRES_PASSWORD:?DLT_POSTGRES_PASSWORD must be set}
+      DLT_POSTGRES_DB: ${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
       DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
       DLT_CARRIERS_CONFIG_PATH: /app/config/carriers.yaml
       DLT_TACVIEW_HOST: ${DLT_TACVIEW_HOST:-host.docker.internal}
