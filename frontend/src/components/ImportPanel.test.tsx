@@ -6,19 +6,21 @@
  * to appear at all -- the source dropdown does not list import sources
  * either -- so the panel shows its own results in their own block.
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const listLandings = vi.fn();
 const importAcmiFile = vi.fn();
 const getImport = vi.fn();
+const discardImport = vi.fn();
+const discardImportOnUnload = vi.fn();
 
 vi.mock("../api/client", () => ({
   listLandings: (...a: unknown[]) => listLandings(...a),
   importAcmiFile: (...a: unknown[]) => importAcmiFile(...a),
   getImport: (...a: unknown[]) => getImport(...a),
-  discardImport: vi.fn(),
-  discardImportOnUnload: vi.fn(),
+  discardImport: (...a: unknown[]) => discardImport(...a),
+  discardImportOnUnload: (...a: unknown[]) => discardImportOnUnload(...a),
 }));
 
 const { ImportPanel } = await import("./ImportPanel");
@@ -48,6 +50,14 @@ describe("ImportPanel results", () => {
     listLandings.mockReset();
     importAcmiFile.mockReset();
     getImport.mockReset();
+    discardImport.mockReset();
+    discardImportOnUnload.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("lists what an import found, scoped to that import's source", async () => {
@@ -92,4 +102,39 @@ describe("ImportPanel results", () => {
     expect(listLandings).toHaveBeenCalledWith({ source: "import:job-1" }, 200, 0);
     expect(container.querySelectorAll(".import-results tbody tr")).toHaveLength(2);
   });
+
+  it.each(["pending", "processing", "completed", "failed"])(
+    "discards the current %s job on pagehide and removes the listener on unmount",
+    async (status) => {
+      vi.useFakeTimers();
+      importAcmiFile.mockResolvedValue({
+        id: "job-1", filename: "a.acmi", status: "pending",
+      });
+      getImport.mockResolvedValue({
+        id: "job-1", filename: "a.acmi", status,
+        created_at: "2026-08-27T00:00:00Z",
+        frames_processed: 10, total_frames: 20, progress_percent: 50,
+        landings_detected: 0, duplicates_skipped: 0,
+      });
+      listLandings.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
+      const { container, unmount } = render(<ImportPanel />);
+      fireEvent(window, new Event("pagehide"));
+      expect(discardImportOnUnload).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: /インポート/ }));
+      await act(async () => {
+        fireEvent.drop(container.querySelector(".import-dropzone") as HTMLElement, {
+          dataTransfer: { files: [new File(["x"], "a.acmi")] },
+        });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(container.querySelector(`.status-${status}`)).not.toBeNull();
+      fireEvent(window, new Event("pagehide"));
+      expect(discardImportOnUnload).toHaveBeenCalledTimes(1);
+      expect(discardImportOnUnload).toHaveBeenCalledWith("job-1");
+      expect(discardImport).not.toHaveBeenCalled();
+      unmount();
+      fireEvent(window, new Event("pagehide"));
+      expect(discardImportOnUnload).toHaveBeenCalledTimes(1);
+    },
+  );
 });
