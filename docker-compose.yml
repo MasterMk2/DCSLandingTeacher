@@ -53,6 +53,7 @@ services:
       DLT_POSTGRES_DB: ${DLT_POSTGRES_DB:?DLT_POSTGRES_DB must be set}
       DLT_GRADING_CONFIG_PATH: /app/config/grading.yaml
       DLT_CARRIERS_CONFIG_PATH: /app/config/carriers.yaml
+      DLT_RUNWAY_CACHE_DIR: /data/cache
       DLT_TACVIEW_HOST: ${DLT_TACVIEW_HOST:-host.docker.internal}
       DLT_TACVIEW_PORT: ${DLT_TACVIEW_PORT:-42674}
     volumes:

@@ -1,3 +1,4 @@
-# Windows-native scripts use UTF-8 with BOM and CRLF in the working tree.
-*.ps1 text eol=crlf working-tree-encoding=UTF-8-BOM
-*.iss text eol=crlf working-tree-encoding=UTF-8-BOM
+# Keep the UTF-8 BOM in the tracked bytes; normalize only line endings.
+# The required BOM and Git add/checkout round trip are checked on Windows/Linux.
+*.ps1 text eol=crlf
+*.iss text eol=crlf
