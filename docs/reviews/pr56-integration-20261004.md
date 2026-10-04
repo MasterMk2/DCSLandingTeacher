@@ -26,7 +26,7 @@
 | Compose実起動とWebSocket | 元CIはconfig/buildのみ。新CI smokeでmigration→API→proxy起動、SPA、REST、WebSocket ping/pong | 新CIで補完 |
 | 接続情報の予約文字 | #70でURL.createへ変更。新CI smokeも予約文字入りの合成パスワードを使い、古い.env URLより優先されることを確認 | 単体試験対応、新CI結果を参照 |
 | ルート生成物除外 | Pythonキャッシュ、仮想環境、node_modules、tsbuildinfo、.ideaの除外を戻し、代表6パターンを確認 | 今回対応 |
-| AGENTS方針変更 | contributor版を勝手に書き戻していない。最新の運用規則の合意と整合を取る必要がある | 方針レビューを別に維持 |
+| AGENTS方針変更 | 個人パス等の匿名化・送信前差分確認とWindows/BOM/改行確認だけを復元。限定的な文書読み込み、確認済み並行編集時のworktree、引継ぎ時中心のRESUME運用、PostgreSQLコマンドを維持 | 合意された最小差分で対応 |
 | PRの3分割提案 | contributorは現PR維持を希望。今回も3本への再分割ではなく保守者側の統合候補 | 採用方針は未変更 |
 
 元レビューの全指摘を今も未対応とは扱わない。一方、元レビューの CHANGES_REQUESTED をこの文書だけで解除しない。
@@ -69,8 +69,12 @@ scripts/ci_compose_smoke.py はGitHub Actionsのrun/attemptに対応する固有
 ## mainへの統合前に残す確認
 
 - 新しいCompose smokeを含む統合候補のexact-head CI結果を確認する。
-- AGENTS方針差を最新の合意案と照合し、元レビューの解除判断を記録する。
+- AGENTSの最小差分を含む最終headで、元レビューの解除判断を記録する。
 - 185ファイル規模の構成変更を現PRの単位で取り込むか、レビューで確定する。
 - 本番切り替えは別作業とし、バックアップ/復元確認、停止窓、移行件数/代表画面の照合、切り戻し条件を運用者が確認する。
 
 本番切り替えを行わずにコードのレビューとCI検証を完了させることはできる。運用未実施を理由に、通った隔離検証を未実施扱いへ戻さない。
+
+## 公開後のCompose実測
+
+統合head `8261c0320558dc66cbb662bcb1562d119272d52d` の [CI](https://github.com/MasterMk2/DCSLandingTeacher/actions/runs/37234436068) は全4 jobs成功。新smokeがmigration、予約文字入り合成パスワード、API/SPA、WebSocket ping/pong、再作成後cache保持まで実際に完了した。後続のAGENTS最小修正はアプリコードを変更していないが、その最終headのCIも別途確認する。

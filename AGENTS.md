@@ -4,9 +4,11 @@ Guidance for AI coding agents. Read `docs/development.md` or `docs/architecture.
 
 ## Safety rules (mandatory, user-mandated)
 
-- **Privacy**: do not include or externally expose any private, sensitive, secret, or environment-specific information; review and sanitize all outgoing changes and content before sharing, and stop to ask if safe handling is uncertain.
+- **Privacy — nothing machine-specific in Git-tracked content** (public repo): no local absolute paths (`C:\Users\<USER>\...`, `H:\...`, home dirs), OS account names, hostnames, personal emails, or secrets (`.env`, keys, tokens, logs, transcripts). Use project-relative paths; replace home/user identifiers with `<HOME>` / `<USER>` / `<PROJECT_ROOT>` in examples and diagnostics.
+- Before `git add` / `commit` / `push` / `gh pr create` / GitHub comments: inspect the staged diff and every outgoing title/body for path patterns like `C:\Users\...`, `/Users/...`, `/home/...` and anonymize. If safe sanitization is uncertain, stop and ask.
 - **Irreversible actions**: before push to a shared branch, PR merge, release publish, or posting (email/Discord/SNS), show the exact final artifact and wait for explicit approval here. Plan approval is **NOT** artifact approval. Never pass a stopping point the user set.
 - **Keep moving**: do not wait for the user to say "next" — once required approvals are given, proceed with the obvious next step without asking again; the user will stop you if it is wrong.
+- **Text edits on Windows**: use Edit/Write tools, never `sed` / `printf` / heredocs on tracked files (CRLF risk). Japanese text destined for Windows-native files (`.ps1`, `.iss`) must be UTF-8 **with BOM** — PowerShell 5.1 silently reads BOM-less files as cp932. After bulk edits run `git diff --stat`; if unexpectedly large, check for line-ending corruption before committing. Keep `.gitattributes` aligned with these requirements.
 - When concurrent writers are confirmed on the same worktree, use a dedicated `git worktree`; never `git checkout` with uncommitted work. Keep `RESUME.md` (objective / done / exact next step / restore commands) only for an expected handoff, interruption, or user-requested long-running task.
 - **Measured claims only**: never state a limit, default, or perf characteristic as fact unless measured or read from config/source this session; label unverified statements as hypotheses.
 
