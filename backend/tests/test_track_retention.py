@@ -22,13 +22,14 @@ from app.detection.geometry import offset_position
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
 from app.ingest import TrackIngestor
-from app.models.database import create_engine, create_session_factory, init_db
+from app.models.database import create_engine, create_session_factory
 from app.models.entities import DcsObject, Landing, Track
 from app.pipeline import LandingPipeline
 from app.retention import BOUNCE_ALLOWANCE_S, rebuild_window, retention_window
 from tests.case1 import fly_case1
 from tests.conftest import GRADING_YAML
 from tests.helpers import LAT0, LON0, make_acmi_text, make_approach_samples
+from tests.helpers import create_async_test_schema
 
 CARRIERS_YAML = Path(__file__).resolve().parents[2] / "config" / "carriers.yaml"
 
@@ -60,12 +61,17 @@ async def ingest(session_factory, lines: list[str], *, keep_all: bool = False) -
 @pytest.fixture
 async def second_db(tmp_path):
     engine = create_engine(f"sqlite+aiosqlite:///{(tmp_path / 'full.db').as_posix()}")
-    await init_db(engine)
+    await create_async_test_schema(engine)
     yield create_session_factory(engine)
     await engine.dispose()
 
 
-async def rows_by_object(session_factory) -> dict[str, list[tuple]]:
+TrackRow = tuple[
+    float, float | None, float | None, float | None, float | None, float | None, bool | None
+]
+
+
+async def rows_by_object(session_factory) -> dict[str, list[TrackRow]]:
     async with session_factory() as session:
         result = await session.execute(
             select(
@@ -81,9 +87,11 @@ async def rows_by_object(session_factory) -> dict[str, list[tuple]]:
             .join(DcsObject, DcsObject.id == Track.object_id)
             .order_by(Track.mission_time, Track.id)
         )
-        out: dict[str, list[tuple]] = {}
+        out: dict[str, list[TrackRow]] = {}
         for row in result.all():
-            out.setdefault(row[0], []).append(tuple(row[1:]))
+            out.setdefault(row[0], []).append(
+                (row[1], row[2], row[3], row[4], row[5], row[6], row[7])
+            )
         return out
 
 
@@ -131,6 +139,7 @@ async def test_only_the_landing_window_of_an_aircraft_is_kept(session_factory, s
     full = await rows_by_object(second_db)
     (landing,) = await landings(session_factory)
     touchdown = landing.touchdown_time
+    assert touchdown is not None
 
     # What the rebuild reads is all there, row for row as the old ingest
     # wrote it; and nothing outside the retention span is.
@@ -172,6 +181,7 @@ async def test_the_rebuild_is_the_same_from_the_windows_as_from_everything(
 
     kept = await rows_by_object(session_factory)
     full = await rows_by_object(second_db)
+    assert windowed.touchdown_time is not None
     start, end = retention_window(windowed.touchdown_time, windowed.touchdown_time, detection())
     for acmi_id in ("A1", "C1"):  # the jet and the ship
         assert {r for r in full[acmi_id] if start <= r[0] <= end} <= set(kept[acmi_id])
@@ -249,6 +259,7 @@ async def test_a_vanishing_aircraft_writes_its_window_at_once(session_factory) -
 
     kept = await rows_by_object(session_factory)
     (landing,) = await landings(session_factory)
+    assert landing.touchdown_time is not None
     assert kept["101"][-1][0] == pytest.approx(landing.touchdown_time + 30.0)
     assert kept["101"][0][0] == pytest.approx(
         retention_window(landing.touchdown_time, landing.touchdown_time, detection())[0], abs=1.0
@@ -312,19 +323,23 @@ async def test_a_touch_and_go_then_a_full_stop_write_each_row_once(session_facto
     kept = await rows_by_object(session_factory)
     times = [r[0] for r in kept["101"]]
     assert len(times) == len(set(times))
+    assert stored[0].touchdown_time is not None
+    assert stored[1].touchdown_time is not None
     first_start, _ = retention_window(stored[0].touchdown_time, stored[0].touchdown_time, detection())
     _, last_end = retention_window(stored[1].touchdown_time, stored[1].touchdown_time, detection())
     expected = [s.time + 1000.0 for s in samples if first_start <= s.time + 1000.0 <= last_end]
     assert times == pytest.approx(expected)
 
 
-async def test_keep_all_tracks_is_wired_from_the_settings(tmp_path) -> None:
+async def test_keep_all_tracks_is_wired_from_the_settings(database_url: str) -> None:
     from app.api.main import create_app
     from app.config import Settings
+    from tests.helpers import create_test_schema
 
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             keep_all_tracks=True,
@@ -410,6 +425,7 @@ async def test_a_busy_deck_keeps_the_ship_for_every_landing(session_factory, sec
     ship = [r[0] for r in kept["102"]]
     assert len(ship) == len(set(ship))
     for landing in stored:
+        assert landing.touchdown_time is not None
         start, end = rebuild_window(landing.touchdown_time, detection())
         needed = {r for r in full["102"] if start <= r[0] <= end}
         assert needed <= set(kept["102"]), landing.touchdown_time
@@ -440,7 +456,7 @@ async def test_a_failed_batch_keeps_the_landing_window_for_the_next(tmp_path, se
 
     url = f"sqlite+aiosqlite:///{(tmp_path / 'locked.db').as_posix()}"
     engine = create_engine(url)
-    await init_db(engine)
+    await create_async_test_schema(engine)
 
     @event.listens_for(engine.sync_engine, "connect")
     def _no_wait(dbapi_connection, _record):  # noqa: ANN001
@@ -485,5 +501,6 @@ async def test_a_failed_batch_keeps_the_landing_window_for_the_next(tmp_path, se
     await engine.dispose()
     assert failures >= 1
     (landing,) = await landings(second_db)
+    assert landing.touchdown_time is not None
     start, end = retention_window(landing.touchdown_time, landing.touchdown_time, detection())
     assert {r for r in full["101"] if start <= r[0] <= end} <= set(kept["101"])

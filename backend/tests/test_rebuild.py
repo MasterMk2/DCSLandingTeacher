@@ -93,6 +93,8 @@ async def test_a_carrier_row_stored_with_60_s_gets_its_kissoff_back(session_fact
     assert payload["approach_start_time"] == samples[0]["time"]
     assert samples[0]["time"] <= case.expect["kissoff_time"] - 30.0
     m = row.metrics
+    assert m is not None
+    assert row.comment is not None
     assert m["deck_frame"] == "moving_deck"
     assert m["pattern_entry"] == "initial"
     assert m["pattern_break_along_ship_m"] == pytest.approx(case.expect["kissoff_x"], abs=80.0)
@@ -102,11 +104,17 @@ async def test_a_carrier_row_stored_with_60_s_gets_its_kissoff_back(session_fact
     assert "キスオフ" in row.comment
 
 
-def _same(a: dict, b: dict, key: str, tolerance: float) -> None:
+def _same(
+    a: dict[str, object] | None, b: dict[str, object] | None, key: str, tolerance: float
+) -> None:
+    assert a is not None
+    assert b is not None
     left, right = a.get(key), b.get(key)
     if left is None or right is None:
         assert left == right, key
     else:
+        assert isinstance(left, (int, float))
+        assert isinstance(right, (int, float))
         assert math.isclose(left, right, abs_tol=tolerance), (key, left, right)
 
 
@@ -187,6 +195,7 @@ async def test_a_row_with_no_landing_in_its_raw_track_is_left_alone(session_fact
     must come out of a rebuild exactly as it went in."""
     await _ingest(session_factory, fly_case1().lines, _pipeline(session_factory))
     (landing,) = await _rows(session_factory)
+    assert landing.touchdown_time is not None
     async with session_factory() as session:
         row = await session.get(Landing, landing.id)
         # Thirty seconds before the trap the jet was in the 180: no contact
@@ -252,6 +261,7 @@ async def test_the_ship_comes_from_the_raw_data_not_from_the_row(session_factory
     (after,) = await _rows(session_factory)
     assert payload["kind"] == "carrier"
     assert after.carrier_object_id == ship_row_id
+    assert after.metrics is not None
     assert after.metrics["deck_frame"] == "moving_deck"
 
 
@@ -300,15 +310,17 @@ async def test_a_row_whose_raw_track_is_gone_says_so(session_factory) -> None:
     assert raised.value.error_code == "NO_RAW_TRACK"
 
 
-async def test_the_rebuild_endpoint(tmp_path) -> None:
-    import httpx
+async def test_the_rebuild_endpoint(database_url: str) -> None:
+    import httpx2 as httpx
 
     from app.api.main import create_app
     from app.config import Settings
+    from tests.helpers import create_test_schema
 
+    create_test_schema(database_url)
     app = create_app(
         Settings(
-            database_url=f"sqlite+aiosqlite:///{(tmp_path / 'api.db').as_posix()}",
+            database_url=database_url,
             acmi_enabled=False,
             grading_config_path=str(GRADING_YAML),
             carriers_config_path=str(CARRIERS_YAML),
