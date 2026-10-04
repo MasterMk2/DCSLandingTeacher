@@ -118,19 +118,25 @@ jobs:
   compose:
     name: Validate Docker Compose
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: dlt-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      DLT_HOST: 127.0.0.1
+      DLT_PORT: "18080"
+      DLT_POSTGRES_DB: dcs_landing_teacher
+      DLT_POSTGRES_USER: dcs_landing_teacher
+      # Synthetic credentials deliberately cover URI-reserved characters.
+      DLT_POSTGRES_PASSWORD: "test@pass/word:%#?+"
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate smoke-check isolation guards
+        run: python -m unittest discover -s scripts/tests -p test_ci_compose_smoke.py
+
       - name: Validate Docker Compose
-        env:
-          DLT_POSTGRES_DB: dcs_landing_teacher
-          DLT_POSTGRES_USER: dcs_landing_teacher
-          DLT_POSTGRES_PASSWORD: test-password
         run: docker compose config --quiet
 
       - name: Build Docker Compose services
-        env:
-          DLT_POSTGRES_DB: dcs_landing_teacher
-          DLT_POSTGRES_USER: dcs_landing_teacher
-          DLT_POSTGRES_PASSWORD: test-password
         run: docker compose build
+
+      - name: Exercise isolated Compose startup and recreation
+        run: python scripts/ci_compose_smoke.py

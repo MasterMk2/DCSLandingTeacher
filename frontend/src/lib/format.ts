@@ -37,6 +37,13 @@ export function mToNm(meters: number): number {
  * both metres per second, but read as fpm and knots respectively.
  */
 export function formatMetric(key: string, value: unknown): { label: string; text: string } {
+  // 採点に使った艦の幾何。入れ子のまま JSON で出すと読めないので 1 行に畳む。
+  if (key === "flols_geometry" && typeof value === "object" && value !== null) {
+    return {
+      label: metricLabel(key, key),
+      text: flolsGeometryText(value as Record<string, unknown>),
+    };
+  }
   if (typeof value !== "number" || !Number.isFinite(value)) {
     // 採点項目名の配列 (measured_components など) は JSON のまま出すと
     // 読めないので、日本語名を並べる。
@@ -108,6 +115,41 @@ export function formatMetric(key: string, value: unknown): { label: string; text
     label: metricLabel(key, key),
     text: Number.isInteger(value) ? String(value) : value.toFixed(2),
   };
+}
+
+/** `flols_geometry` (carriers.yaml の entry + 記録時の艦の状態) の要約。
+ *
+ *  検証済みかどうかは geometry_confidence、座標系は deck_frame、艦速は
+ *  pattern_ship_speed が別の行で述べるので、ここはどの entry のどの値で
+ *  採点したかだけ。ランプ位置 (艦の ACMI 基準点からのずれ) は読み手が
+ *  使えないので出さない。 */
+function flolsGeometryText(geometry: Record<string, unknown>): string {
+  if (geometry["source"] === "touchdown_reference_fallback") {
+    return "未登録（接地点を基準に近似）";
+  }
+  const num = (k: string): number | null => {
+    const v = geometry[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
+  const parts: string[] = [];
+  const slope = num("glideslope_deg");
+  if (slope !== null) parts.push(`グライドスロープ ${slope.toFixed(1)}°`);
+  const offset = num("landing_course_offset_deg");
+  if (offset !== null) {
+    const side = offset < 0 ? "左 " : offset > 0 ? "右 " : "";
+    parts.push(`アングルドデッキ ${side}${Math.abs(offset).toFixed(1)}°`);
+  }
+  const deck = num("deck_altitude_m");
+  if (deck !== null) parts.push(`甲板高 ${Math.round(mToFt(deck))} ft`);
+  // 0 は「グライドスロープをランプで終える」旧来の値 (それ自体が意味を持つ)。
+  // 保存時点でこのフィールドがなかった記録も backend の from_dict と同じ 0 にする。
+  const target = "touchdown_target_m" in geometry ? num("touchdown_target_m") : 0;
+  if (target !== null) {
+    parts.push(target > 0 ? `狙点 ランプから ${Math.round(mToFt(target))} ft` : "狙点 ランプ");
+  }
+  const key = typeof geometry["key"] === "string" ? geometry["key"] : null;
+  if (key && parts.length > 0) return `${key}（${parts.join("、")}）`;
+  return key ?? (parts.join("、") || "-");
 }
 
 /** Format epoch seconds as a localized Japanese datetime string. */
@@ -318,6 +360,7 @@ const METRIC_LABELS: Record<string, string> = {
   centerline_overshoot: "センターライン突き抜け",
   glideslope_reference: "基準",
   geometry_confidence: "着艦幾何の確からしさ",
+  flols_geometry: "採点に使った着艦幾何",
   glideslope_method: "測定方法",
   outcome: "結果",
   approach_pattern: "進入パターン",

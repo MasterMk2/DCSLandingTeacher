@@ -3,6 +3,17 @@
 .env.*
 !.env.example
 
+# Generated development files, including the repository root and scripts/.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+*.tsbuildinfo
+.idea/
+
 # VS Code
 .vscode/*
 !.vscode/settings.json
