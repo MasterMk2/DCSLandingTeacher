@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
@@ -60,6 +61,20 @@ def test_missing_host_and_bundled_file_is_an_error(
     monkeypatch.setattr(configuration_files, "BUNDLED_CONFIG_DIR", tmp_path / "absent")
     with pytest.raises(FileNotFoundError, match="bundled copy missing"):
         _ = load_grading_config(tmp_path / "grading.yaml")
+
+
+@pytest.mark.parametrize("filename", ["grading.yaml", "carriers.yaml"])
+def test_malformed_host_settings_are_not_hidden_by_bundled_fallback(
+    filename: str, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    configured = tmp_path / filename
+    _ = configured.write_text("invalid: [unterminated\n", encoding="utf-8")
+    loader = load_grading_config if filename == "grading.yaml" else load_carrier_geometry_book
+
+    with caplog.at_level(logging.WARNING), pytest.raises(yaml.YAMLError):
+        _ = loader(configured)
+
+    assert not caplog.records
 
 
 async def test_missing_host_seed_uses_bundled_exact_before_live_cache(
