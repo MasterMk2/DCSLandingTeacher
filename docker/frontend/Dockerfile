@@ -6,7 +6,7 @@ WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm install --global npm@11.9.0 && npm ci
 COPY frontend/ ./
-RUN npm run build
+RUN npm run doctor && npm run build
 
 
 FROM nginx:stable-alpine AS runner
