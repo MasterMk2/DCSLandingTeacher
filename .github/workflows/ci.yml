@@ -20,6 +20,9 @@ jobs:
       - name: Check actual staging, BOM preservation and checkout
         run: python -m unittest discover -s scripts/tests -p test_git_text_attributes.py -v
 
+      - name: Check development entry failure and privacy guards
+        run: python -m unittest discover -s scripts/tests -p test_dev_entry.py -v
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -31,18 +34,23 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: frontend/.nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: Pin npm and inspect environment
+        run: |
+          npm install --global npm@11.9.0
+          npm run doctor
+
+      - name: Install dependencies from lock
         run: npm ci
 
-      - name: Type-check and build
-        run: npm run build
+      - name: Check
+        run: npm run check
 
-      - name: Unit tests
-        run: npm test
+      - name: Confirm dependency files remain unchanged
+        run: git diff --exit-code -- package.json package-lock.json
 
   backend:
     name: Backend
@@ -66,24 +74,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.19"
+
+      - name: Install pinned Python
+        run: uv python install --no-bin --no-registry
 
       - name: Install backend dependencies
-        run: uv sync --frozen --no-install-project
-
-      - name: Lint
-        run: uv run ruff check .
+        run: |
+          uv lock --check
+          uv sync --frozen --no-install-project
+          uv run --no-sync python ../tools/dev.py doctor
 
       # TODO: コード修正後有効化する
       # - name: Type check
-      #   run: uv run basedpyright
+      #   run: uv run --no-sync basedpyright
 
-      - name: Test
-        run: uv run pytest -q
+      - name: Check
+        run: uv run --no-sync python ../tools/dev.py check
+
+      - name: Confirm dependency files remain unchanged
+        run: git diff --exit-code -- pyproject.toml uv.lock
 
   migration-job:
     name: Migration job
@@ -108,26 +120,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.19"
+
+      - name: Install pinned Python
+        run: uv python install --no-bin --no-registry
 
       - name: Install migration job with dev dependencies
-        run: uv sync --frozen --no-install-project
+        run: |
+          uv lock --check
+          uv sync --frozen
+          uv run --no-sync python ../tools/dev.py doctor
 
-      - name: Lint
-        run: uv run ruff check .
+      - name: Check
+        run: uv run --no-sync python ../tools/dev.py check
 
-      - name: Type check
-        run: uv run basedpyright
-
-      - name: Test
-        run: uv run pytest -q
-
-      - name: SQLite to PostgreSQL migration tests
-        run: uv run pytest ../scripts/tests/test_migrate_sqlite.py -q
+      - name: Confirm dependency files remain unchanged
+        run: git diff --exit-code -- pyproject.toml uv.lock
 
   compose:
     name: Validate Docker Compose

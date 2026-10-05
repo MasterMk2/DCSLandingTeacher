@@ -11,7 +11,7 @@ frontend/dist
 **/.pytest_cache
 **/.ruff_cache
 **/*.egg-info
-backend/.venv
+**/.venv
 
 .git
 .github

@@ -1,13 +1,14 @@
 # 開発ガイド
 
 開発環境の構築とテスト実行手順。アーキテクチャの全体像は [`architecture.md`](architecture.md) を参照してください。
+固定版・復元順序・doctor/sync/check・適用範囲と例外は [開発基盤の共通契約 0.1](development-foundation.md) に従います。
 
 ## 必要要件
 
 | ツール | バージョン |
 |---|---|
-| Python | 3.11 以上 |
-| Node.js | 20 以上（LTS 推奨） |
+| Python / uv | 3.11.15 / 0.12.19（migration-job は 3.11 系を維持） |
+| Node.js / npm | 22.23.3 / 11.9.0 |
 | PostgreSQL | API をネイティブ起動する場合に必要 |
 | Docker（任意） | Docker Desktop または Engine + Compose v2。Compose で PostgreSQL と migration job を起動できる |
 
@@ -17,7 +18,10 @@
 
 ```bash
 cd backend
+uv python install --no-bin --no-registry
+uv lock --check
 uv sync --frozen --no-install-project
+uv run --no-sync python ../tools/dev.py doctor
 ```
 
 `backend/` に `.env` を作成し、`DLT_DATABASE_URL` をローカル PostgreSQL に合わせて設定します。
@@ -34,9 +38,9 @@ API 単体で動かす場合は ACMI 受信を無効化すると Tacview なし�
 
 ```bash
 # PowerShell
-$env:PYTHONPATH="src"; $env:DLT_ACMI_ENABLED="false"; $env:DLT_GRADING_CONFIG_PATH="../config/grading.yaml"; $env:DLT_CARRIERS_CONFIG_PATH="../config/carriers.yaml"; uv run uvicorn app.api.main:create_app --factory --port 8000
+$env:PYTHONPATH="src"; $env:DLT_ACMI_ENABLED="false"; $env:DLT_GRADING_CONFIG_PATH="../config/grading.yaml"; $env:DLT_CARRIERS_CONFIG_PATH="../config/carriers.yaml"; uv run --no-sync uvicorn app.api.main:create_app --factory --port 8000
 # Linux
-PYTHONPATH=src DLT_ACMI_ENABLED=false DLT_GRADING_CONFIG_PATH=../config/grading.yaml DLT_CARRIERS_CONFIG_PATH=../config/carriers.yaml uv run uvicorn app.api.main:create_app --factory --port 8000
+PYTHONPATH=src DLT_ACMI_ENABLED=false DLT_GRADING_CONFIG_PATH=../config/grading.yaml DLT_CARRIERS_CONFIG_PATH=../config/carriers.yaml uv run --no-sync uvicorn app.api.main:create_app --factory --port 8000
 ```
 
 - 動作確認: `http://localhost:8000/api/v1/health`（Compose のヘルスチェックは互換 endpoint の `/api/health` を使用）
@@ -48,6 +52,7 @@ PYTHONPATH=src DLT_ACMI_ENABLED=false DLT_GRADING_CONFIG_PATH=../config/grading.
 
 ```bash
 cd frontend
+npm run doctor
 npm ci
 npm run dev   # http://localhost:5173 （/api を :8000 へプロキシ）
 ```
@@ -85,9 +90,10 @@ docker compose run --rm migration-job
 ```powershell
 cd migration-job
 $env:PYTHONPATH="../backend/src"
-uv sync --frozen --no-install-project
-uv run migration-job
-uv run migration-job-revision "add landing field"
+uv lock --check
+uv sync --frozen
+uv run --no-sync migration-job
+uv run --no-sync migration-job-revision "add landing field"
 ```
 
 revision コマンドは既存 head の次にファイルを作成します。テーブル変更は生成ファイルへ記述します。
@@ -98,9 +104,9 @@ revision コマンドは既存 head の次にファイルを作成します。�
 
 ```bash
 cd backend
-uv run pytest -q                 # 全テスト
-uv run pytest tests/unit -q      # DB サーバー不要の単体テスト
-uv run pytest tests/unit/app/grading/test_land_grader.py -q   # 特定ファイル
+uv run --no-sync python ../tools/dev.py check  # Ruff と全テスト
+uv run --no-sync pytest tests/unit -q      # DB サーバー不要の単体テスト
+uv run --no-sync pytest tests/unit/app/grading/test_land_grader.py -q   # 特定ファイル
 ```
 
 - `asyncio_mode = "auto"` のため async テストはデコレータ不要
@@ -116,16 +122,16 @@ uv run pytest tests/unit/app/grading/test_land_grader.py -q   # 特定ファイ�
 ```powershell
 cd backend
 $env:DLT_TEST_POSTGRES_URL="postgresql+psycopg://<user>:<password>@localhost:5432/<test-db>"
-uv run pytest -q
+uv run --no-sync pytest -q
 ```
 
 migration-job 側でも同じ検証用 URL と `PYTHONPATH=../backend/src` を指定します。
-`uv run pytest -q` は空 DB の upgrade/check/downgrade、再実行、既存データの補完、
+`uv run --no-sync python ../tools/dev.py check` は Ruff・型検証の後、空 DB の upgrade/check/downgrade、再実行、既存データの補完、
 意図した schema drift の検出を確認します。移行 CLI は次の独立したテストです。
 
 ```powershell
 cd migration-job
-uv run pytest ../scripts/tests/test_migrate_sqlite.py -q
+uv run --no-sync pytest ../scripts/tests/test_migrate_sqlite.py -q
 ```
 
 ### フロントエンド（vitest）
@@ -140,8 +146,8 @@ npm test -- --watch   # ウォッチモード
 
 ```bash
 cd backend
-uv run ruff check .
-uv run ruff check --fix .   # 自動修正可能な違反を修正
+uv run --no-sync ruff check .
+uv run --no-sync ruff check --fix .   # 自動修正可能な違反を修正
 ```
 
 ルールセットは [`backend/pyproject.toml`](../backend/pyproject.toml) の `[tool.ruff.lint]`（最小構成: E4/E7/E9/F）で管理しています。
@@ -167,10 +173,11 @@ docker build -f docker/frontend/Dockerfile -t dlt-frontend .
 
 | ジョブ | 内容 |
 |---|---|
-| backend | Python 3.11 / PostgreSQL 18 / `uv sync --frozen --no-install-project` → `uv run ruff check .` → `uv run pytest -q` |
-| frontend | Node 20 / `npm ci` → `npm run build` → `npm test` |
-| migration-job | Python 3.11 / PostgreSQL 18 / backend metadata / 同期・Ruff・basedpyright・migration テスト・SQLite 移行 CLI テスト |
-| compose | PostgreSQL 環境変数を設定して `docker compose config --quiet` → `docker compose build` |
+| backend | Python 3.11.15 / uv 0.12.19 / PostgreSQL 18 / lock 鮮度確認 → frozen restore（source 実行）→ `--no-sync` の check |
+| frontend | Node 22.23.3 / npm 11.9.0 / doctor → `npm ci` → `npm run check` |
+| migration-job | 同じ Python/uv / PostgreSQL 18 / backend metadata / frozen project install → `--no-sync` の check（Ruff・basedpyright・migration・SQLite 移行 CLI） |
+| compose | isolation guard → `docker compose config --quiet` → build → CI 専用 project の隔離起動・再作成 smoke |
+| text-encoding | Windows/Linux の Git encoding、開発入口の失敗伝播・診断の privacy guard |
 
 ローカルで CI と同じことを確認するには上記コマンドをそのまま実行してください。シークレットは不要です。
 

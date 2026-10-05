@@ -1,4 +1,5 @@
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
+FROM python:3.11.15-slim-bookworm AS builder
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -10,11 +11,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Install dependencies first for better Docker layer caching.
 COPY backend/pyproject.toml backend/uv.lock ./
 
-RUN uv sync --frozen --no-install-project --no-default-groups
+RUN uv lock --check && uv sync --frozen --no-install-project --no-default-groups
 
 COPY backend/src ./src
 
-FROM python:3.11-slim-bookworm AS runner
+FROM python:3.11.15-slim-bookworm AS runner
 
 WORKDIR /app
 
