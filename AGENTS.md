@@ -25,28 +25,28 @@ Guidance for AI coding agents. Read `docs/development.md` or `docs/architecture.
 
 Run the applicable checks according to the specification and project configuration, and keep `.github/workflows/ci.yml` aligned accordingly.
 
+The development contract version, pinned runtimes, doctor/sync/check entry points and exceptions are in [`docs/development-foundation.md`](docs/development-foundation.md). Check lock freshness before frozen restore; execute with `--no-sync` afterwards.
+
 Backend (from `backend/`, after `uv sync --frozen --no-install-project`):
 
-- `uv run ruff check .`
-- `uv run basedpyright path/to/edited_file.py`: run only on edited Python files; do not require a full-backend pass.
-- `uv run pytest -q`
+- `uv lock --check` before the frozen restore above.
+- `uv run --no-sync python ../tools/dev.py check` (Ruff + all pytest).
+- `uv run --no-sync basedpyright path/to/edited_file.py`: run only on edited Python files; do not require a full-backend pass.
 
 Migration job (from `migration-job/`, when changing `migration-job/`):
 
-- `uv sync --frozen --no-install-project`
-- `uv run ruff check .`
-- `uv run basedpyright`
-- `uv run pytest -q`
+- `uv lock --check` then `uv sync --frozen` (install the project for its CLI/imports).
+- `uv run --no-sync python ../tools/dev.py check`: requires a disposable `DLT_TEST_POSTGRES_URL` and `PYTHONPATH=../backend/src`; includes migration types/tests and SQLite migration CLI tests.
 
 Frontend (from frontend/):
 
 - `npm ci`
-- `npm run build`
-- `npm test`
+- `npm run doctor` (Node/npm versions pinned in frontend/).
+- `npm run check` (Vitest + TypeScript/Vite build).
 
 ## Running the backend locally
 
-- Entry point is a factory. To run the API without Tacview from PowerShell in `backend/`: `$env:PYTHONPATH = "src"; $env:DLT_ACMI_ENABLED = "false"; $env:DLT_GRADING_CONFIG_PATH = "../config/grading.yaml"; $env:DLT_CARRIERS_CONFIG_PATH = "../config/carriers.yaml"; uv run uvicorn app.api.main:create_app --factory --port 8000`.
+- Entry point is a factory. To run the API without Tacview from PowerShell in `backend/`: `$env:PYTHONPATH = "src"; $env:DLT_ACMI_ENABLED = "false"; $env:DLT_GRADING_CONFIG_PATH = "../config/grading.yaml"; $env:DLT_CARRIERS_CONFIG_PATH = "../config/carriers.yaml"; uv run --no-sync uvicorn app.api.main:create_app --factory --port 8000`.
 - Config paths and `.env` are **CWD-relative**. Running from `backend/`, use `DLT_GRADING_CONFIG_PATH=../config/grading.yaml` and `DLT_CARRIERS_CONFIG_PATH=../config/carriers.yaml`; create `backend/.env` when using the example environment file. The default `DLT_DATABASE_URL` targets local PostgreSQL.
 - `DLT_ACMI_ENABLED=false` starts the API without the Tacview TCP client. Native single-source defaults connect to 127.0.0.1:42674; Compose defaults use host.docker.internal:42674. Existing 31010 installations require an explicit port.
 - All settings are `DLT_`-prefixed env vars (`backend/src/app/config.py`); full list in `.env.example`.

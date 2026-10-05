@@ -73,7 +73,7 @@ curl -fsS http://localhost:8000/api/health
 
 - Docker Desktop
 - [uv](https://docs.astral.sh/uv/)
-- Node.js 20 以上
+- Node.js 22.23.3 / npm 11.9.0（[基盤の固定版と例外](docs/development-foundation.md)）
 
 ### セットアップ
 
@@ -82,7 +82,8 @@ curl -fsS http://localhost:8000/api/health
 ```powershell
 # 開発・検証用の依存関係を取得
 cd backend
-uv sync
+uv lock --check
+uv sync --frozen --no-install-project
 cd ..\frontend
 npm ci
 
@@ -353,14 +354,15 @@ land_grading:
 ## 開発
 
 開発環境の構築・テスト実行の詳細は [`./docs/development.md`](./docs/development.md) を参照してください。
+共通契約の適用版・固定 runtime・doctor/sync/check と例外は [`開発基盤`](./docs/development-foundation.md) にまとめています。
 
 ### バックエンド
 
 ```bash
 cd backend
-uv sync
-uv run ruff check .
-uv run pytest -q
+uv lock --check
+uv sync --frozen --no-install-project
+uv run --no-sync python ../tools/dev.py check
 ```
 
 #### フロントエンド
@@ -368,8 +370,7 @@ uv run pytest -q
 ```
 cd frontend
 npm ci
-npm run build
-npm test
+npm run check
 ```
 
 ## ライセンス

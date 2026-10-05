@@ -1,4 +1,5 @@
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
+FROM python:3.11.15-slim-bookworm
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -12,6 +13,6 @@ COPY migration-job/migrations ./migrations
 COPY migration-job/src ./src
 COPY backend/src /app/backend/src
 
-RUN uv sync --no-dev --frozen
+RUN uv lock --check && uv sync --no-dev --frozen
 
-ENTRYPOINT ["uv", "run", "--no-dev", "migration-job"]
+ENTRYPOINT ["uv", "run", "--no-sync", "--no-dev", "migration-job"]

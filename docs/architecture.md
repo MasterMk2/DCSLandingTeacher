@@ -218,9 +218,10 @@ YAML（[`config/grading.yaml`](../config/grading.yaml)、
 
 `.github/workflows/ci.yml` が push / PR ごとに以下を実行する:
 
-- backend: Python 3.11 と PostgreSQL 18、`uv sync --frozen --no-install-project` → `uv run ruff check .` → `uv run pytest -q`
-- frontend: Node 20 で `npm ci` → `npm run build`（tsc 含む）→ `vitest run`
+- backend: Python 3.11.15 / uv 0.12.19 と PostgreSQL 18、lock 鮮度確認 → frozen restore → `--no-sync` の check（Ruff・pytest）
+- frontend: Node 22.23.3 / npm 11.9.0 で `npm ci` → `npm run check`（Vitest・TypeScript/Vite build）
 - migration-job: PostgreSQL 18 上の upgrade/check/downgrade とデータ移行テスト、Ruff、basedpyright
-- compose: 設定検証と全サービスのビルド
+- compose: isolation guard、設定検証、全サービスのビルド、隔離起動・再作成 smoke
 
 シークレット不要の公開リポジトリ向け構成。
+固定版と例外は [開発基盤の共通契約 0.1](development-foundation.md) を参照。
