@@ -100,6 +100,11 @@ land_grading:
     touchdown_speed: 0.20
     glideslope: 0.25
     centerline: 0.25
+    # Approach AOA (aoa_bands below). Only airframes WITH a band get the
+    # component at all, and the weights are normalised, so adding it on top
+    # of the 1.0 above leaves every other airframe's score exactly as it was;
+    # for the airframes in aoa_bands it is 0.25 / 1.25 = 20% of the grade.
+    aoa: 0.25
   # Least share of the weight above that has to have been MEASURED for a
   # grade to be issued at all. Below it the landing keeps its components,
   # evidence and metrics but gets no grade and no score.
@@ -140,6 +145,7 @@ land_grading:
     glideslope: 0.20
     centerline: 0.20
     pattern: 0.20
+    aoa: 0.20
 
   # ---------------------------------------------------------------------
   # Segmentation: where the final approach starts.
@@ -158,6 +164,31 @@ land_grading:
   track_min_step_m: 20.0
   # Track angle within this of the runway course counts as "on final".
   rollout_align_deg: 15.0
+  # The roll-out is the END of the last stretch flown more than
+  # rollout_align_deg off the course -- but two kinds of stretch are not a
+  # turn onto final and are skipped (app/grading/pattern.py, _rollout_index):
+  #
+  # - one that STARTS in the flare, i.e. after the aircraft last descended
+  #   through rollout_min_agl_m (15 m ~ 50 ft, the threshold crossing
+  #   height). A kick to line up, a de-crab or a swerve on the runway. A turn
+  #   that started higher and is still going there counts, with its real (late)
+  #   end. "Low" alone is not the flare: a circuit flown from a touch-and-go
+  #   begins its first turn a few metres up.
+  # - one shorter than rollout_min_excursion_s. The track angle is a 2 s
+  #   chord (track_smoothing_s), so a single jumped position reads as ~2 s of
+  #   "off course".
+  #
+  # Until 2026-10 the last single off-course sample was the roll-out. Over 528
+  # production land landings (2026-10-25; up to 20 per airframe, fixed-wing
+  # only) that started the graded final less
+  # than a second before touchdown on 17 of them -- no glidepath judged at
+  # all. With these two rules 23 landings move (9 of those 17 among them;
+  # 3 change letter grade), finals under 10 s drop from 45 to 33, and what
+  # is left is mostly genuinely late roll-outs (curved warbird / aerobatic /
+  # Harrier approaches) or a wrongly estimated course on a landing with no
+  # runway resolved. No overhead pattern loses its pattern.
+  rollout_min_agl_m: 15.0
+  rollout_min_excursion_s: 3.0
   # ...and within this of the LANDING direction counts as the initial, which
   # is where the break turn is taken to have started.
   initial_align_deg: 20.0
@@ -515,6 +546,119 @@ land_grading:
     C: 62
     D: 45   # below -> E
 
+# ---------------------------------------------------------------------------
+# Approach angle of attack, per airframe (land: the `aoa` component; carrier:
+# FAST / SLOW). Degrees of BODY-AXIS AOA -- the angle between the fuselage
+# and the airflow -- which is what the graders measure.
+#
+# How it is measured (app/grading/aoa.py). DCS servers never send AOA to
+# Tacview (not one sample in 650 production landings sampled across all
+# fixed-wing types carries it), so it is derived: the
+# velocity from the same track fit as the load factor, turned into body axes
+# with the recorded Yaw / Pitch / Roll. That is the same quantity MOOSE
+# AIRBOSS computes in POSITIONABLE:GetAoA and writes its bands against.
+# Checked against six client-side recordings, which DO carry AOA for the
+# player's own aircraft (scripts/validate-aoa-estimate.py, 2026-10-25): on
+# approach-like samples the estimate minus the recorded AOA is, median
+# (p10 / p90, share within 0.5 deg): F/A-18C +0.18 (-0.08 / +0.50, 89%),
+# F-15E +0.10 (-0.29 / +0.60, 82%), F-4E +0.12 (-0.32 / +0.71, 78%); 98-99%
+# within 1 deg. There is no wind in ACMI, so a headwind reads high: ~0.4 deg
+# at 140 kt into 20 kt.
+#
+# Which airframes are here. Only those whose manual gives the approach AOA
+# in degrees, or a SOURCED conversion from indexer units, AND whose
+# production estimates land in a physically sensible place:
+#   in:  F/A-18 (NATOPS), F-16 (ED manual / USAF), M-2000C (manual),
+#        AJS37 (manual), AV-8B (RAZBAM manual), F-14 (units, converted
+#        with the AIRBOSS / Heatblur relation -- secondary source).
+#   out: F-15C/E and A-10 (units; the ED manuals say outright the units do
+#        not correspond to degrees and publish no conversion), F-5E (same),
+#        F-4E (Heatblur gives "0.95 deg per unit, offset ~4 deg" without the
+#        sign: 14.2 or 22.2 deg for 19.2 units, against 9.1 deg median
+#        flown here), JF-17 (a 12 deg LIMIT, no target), Su-33 (11.5-12.5
+#        deg in the manual, but its production estimates sit 4-5 deg below
+#        that on land and NEGATIVE on the deck -- the attitude data are not
+#        trustworthy for it), Su-27 / MiG-29 / MiG-21 / L-39 (no approach
+#        AOA published). An airframe with no row is not judged on AOA at
+#        all: the land grade keeps touchdown speed only, the carrier grade
+#        keeps the speed-ratio FAST / SLOW.
+#
+# Each row: `match` tokens (case-insensitive substring of the ACMI name; the
+# FIRST row that matches wins, so put longer names first), the on-speed band
+# (100 points inside it), and `fast_deg` / `slow_deg`: the edge of the
+# "slightly" zone -- AIRBOSS's Fast / Slow, the indexer's chevron in place of
+# the donut. Inside that zone the score falls 100 -> 65; beyond it, to 30 and
+# 5 over the next zone-widths, but never over less than 1 deg each, so the
+# estimate's own spread (and the unmeasured wind) cannot cost 60 points.
+aoa_bands:
+  hornet:
+    match: ["FA-18", "F/A-18", "EA-18G"]
+    on_speed_deg: 8.1
+    on_speed_min_deg: 7.4
+    on_speed_max_deg: 8.8
+    fast_deg: 6.9
+    slow_deg: 9.3
+    source: "NATOPS A1-F18AC-NFM-000 Fig 2-17 (aircraft 161520 and up); DCS F/A-18C EAG"
+  tomcat:
+    match: ["F-14"]
+    # 15 units on-speed (Heatblur manual). Units -> degrees with
+    # 0.918 * units - 3.411 (15 units = 10.36 deg; the relation AIRBOSS cites
+    # from Heatblur, not published in the Heatblur manual itself). Band and
+    # chevrons are AIRBOSS's current values: on-speed 14-16 units, Fast 13.5,
+    # Slow 16.5.
+    on_speed_deg: 10.36
+    on_speed_min_deg: 9.44
+    on_speed_max_deg: 11.28
+    fast_deg: 8.98
+    slow_deg: 11.74
+    source: "Heatblur F-14 manual (15 units); units->deg and band: MOOSE AIRBOSS (secondary)"
+  falcon:
+    match: ["F-16"]
+    # ED's guide: trim 11 deg on downwind and base, "maintain between 11 and
+    # 13 deg" on final, touchdown at 13 deg max; USAF: "final approach will
+    # normally be flown at 11 degrees AOA". Indexer donut 11.1-13.9, high
+    # chevron from 14. Fast edge = the bottom of the AOA tape's low-AOA
+    # region (8.5 deg).
+    on_speed_deg: 11.0
+    on_speed_min_deg: 11.0
+    on_speed_max_deg: 13.0
+    fast_deg: 8.5
+    slow_deg: 14.0
+    source: "DCS F-16C Early Access Guide (AoA indexer / Landing); AFMAN 11-2F-16V3"
+  mirage2000:
+    match: ["M-2000"]
+    # Gauge green mark 13-15 deg, HUD approach bracket 14 +/- 0.5, which
+    # flashes when the AOA is more than 3 deg off it.
+    on_speed_deg: 14.0
+    on_speed_min_deg: 13.0
+    on_speed_max_deg: 15.0
+    fast_deg: 11.0
+    slow_deg: 17.0
+    source: "DCS M-2000C manual (AoA indicator, HUD approach brackets, landing checklist)"
+  viggen:
+    match: ["AJS37"]
+    # "Reduce airspeed to correspond to 12 deg alpha" on final; the AFK
+    # autothrottle's landing mode holds 15.5 deg (prohibited at heavy
+    # weights). No chevrons published: the slightly-fast / slow edges are
+    # 1 deg outside the band.
+    on_speed_deg: 12.0
+    on_speed_min_deg: 12.0
+    on_speed_max_deg: 15.5
+    fast_deg: 11.0
+    slow_deg: 16.5
+    source: "DCS AJS-37 Viggen manual (visual approach, AFK mode 3)"
+  harrier:
+    match: ["AV8B"]
+    # "On speed between 10 and 12 units of AOA" on final; the pocket guide
+    # writes the same "AOA 10 - 12" with a degree sign. Fast / Slow edges are
+    # AIRBOSS's (8.0 / 13.5 deg).
+    on_speed_deg: 11.0
+    on_speed_min_deg: 10.0
+    on_speed_max_deg: 12.0
+    fast_deg: 8.0
+    slow_deg: 13.5
+    source: "RAZBAM AV-8B manual ch.12 and pocket guide; edges: MOOSE AIRBOSS (secondary)"
+
 lso_grading:
   # Grades in US Navy style (FR-3).
   grades:
@@ -536,6 +680,17 @@ lso_grading:
   # capture, i.e. the reference every stored grade was made with: from the
   # abeam onward a Case I pass is flown on-speed.
   approach_speed_window_s: 60.0
+  # For airframes in aoa_bands, FAST / SLOW are judged on the approach AOA
+  # instead -- which is what "fast" and "slow" mean to an LSO: the jet is
+  # flown on-speed AOA, and the speed that takes is whatever the weight makes
+  # it. The median AOA over the last aoa_window_s before touchdown (the
+  # groove: 15-18 s in CV NATOPS), leaving out the last aoa_exclude_s (the
+  # ramp to the wires, where the attitude changes with the hook and the deck).
+  # Past the band's Fast / Slow edge -> major (AIRBOSS "F" / "SLO"); inside
+  # the "slightly" zone -> minor ("(F)" / "(SLO)"). Airframes without a band
+  # keep the speed-ratio rule below.
+  aoa_window_s: 15.0
+  aoa_exclude_s: 1.0
   # Case I pattern (app/grading/carrier_pattern.py): measured and spoken to
   # in the comment, never part of the grade -- an LSO grades the pass, and
   # nothing here has been calibrated on this server's traps. Segmentation
@@ -590,13 +745,13 @@ lso_grading:
     FAST:
       severity: major
       description: "速度超過 - 進入速度が適正範囲を超えている"
-      details: "着艦速度/平均進入速度の比が1.07を超えた場合に検出されます。速すぎるとアレスティングギアの許容エネルギーを超え、ボルターやギア損傷の原因となります。"
+      details: "機体別の進入迎角の帯（aoa_bands）がある機種は、接地前15秒（最後の1秒を除く）の迎角の中央値がオンスピード帯より小さい場合に検出されます（Fast の境目より小さければ major、帯との間なら minor）。帯の無い機種は、着艦速度/平均進入速度の比が1.07を超えた場合に検出されます。速すぎるとアレスティングギアの許容エネルギーを超え、ボルターやギア損傷の原因となります。"
       # touchdown speed / mean final-approach speed above this -> FAST.
       speed_ratio: 1.07
     SLOW:
       severity: major
       description: "速度不足 - 進入速度が適正範囲を下回っている"
-      details: "着艦速度/平均進入速度の比が0.93を下回った場合に検出されます。遅すぎると揚力不足で沈み込み、ハードランディングやスタールのリスクがあります。"
+      details: "機体別の進入迎角の帯（aoa_bands）がある機種は、接地前15秒（最後の1秒を除く）の迎角の中央値がオンスピード帯より大きい場合に検出されます（Slow の境目より大きければ major、帯との間なら minor）。帯の無い機種は、着艦速度/平均進入速度の比が0.93を下回った場合に検出されます。遅すぎると揚力不足で沈み込み、ハードランディングやスタールのリスクがあります。"
       speed_ratio: 0.93
     OFFLINE:
       severity: major

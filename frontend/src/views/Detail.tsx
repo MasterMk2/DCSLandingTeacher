@@ -252,6 +252,28 @@ export function Detail({ id, onBack }: DetailProps) {
                 <GlideslopeProfileChart track={track} metrics={detail.metrics} />
               )}
 
+              {/* 3D 軌跡は講評と図のすぐ後ろ (画面のみ)。以前はページの末尾、
+                  ファクター表と評価メトリクスの一覧の後ろにあり、1440x900 の
+                  画面で 2.7 画面分スクロールしないと出てこなかった。印刷する
+                  データシートには入らない (no-print)。 */}
+              {track && track.samples.length > 1 && (
+                <div className="flight3d-section no-print">
+                  <h4>3D 飛行軌跡</h4>
+                  <ErrorBoundary
+                    key={detail.id}
+                    fallback={
+                      <p className="error-message">
+                        3D ビューを読み込めませんでした。ページを再読み込みしてください。
+                      </p>
+                    }
+                  >
+                    <Suspense fallback={<p className="loading-message">3D ビューを読み込み中...</p>}>
+                      <FlightPath3D track={track} metrics={detail.metrics} airframe={detail.airframe} />
+                    </Suspense>
+                  </ErrorBoundary>
+                </div>
+              )}
+
               {/* Factors Table */}
               <div className="factors-section">
                 <h4>検出ファクター（{detail.factors.length} 件）</h4>
@@ -336,24 +358,6 @@ export function Detail({ id, onBack }: DetailProps) {
       </section>
 
       {/* ===== Screen-only sections ===== */}
-      {track && track.samples.length > 1 && (
-        <section className="no-print">
-          <h2>3D 飛行軌跡</h2>
-          <ErrorBoundary
-            key={detail.id}
-            fallback={
-              <p className="error-message">
-                3D ビューを読み込めませんでした。ページを再読み込みしてください。
-              </p>
-            }
-          >
-            <Suspense fallback={<p className="loading-message">3D ビューを読み込み中...</p>}>
-              <FlightPath3D track={track} metrics={detail.metrics} airframe={detail.airframe} />
-            </Suspense>
-          </ErrorBoundary>
-        </section>
-      )}
-
       {track && track.samples.length > 0 && (
         <section className="no-print">
           <h2>時系列チャート</h2>

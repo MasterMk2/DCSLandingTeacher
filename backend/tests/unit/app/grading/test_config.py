@@ -96,6 +96,8 @@ def test_code_defaults_agree_with_the_shipped_yaml() -> None:
             mismatches.append(f"{path}: defaults={defaults!r} yaml={yaml_side!r}")
 
     mismatches: list[str] = []
-    for section in ("geometry", "approach", "detection", "land_grading", "lso_grading"):
+    for section in (
+        "geometry", "approach", "detection", "land_grading", "lso_grading", "aoa_bands"
+    ):
         compare(_DEFAULTS[section], shipped[section], section, mismatches)
     assert not mismatches, "code defaults and grading.yaml disagree:\n  " + "\n  ".join(mismatches)

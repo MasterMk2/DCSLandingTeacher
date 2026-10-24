@@ -49,6 +49,9 @@ _DEFAULTS: dict[str, Any] = {
             "touchdown_speed": 0.20,
             "glideslope": 0.25,
             "centerline": 0.25,
+            # aoa_bands に帯がある機種だけに付く項目。帯の無い機種では項目
+            # ごと出ないので、ほかの機種の点数は変わらない。
+            "aoa": 0.25,
         },
         # 採点できた重みがこれ未満なら成績を出さない (grade/score は None)。
         "min_measured_weight": 0.5,
@@ -60,6 +63,7 @@ _DEFAULTS: dict[str, Any] = {
             "glideslope": 0.20,
             "centerline": 0.20,
             "pattern": 0.20,
+            "aoa": 0.20,
         },
         "airframe_classes": {
             # 部分一致は大文字小文字を無視するが、ハイフンの有無までは
@@ -110,6 +114,10 @@ _DEFAULTS: dict[str, Any] = {
         "track_smoothing_s": 2.0,
         "track_min_step_m": 20.0,
         "rollout_align_deg": 15.0,
+        # ロールアウトに数えない逸脱: 最後に 15 m を切って降りた後に始まった
+        # もの (フレア中の横修正) と、3 秒未満のもの (位置の 1 点の飛び)。
+        "rollout_min_agl_m": 15.0,
+        "rollout_min_excursion_s": 3.0,
         "initial_align_deg": 20.0,
         "downwind_cone_deg": 60.0,
         "downwind_max_turn_rate_deg_s": 1.5,
@@ -147,6 +155,10 @@ _DEFAULTS: dict[str, Any] = {
         # FAST / SLOW の基準速度を取る区間 (接地前、接地の瞬間より前だけ)。
         # 取り込み窓が 300 秒に伸びても、350 kt のイニシャルを平均に混ぜない。
         "approach_speed_window_s": 60.0,
+        # aoa_bands に帯がある機種の FAST / SLOW は、接地前 15 秒 (最後の
+        # 1 秒を除く) の迎角の中央値で判定する。
+        "aoa_window_s": 15.0,
+        "aoa_exclude_s": 1.0,
         # Case I パターンの読み取り (carrier_pattern.py)。測定と講評だけで、
         # グレードには効かない。基準値は MOOSE AIRBOSS / CV NATOPS の
         # Hornet・Tomcat の数字 (高度は MSL)。
@@ -236,6 +248,77 @@ _DEFAULTS: dict[str, Any] = {
             "ok_paren_major_count": 2,
         },
     },
+    # 機体別の進入迎角の帯 (度、機体軸)。値と出典の説明は grading.yaml。
+    # 書いた順に照合する (先に当たった行が勝つ)。
+    "aoa_bands": {
+        "hornet": {
+            "match": ["FA-18", "F/A-18", "EA-18G"],
+            "on_speed_deg": 8.1,
+            "on_speed_min_deg": 7.4,
+            "on_speed_max_deg": 8.8,
+            "fast_deg": 6.9,
+            "slow_deg": 9.3,
+            "source": (
+                "NATOPS A1-F18AC-NFM-000 Fig 2-17 (aircraft 161520 and up); "
+                "DCS F/A-18C EAG"
+            ),
+        },
+        "tomcat": {
+            "match": ["F-14"],
+            "on_speed_deg": 10.36,
+            "on_speed_min_deg": 9.44,
+            "on_speed_max_deg": 11.28,
+            "fast_deg": 8.98,
+            "slow_deg": 11.74,
+            "source": (
+                "Heatblur F-14 manual (15 units); units->deg and band: "
+                "MOOSE AIRBOSS (secondary)"
+            ),
+        },
+        "falcon": {
+            "match": ["F-16"],
+            "on_speed_deg": 11.0,
+            "on_speed_min_deg": 11.0,
+            "on_speed_max_deg": 13.0,
+            "fast_deg": 8.5,
+            "slow_deg": 14.0,
+            "source": (
+                "DCS F-16C Early Access Guide (AoA indexer / Landing); AFMAN 11-2F-16V3"
+            ),
+        },
+        "mirage2000": {
+            "match": ["M-2000"],
+            "on_speed_deg": 14.0,
+            "on_speed_min_deg": 13.0,
+            "on_speed_max_deg": 15.0,
+            "fast_deg": 11.0,
+            "slow_deg": 17.0,
+            "source": (
+                "DCS M-2000C manual (AoA indicator, HUD approach brackets, "
+                "landing checklist)"
+            ),
+        },
+        "viggen": {
+            "match": ["AJS37"],
+            "on_speed_deg": 12.0,
+            "on_speed_min_deg": 12.0,
+            "on_speed_max_deg": 15.5,
+            "fast_deg": 11.0,
+            "slow_deg": 16.5,
+            "source": "DCS AJS-37 Viggen manual (visual approach, AFK mode 3)",
+        },
+        "harrier": {
+            "match": ["AV8B"],
+            "on_speed_deg": 11.0,
+            "on_speed_min_deg": 10.0,
+            "on_speed_max_deg": 12.0,
+            "fast_deg": 8.0,
+            "slow_deg": 13.5,
+            "source": (
+                "RAZBAM AV-8B manual ch.12 and pocket guide; edges: MOOSE AIRBOSS (secondary)"
+            ),
+        },
+    },
 }
 
 
@@ -323,6 +406,11 @@ class GradingConfig:
     @property
     def lso_grading(self) -> dict[str, Any]:
         return self.section("lso_grading")
+
+    @property
+    def aoa_bands(self) -> dict[str, Any]:
+        """機体別の進入迎角の帯 (陸上・空母で共通)。書いた順に照合する。"""
+        return self.section("aoa_bands")
 
 
 def apply_config_overrides(config: GradingConfig, overrides: dict[str, Any]) -> GradingConfig:

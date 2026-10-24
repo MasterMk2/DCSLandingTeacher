@@ -746,6 +746,36 @@ export function venueGeometry(
  *  known (m). Known airframes use their own (`AirframeModel.lengthM`). */
 export const REAL_MODEL_LENGTH_M = 18;
 
+/** Within this multiple of the closest approach the thing under the cursor
+ *  counts as reached, and the next notch flies on instead. */
+export const CLOSEST_APPROACH_SLACK = 1.2;
+/** How far one notch flies on from the closest approach, in multiples of
+ *  it. */
+export const FLY_THROUGH_STEP = 0.5;
+
+/**
+ * How far one wheel notch moves the camera toward (+) or away from (-) the
+ * thing under the cursor, `distanceM` away. `scale` (< 1) is the share of
+ * the distance a notch leaves, as in OrbitControls.
+ *
+ * In: down to `minM`, then -- once within CLOSEST_APPROACH_SLACK of it --
+ * on through by FLY_THROUGH_STEP x `minM` a notch. Never zero: the old
+ * OrbitControls zoom moved nothing once it reached its minimum distance,
+ * and "zoom in" simply stopped working. Out: by the same factor, up to
+ * `maxM` away.
+ */
+export function wheelZoomStep(
+  distanceM: number,
+  scale: number,
+  zoomIn: boolean,
+  minM: number,
+  maxM: number,
+): number {
+  if (!zoomIn) return -Math.max(0, Math.min(maxM, distanceM / scale) - distanceM);
+  if (distanceM > minM * CLOSEST_APPROACH_SLACK) return distanceM - Math.max(minM, distanceM * scale);
+  return minM * FLY_THROUGH_STEP;
+}
+
 /**
  * Length to draw the models at for a camera `distanceM` from what it looks
  * at: a constant share of the view while zoomed out, shrinking to real size
