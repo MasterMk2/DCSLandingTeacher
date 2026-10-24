@@ -90,6 +90,24 @@ describe("TimeSeriesChart", () => {
     expect(container.textContent).not.toContain("バンク角");
     expect(container.querySelectorAll(".recharts-yAxis").length).toBe(4);
   });
+
+  it("adds an AOA chart with the on-speed band when the track has an AOA series", () => {
+    const withAoa = track({
+      samples: (track().samples as Array<Record<string, unknown>>).map((s) => ({
+        ...s,
+        aoa_est: 8.0,
+      })),
+    });
+    const { container } = render(
+      <TimeSeriesChart
+        track={withAoa as never}
+        metrics={{ aoa_on_speed_min_deg: 7.4, aoa_on_speed_max_deg: 8.8 }}
+      />,
+    );
+    expect(container.textContent).toContain("網掛け = オンスピード 7.4–8.8°");
+    expect(container.querySelectorAll(".recharts-reference-area").length).toBe(1);
+    expect(container.querySelectorAll(".recharts-yAxis").length).toBe(6);
+  });
 });
 
 describe("buildRows", () => {
@@ -116,5 +134,26 @@ describe("buildRows", () => {
     );
     expect(rows[0].bank).toBeNull();
     expect(rows[1].bank).toBe(62);
+  });
+
+  it("plots the recorded AOA when there is one and the estimate otherwise, never a mix", () => {
+    const estimated = buildRows(
+      track({
+        samples: [
+          { time: 100, distance_to_go: 100, aoa: null, aoa_est: 8.04 },
+          { time: 101, distance_to_go: 90, aoa: null, aoa_est: 7.96 },
+        ],
+      }) as never,
+    );
+    expect(estimated.map((r) => r.aoa)).toEqual([8.0, 8.0]);
+    const recorded = buildRows(
+      track({
+        samples: [
+          { time: 100, distance_to_go: 100, aoa: 6.5, aoa_est: 8.0 },
+          { time: 101, distance_to_go: 90, aoa: null, aoa_est: 8.0 },
+        ],
+      }) as never,
+    );
+    expect(recorded.map((r) => r.aoa)).toEqual([6.5, null]);
   });
 });

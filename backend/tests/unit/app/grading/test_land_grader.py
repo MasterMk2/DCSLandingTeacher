@@ -390,6 +390,114 @@ def test_glidepath_is_judged_from_the_rollout_not_a_fixed_lookback() -> None:
     assert result.metrics["rollout_before_touchdown_s"] == pytest.approx(25.0, abs=2.0)
 
 
+def _jink(analysis: "ApproachAnalysis", times: dict[float, float]) -> "ApproachAnalysis":
+    """Move the samples at ``times`` sideways by the given metres."""
+    for sample in analysis.samples:
+        if sample.time in times:
+            sample.centerline_deviation = (sample.centerline_deviation or 0.0) + times[
+                sample.time
+            ]
+    return analysis
+
+
+def test_a_lineup_correction_in_the_flare_does_not_move_the_start_of_final() -> None:
+    """Production landing #1651's neighbours: a sideways step a second before
+    touchdown put the roll-out -- and with it the start of the graded final
+    -- 0.2-0.3 s before touchdown, so a final flown from 1.5 km out had no
+    glidepath judged at all. Below 15 m after the last descent the aircraft is
+    flaring; a kick there is lining up, not turning onto final."""
+    analysis = _jink(_pattern_analysis(), {118.0: 30.0, 119.0: 60.0})
+    result = grade_land_landing(analysis, CONFIG)
+
+    assert result.metrics["rollout_before_touchdown_s"] == pytest.approx(25.0, abs=2.0)
+    assert result.metrics["final_start_anchor"] == "rollout"
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert glideslope.score is not None and glideslope.score > 90
+
+
+def test_a_single_position_jump_on_final_is_not_a_turn() -> None:
+    """One sample 60 m off the line reads as two 18 deg chords (the track angle
+    is a 2 s chord). Neither lasts a second, so the final still starts at the
+    roll-out out of the base turn, 25 s out -- not 13 s out, after the jump."""
+    analysis = _jink(_pattern_analysis(), {105.0: 60.0})
+    result = grade_land_landing(analysis, CONFIG)
+
+    assert result.metrics["rollout_before_touchdown_s"] == pytest.approx(25.0, abs=2.0)
+
+
+def test_a_turn_that_runs_into_the_flare_keeps_its_late_rollout() -> None:
+    """A curved approach that is still turning as it descends through 15 m
+    really did roll out over the threshold. Its turn started well above the
+    flare, so it counts, and its end is where it ended: moving the start of
+    final in front of the turn would grade the curve against a straight 3 deg
+    line."""
+    from app.grading.deviations import ApproachAnalysis, DeviationSample
+
+    samples = []
+    # 40 s curving descent from 120 m: the track stays 25 deg off the
+    # runway course until 1 s before touchdown (lateral closes 38 m/s).
+    for step in range(41):
+        time = 80.0 + step
+        remaining = 40.0 - step
+        samples.append(
+            DeviationSample(
+                time=time,
+                distance_to_go=82.0 * remaining,
+                glideslope_deviation=None,
+                centerline_deviation=38.0 * max(remaining - 1.0, 0.0),
+                speed=90.0,
+                agl=max(120.0 * remaining / 40.0, 0.0),
+                signed_distance_to_go=82.0 * remaining,
+            )
+        )
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=120.0,
+        touchdown_speed_ms=82.0,
+        touchdown_descent_rate_ms=2.0,
+        approach_pattern="unknown",
+        airframe="TF-51D",
+        samples=samples,
+    )
+    from app.grading.pattern import segment_approach
+
+    segments = segment_approach(analysis, CONFIG.land_grading)
+    assert segments.rollout_time is not None
+    assert analysis.touchdown_time - segments.rollout_time < 3.0
+
+
+def test_a_circuit_flown_from_a_touch_and_go_still_finds_its_rollout() -> None:
+    """A closed pattern's record begins at the previous ground contact, a few
+    metres up and already turning off the runway heading. "Low" alone is not
+    the flare: only the descent at the END is, so that turn still counts and
+    the circuit is still an overhead with its roll-out 25 s out."""
+    from app.grading.deviations import DeviationSample
+
+    analysis = _pattern_analysis()
+    # 5 s climbing out of the previous touchdown on the reciprocal, joining
+    # the start of the downwind (t=60 s, 2900 - 2400 m to go, 2200 m abeam).
+    climb = [
+        DeviationSample(
+            time=55.0 + step,
+            distance_to_go=0.0,
+            glideslope_deviation=None,
+            centerline_deviation=2200.0 - 60.0 * (5 - step),
+            speed=120.0,
+            agl=4.0 + 2.0 * step,
+            signed_distance_to_go=500.0 - 120.0 * (5 - step),
+        )
+        for step in range(5)
+    ]
+    analysis.samples = climb + analysis.samples
+    result = grade_land_landing(analysis, CONFIG)
+
+    assert result.metrics["rollout_before_touchdown_s"] == pytest.approx(25.0, abs=2.0)
+    assert result.metrics["approach_pattern"] == "overhead"
+
+
 def test_approach_speed_reference_excludes_the_downwind() -> None:
     """ "On speed" means the speed held on final, not an average that
     includes the 120 m/s downwind -- which made every normal touchdown
@@ -1141,7 +1249,9 @@ def test_rotary_wing_speed_and_glidepath_are_measured_but_not_scored() -> None:
 
     # 同じ軌跡を戦闘機で飛べば、どちらも採点される。
     fighter = grade_land_landing(_pattern_analysis(airframe="F-16C_50"), CONFIG)
-    assert all(c.score is not None for c in fighter.components)
+    by_name = {c.name: c for c in fighter.components}
+    assert by_name["touchdown_speed"].score is not None
+    assert by_name["glideslope"].score is not None
 
 
 def test_the_speed_reference_is_the_speed_held_on_final_not_the_whole_final() -> None:

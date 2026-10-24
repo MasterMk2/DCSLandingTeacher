@@ -1,4 +1,4 @@
-/** Time-series charts: deviations, speed, descent rate and load factor (Recharts). */
+/** Time-series charts: deviations, speed, AOA, descent rate and load factor (Recharts). */
 
 import { useMemo } from "react";
 import {
@@ -6,6 +6,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -36,6 +37,19 @@ interface Row {
   gBreak: number | null;
   /** |Roll|, degrees, when the recording carries attitude. */
   bank: number | null;
+  /** Angle of attack, degrees: the recorded one when the recording has it
+   *  (client-side recordings), otherwise the one estimated from the track
+   *  and the attitude -- the same choice the grader makes. */
+  aoa: number | null;
+}
+
+/** The on-speed AOA band the grade was judged against, when there is one. */
+export function aoaBand(
+  metrics?: Record<string, unknown> | null,
+): { min: number; max: number } | null {
+  const min = num(metrics?.["aoa_on_speed_min_deg"]);
+  const max = num(metrics?.["aoa_on_speed_max_deg"]);
+  return min !== null && max !== null ? { min, max } : null;
 }
 
 function num(value: unknown): number | null {
@@ -50,8 +64,12 @@ export function buildRows(
   const rates = new Map(descentRateSeries(track.samples).map((r) => [r.time, r.rateMs]));
   const breakStart = num(metrics?.["pattern_break_start_time"]);
   const breakEnd = num(metrics?.["pattern_break_end_time"]);
+  // Recorded or estimated for the whole series, never a mix (backend
+  // app.grading.aoa.aoa_values makes the same choice).
+  const recorded = track.samples.some((s) => num(s.aoa) !== null);
   return track.samples.map((s) => {
     const g = num(s.load_factor);
+    const aoa = recorded ? num(s.aoa) : num(s.aoa_est);
     const inBreak =
       breakStart !== null && breakEnd !== null && s.time >= breakStart && s.time <= breakEnd;
     const roll = num(s.roll);
@@ -74,6 +92,7 @@ export function buildRows(
       // A Roll of 13000 deg (seen on the ground in real recordings) is
       // corrupt, not a bank; keep the axis sane.
       bank: roll !== null && Math.abs(roll) <= 180 ? Math.round(Math.abs(roll)) : null,
+      aoa: aoa !== null ? Math.round(aoa * 10) / 10 : null,
     };
   });
 }
@@ -99,6 +118,8 @@ export function TimeSeriesChart({ track, metrics }: TimeSeriesChartProps) {
   const showLoad = hasLoadFactor(rows);
   const showBank = rows.some((r) => r.bank !== null);
   const showBreak = rows.some((r) => r.gBreak !== null);
+  const showAoa = rows.some((r) => r.aoa !== null);
+  const band = aoaBand(metrics);
 
   return (
     <div className="timeseries">
@@ -134,6 +155,37 @@ export function TimeSeriesChart({ track, metrics }: TimeSeriesChartProps) {
           </LineChart>
         </ResponsiveContainer>
       </section>
+
+      {showAoa && (
+        <section>
+          {/* 記録に AOA が無い (DCS サーバーの記録はすべてそう) ときは、
+              軌跡と姿勢から推定した値 (backend: app.grading.aoa)。帯は
+              採点に使った機体別のオンスピード範囲。 */}
+          <h3>
+            迎角
+            {band ? `（網掛け = オンスピード ${band.min.toFixed(1)}–${band.max.toFixed(1)}°）` : ""}
+          </h3>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+              <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" />
+              <XAxis dataKey="t" tick={AXIS_STYLE} />
+              <YAxis tick={AXIS_STYLE} unit="°" width={56} domain={["auto", "auto"]} />
+              {band && (
+                <ReferenceArea
+                  y1={band.min}
+                  y2={band.max}
+                  fill="var(--series-aoa)"
+                  fillOpacity={0.15}
+                  ifOverflow="extendDomain"
+                />
+              )}
+              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => `${v}°`} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line name="迎角" dataKey="aoa" stroke="var(--series-aoa)" dot={false} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        </section>
+      )}
 
       <section>
         <h3>降下率（AGL 差分から算出）</h3>

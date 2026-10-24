@@ -72,6 +72,10 @@ export function formatMetric(key: string, value: unknown): { label: string; text
   if (/load_factor|_rule_g$/.test(key)) {
     return { label: metricLabel(key, key), text: `${value.toFixed(2)} G` };
   }
+  // 0..1 の割合 (帯の中にいた割合など)。
+  if (key.endsWith("_fraction")) {
+    return { label: metricLabel(key, key), text: `${Math.round(value * 100)}%` };
+  }
   // 「最大 G ÷ 1% ルール目標」のような比。
   if (/_to_one_percent$/.test(key)) {
     return { label: metricLabel(key, key), text: `${value.toFixed(2)} 倍` };
@@ -277,6 +281,7 @@ const FACTOR_DESCRIPTIONS: Record<string, string> = {
   glideslope: "グライドスロープ追従（ファイナル開始から閾値まで）",
   centerline: "センターライン保持（接地直前）",
   pattern: "オーバーヘッドパターン（旋回明けの軸ずれ / ダウンウィンドの方位・高度）",
+  aoa: "進入迎角（機体別のオンスピード帯で判定。ファイナル開始からフレアの手前まで）",
 };
 
 /** 列挙値の日本語。キーは `<metric key>:<raw value>`。
@@ -311,6 +316,16 @@ const METRIC_VALUE_JA: Record<string, string> = {
   "airframe_class:fighter": "戦闘機",
   "airframe_class:helicopter": "ヘリコプター",
   "airframe_class:default": "標準",
+  // 迎角の判定。迎角が小さい = 速い。
+  "aoa_verdict:on speed": "オンスピード",
+  "aoa_verdict:slightly fast": "やや速い（迎角が小さい）",
+  "aoa_verdict:fast": "速すぎ（迎角が小さい）",
+  "aoa_verdict:slightly slow": "やや遅い（迎角が大きい）",
+  "aoa_verdict:slow": "遅すぎ（迎角が大きい）",
+  "aoa_method:estimated": "軌跡と姿勢から推定（風は補正していない）",
+  "aoa_method:recorded": "記録の AOA",
+  "method:estimated": "軌跡と姿勢から推定（風は補正していない）",
+  "method:recorded": "記録の AOA",
 };
 
 /** パターンのメトリクスは `pattern_` 付きで metrics に、素のキーで
@@ -385,6 +400,25 @@ const METRIC_LABELS: Record<string, string> = {
   pattern_downwind_course_rms: "ダウンウィンドの直線からのばらつき",
   final_window: "採点したファイナルの長さ",
   final_start_anchor: "ファイナル起点の決まり方",
+  // 進入迎角 (機体別の帯で判定)
+  median_aoa: "迎角（中央値）",
+  p10_aoa: "迎角（下位 10%）",
+  p90_aoa: "迎角（上位 10%）",
+  on_speed: "オンスピード",
+  on_speed_min: "オンスピード下限",
+  on_speed_max: "オンスピード上限",
+  fast: "これより小さいと速すぎ",
+  slow: "これより大きいと遅すぎ",
+  on_speed_fraction: "帯の中にいた割合",
+  band: "迎角の帯（機種）",
+  source: "出典",
+  exclude: "除外した接地直前",
+  aoa_band: "迎角の帯（機種）",
+  aoa_on_speed_min: "オンスピード下限",
+  aoa_on_speed_max: "オンスピード上限",
+  aoa_median: "迎角（中央値）",
+  aoa_verdict: "迎角の判定",
+  aoa_method: "迎角の測り方",
   pattern_rollout_time: "旋回明け時刻",
   pattern_downwind_start_time: "ダウンウィンド開始時刻",
   pattern_downwind_end_time: "ダウンウィンド終了時刻",
@@ -496,6 +530,7 @@ const FACTOR_LABELS: Record<string, string> = {
   glideslope: "グライドスロープ",
   centerline: "センターライン保持",
   pattern: "オーバーヘッドパターン",
+  aoa: "進入迎角",
 };
 
 export function factorLabel(name: string): string {

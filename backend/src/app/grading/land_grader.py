@@ -27,10 +27,13 @@ the grade was given.
 from __future__ import annotations
 
 import math
+import statistics
 
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.grading.aoa import MIN_SAMPLES as AOA_MIN_SAMPLES
+from app.grading.aoa import AoaBand, aoa_band_for, aoa_score, aoa_values, aoa_verdict
 from app.grading.deviations import ApproachAnalysis, DeviationSample
 from app.grading.kinematics import annotate_kinematics
 from app.grading.pattern import (
@@ -487,6 +490,57 @@ def _approach_speed_reference(
     return None, "none"
 
 
+def _aoa_component(
+    analysis: ApproachAnalysis,
+    settings: dict[str, Any],
+    segments: ApproachSegments,
+    band: AoaBand,
+    weight: float,
+) -> ComponentScore:
+    """ファイナルで保った迎角を、機体別のオンスピード帯で採点する。
+
+    区間は接地速度の基準と同じ「ファイナル開始からフレアの手前まで」。
+    フレアでは迎角を上げるのが操作そのものなので入れない。代表値は中央値:
+    平均だとファイナル入り口の数秒 (旋回明けで速度が落ち切っていない) に
+    引っ張られる。
+    """
+    flare_s = float(settings.get("speed_flare_exclude_s", 4.0))
+    cutoff = analysis.touchdown_time - flare_s
+    if segments.has_final_cut:
+        window = [s for s in segments.final if s.time <= cutoff]
+    else:
+        start = analysis.touchdown_time - float(settings.get("glideslope_window_s", 30.0))
+        window = [s for s in analysis.samples if start <= s.time <= cutoff]
+    values, method = aoa_values(window)
+    evidence: dict[str, Any] = {
+        "band": band.name,
+        "on_speed_deg": band.on_speed,
+        "on_speed_min_deg": band.on_speed_min,
+        "on_speed_max_deg": band.on_speed_max,
+        "fast_deg": band.fast,
+        "slow_deg": band.slow,
+        "source": band.source,
+        "method": method,
+        "samples": len(values),
+    }
+    if len(values) < AOA_MIN_SAMPLES:
+        return ComponentScore("aoa", None, weight, evidence)
+    evidence["window_s"] = round(cutoff - window[0].time, 1) if window else None
+    ordered = sorted(values)
+    median = statistics.median(ordered)
+    in_band = sum(1 for v in values if band.on_speed_min <= v <= band.on_speed_max)
+    evidence.update(
+        {
+            "median_aoa_deg": round(median, 2),
+            "p10_aoa_deg": round(ordered[int(0.1 * (len(ordered) - 1))], 2),
+            "p90_aoa_deg": round(ordered[int(0.9 * (len(ordered) - 1))], 2),
+            "on_speed_fraction": round(in_band / len(values), 3),
+            "verdict": aoa_verdict(median, band),
+        }
+    )
+    return ComponentScore("aoa", aoa_score(median, band), weight, evidence)
+
+
 def _centerline_overshoot_m(analysis: ApproachAnalysis) -> float | None:
     """How far the aircraft went *through* the centreline before touchdown.
 
@@ -832,6 +886,18 @@ def grade_land_landing(
     if pattern_component is not None:
         components.append(pattern_component)
 
+    # 進入迎角は、出典のある帯が config に載っている機種だけ。帯の無い機種
+    # (ヘリ・レシプロの多く・出典の見つからない機体) には項目そのものを
+    # 出さない: 「未評価」が並ぶだけで何も伝えないし、重みは正規化で
+    # 消えるので点数も変わらない。
+    aoa_band = aoa_band_for(analysis.airframe, config.aoa_bands)
+    if aoa_band is not None:
+        components.append(
+            _aoa_component(
+                analysis, settings, segments, aoa_band, float(weights.get("aoa", 0.0))
+            )
+        )
+
     # 測れなかった / このクラスでは採点しない項目には理由を残す。UI は
     # これを見て「未評価」と出す。値そのものは evidence に入ったまま。
     for component in components:
@@ -912,6 +978,7 @@ def grade_land_landing(
         float(gs_bands["good"]),
         gs_error if judged("glideslope") else None,
         descent_fpm,
+        aoa=by_name["aoa"].evidence if judged("aoa") else None,
         unscored_note=_unscored_note(
             components,
             unscored,
@@ -963,6 +1030,20 @@ def grade_land_landing(
         "approach_pattern_detected": analysis.approach_pattern,
         "airframe_class": frame_class,
         "speed_reference": speed_reference,
+        # 進入迎角 (機体別の帯がある機種だけ)。method は "recorded" (記録の
+        # AOA) か "estimated" (軌跡と姿勢からの推定、風は引けていない)。
+        "aoa_band": by_name["aoa"].evidence.get("band") if "aoa" in by_name else None,
+        "aoa_on_speed_min_deg": (
+            by_name["aoa"].evidence.get("on_speed_min_deg") if "aoa" in by_name else None
+        ),
+        "aoa_on_speed_max_deg": (
+            by_name["aoa"].evidence.get("on_speed_max_deg") if "aoa" in by_name else None
+        ),
+        "aoa_median_deg": (
+            by_name["aoa"].evidence.get("median_aoa_deg") if "aoa" in by_name else None
+        ),
+        "aoa_verdict": by_name["aoa"].evidence.get("verdict") if "aoa" in by_name else None,
+        "aoa_method": by_name["aoa"].evidence.get("method") if "aoa" in by_name else None,
         # 何を採点できたか。合計重みが 1.0 に満たない着陸は、その分だけ
         # 「見えていない」ことを意味する --- 点数だけ見て読み違えないよう、
         # 内訳を必ず出す。
@@ -1018,6 +1099,7 @@ _COMPONENT_JA = {
     "glideslope": "グライドスロープ",
     "centerline": "センターライン保持",
     "pattern": "オーバーヘッドパターン",
+    "aoa": "進入迎角",
 }
 _AIRFRAME_CLASS_JA = {"helicopter": "ヘリコプター", "fighter": "戦闘機", "carrier": "艦載機"}
 
@@ -1102,6 +1184,7 @@ def _build_comment(
     gs_good_deg: float = 0.35,
     gs_error: "GlideslopeError | None" = None,
     descent_fpm: float | None = None,
+    aoa: dict[str, Any] | None = None,
     unscored_note: str = "",
 ) -> str:
     # 横ずれは ft で述べる (Issue D-4)。グライドスロープは角度で述べる:
@@ -1118,6 +1201,8 @@ def _build_comment(
     # (末尾の一文でまとめて述べる)。
     if speed_label is not None:
         parts.append(f"速度は{_SPEED_JA.get(speed_label, speed_label)}")
+    if aoa is not None:
+        parts.append(_aoa_comment(aoa))
     gs_method = gs_error.method if gs_error is not None else "none"
     if mean_gs_err is not None and mean_signed_gs_err is not None:
         if mean_gs_err <= gs_good_deg:
@@ -1174,6 +1259,28 @@ def _build_comment(
     if unscored_note:
         verdict = "評価できた範囲では、" + verdict
     return body + verdict + unscored_note
+
+
+#: 帯の外の迎角の読み。迎角が小さい = 速い。速度の講評 (_SPEED_JA) と
+#: 同じく述語まるごと持つ。
+_AOA_JA = {
+    "slightly fast": "小さく、やや速かった",
+    "fast": "小さく、速すぎた",
+    "slightly slow": "大きく、やや遅かった",
+    "slow": "大きく、遅すぎた",
+}
+
+
+def _aoa_comment(aoa: dict[str, Any]) -> str:
+    verdict = str(aoa.get("verdict"))
+    median = aoa["median_aoa_deg"]
+    band = f"{aoa['on_speed_min_deg']:.1f}–{aoa['on_speed_max_deg']:.1f}°"
+    if verdict == "on speed":
+        return f"ファイナルの迎角はオンスピードだった（中央値 {median:.1f}°、帯 {band}）"
+    return (
+        f"ファイナルの迎角は {median:.1f}° でオンスピード（{band}）より"
+        f"{_AOA_JA.get(verdict, verdict)}"
+    )
 
 
 def _pattern_comment_parts(pattern: dict[str, Any] | None) -> list[str]:

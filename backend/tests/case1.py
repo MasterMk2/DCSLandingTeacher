@@ -45,6 +45,9 @@ LAT0, LON0 = 42.0, 38.0
 BASE_TIME = 1000.0
 G0 = 9.80665
 FT = 0.3048
+EARTH_RADIUS_M = 6371000.0
+#: The Hornet's on-speed AOA (NATOPS); the recorded pitch is built from it.
+ON_SPEED_AOA_DEG = 8.1
 
 DECK_M = 20.15
 REFERENCE_HEIGHT_M = 2.0
@@ -474,9 +477,18 @@ def _render(path: list[_Point], ship_speed_ms: float, ship_heading_deg: float) -
         dx = math.radians(ahead[1] - lon) * math.cos(math.radians(lat))
         dy = math.radians(ahead[0] - lat)
         yaw = math.degrees(math.atan2(dx, dy)) % 360.0 if (dx or dy) else 0.0
+        # Flown on-speed throughout: pitch = AOA + the flight-path angle over
+        # the ground (no wind in these recordings). A level 0 deg pitch would
+        # read as a 3-4 deg AOA in the groove -- a FAST Hornet.
+        horizontal = math.hypot(dx, dy) * EARTH_RADIUS_M
+        pitch = (
+            ON_SPEED_AOA_DEG + math.degrees(math.atan2(ahead[2] - alt, horizontal))
+            if horizontal > 2.0
+            else 0.0
+        )
         identity = ",Type=Air+FixedWing,Name=FA-18C_hornet,Pilot=CaseOne" if step == 0 else ""
         frames.setdefault(round(aircraft_time, 2), []).append(
-            f"A1,T={lon:.7f}|{lat:.7f}|{alt:.2f}|{roll:.1f}|0.0|{yaw:.1f}"
+            f"A1,T={lon:.7f}|{lat:.7f}|{alt:.2f}|{roll:.1f}|{pitch:.1f}|{yaw:.1f}"
             f",AGL={alt:.2f}{identity}"
         )
         aircraft_time += 0.2
