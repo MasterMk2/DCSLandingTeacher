@@ -14,6 +14,7 @@ import {
   modelLength,
   pointAt,
   venueGeometry,
+  wheelZoomStep,
   wrap180,
   type Vec3,
 } from "./flight3d";
@@ -456,5 +457,41 @@ describe("gridStepM", () => {
   it("picks a round nautical-mile step", () => {
     expect(gridStepM(10_000)).toBeCloseTo(1852, 6);
     expect(gridStepM(1_000)).toBeCloseTo(185.2, 6);
+  });
+});
+
+describe("wheelZoomStep", () => {
+  const scale = 0.94; // one 120-pixel wheel notch at zoomSpeed 1
+
+  it("closes a share of the distance to what is under the cursor", () => {
+    expect(wheelZoomStep(2000, scale, true, 15, 1e6)).toBeCloseTo(120, 6);
+  });
+
+  it("approaching, never lands nearer than the closest approach", () => {
+    expect(wheelZoomStep(20, scale, true, 15, 1e6)).toBeCloseTo(20 - 20 * scale, 6);
+    // A trackpad pinch can halve the distance in one event: clamp at 15.
+    expect(wheelZoomStep(20, 0.5, true, 15, 1e6)).toBe(5);
+  });
+
+  it("within reach of the closest approach, flies on by a fixed step", () => {
+    expect(wheelZoomStep(16, scale, true, 15, 1e6)).toBe(7.5);
+  });
+
+  it("never stops moving: from the closest approach a notch flies on", () => {
+    // The old OrbitControls zoom returned 0 here forever ("zooming in does
+    // nothing any more"). 120 notches from 16 km must reach the thing and
+    // keep going.
+    let distance = 16_000;
+    for (let i = 0; i < 120; i++) {
+      const step = wheelZoomStep(distance, scale, true, 15, 1e6);
+      expect(step).toBeGreaterThan(0);
+      distance -= step;
+    }
+    expect(distance).toBeLessThan(15 * 1.2);
+  });
+
+  it("zooms out by the same factor, up to the far limit", () => {
+    expect(wheelZoomStep(100, scale, false, 15, 1e6)).toBeCloseTo(-(100 / scale - 100), 6);
+    expect(wheelZoomStep(990, scale, false, 15, 1000)).toBeCloseTo(-10, 6);
   });
 });

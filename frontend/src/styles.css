@@ -546,11 +546,14 @@ main {
   margin-top: 8px;
 }
 
-/* Factors Section */
-.factors-section {
+/* Factors Section (and the 3D view, which sits between the charts and the
+   factors on screen and shares their heading style) */
+.factors-section,
+.flight3d-section {
   margin-top: 16px;
 }
 
+.flight3d-section h4,
 .factors-section h4 {
   font-size: 13px;
   color: var(--accent);

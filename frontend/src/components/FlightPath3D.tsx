@@ -25,6 +25,7 @@ import {
   pointAt,
   sceneBounds,
   venueGeometry,
+  wheelZoomStep,
   type ApproachBeams,
   type CarrierModel,
   type FlightPath,
@@ -59,6 +60,16 @@ const VIEW_DIRECTIONS: Record<ViewPreset, Vec3> = {
   side: [0, 0.12, 1],
   behind: [-1, 0.14, 0],
 };
+
+/** How far off a point of the path the cursor may be and still be zooming
+ *  at it. */
+const PICK_TOLERANCE_PX = 12;
+/** Closest the camera comes to what it is zooming at, for the smallest
+ *  airframes; larger ones stop at their own length. */
+const MIN_ZOOM_DISTANCE_M = 5;
+/** Over the sky, where the orbit target is put ahead of the camera, in
+ *  multiples of the closest approach. */
+const SKY_AIM_FACTOR = 4;
 
 const GHOST_INTERVALS_S = [1, 2, 3, 5, 10];
 const EXAGGERATIONS = [1, 2, 3, 5];
@@ -206,6 +217,24 @@ class FlightScene {
   private animationFrame = 0;
   private width = 1;
   private height = 1;
+  /** The path in scene coordinates (x, unexaggerated y, z), for finding
+   *  what is under the cursor when zooming. */
+  private pickPoints = new Float32Array(0);
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly touches = new Map<number, { x: number; y: number }>();
+  private readonly onWheel = (event: WheelEvent) => this.wheelZoom(event);
+  private readonly onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== "touch") return;
+    this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (this.touches.size === 2) {
+      // A pinch starts: zoom toward what is between the two fingers.
+      const [a, b] = [...this.touches.values()];
+      this.aimAtDepthUnder((a.x + b.x) / 2, (a.y + b.y) / 2);
+    }
+  };
+  private readonly onPointerUp = (event: PointerEvent) => {
+    this.touches.delete(event.pointerId);
+  };
 
   constructor(
     private readonly host: HTMLElement,
@@ -266,6 +295,13 @@ class FlightScene {
     this.controls.addEventListener("change", () => {
       this.dirty = true;
     });
+    // The wheel zoom is done here (wheelZoom), on the host and in the
+    // capture phase so OrbitControls on the canvas never sees the event.
+    // Pinch zoom stays with OrbitControls; it is only re-aimed as it starts.
+    host.addEventListener("wheel", this.onWheel, { capture: true, passive: false });
+    host.addEventListener("pointerdown", this.onPointerDown, { capture: true });
+    host.addEventListener("pointerup", this.onPointerUp, { capture: true });
+    host.addEventListener("pointercancel", this.onPointerUp, { capture: true });
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
@@ -281,6 +317,124 @@ class FlightScene {
       }
     };
     loop();
+  }
+
+  /** The ray through a point of the canvas, and what it is pointing at: the
+   *  path (within a few pixels) before the ground; null over the sky. */
+  private pointUnder(
+    clientX: number,
+    clientY: number,
+  ): { ray: THREE.Ray; point: THREE.Vector3 | null } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const ray = this.raycaster.ray.clone();
+    return { ray, point: this.pickPath(ray, rect.height) ?? this.pickGround(ray) };
+  }
+
+  /** Put the orbit target on the line of sight (so the view does not turn)
+   *  at the depth of `point`. */
+  private aimAt(point: THREE.Vector3) {
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    const depth = point.clone().sub(this.camera.position).dot(forward);
+    const { minDistance, maxDistance } = this.controls;
+    this.controls.target
+      .copy(this.camera.position)
+      .addScaledVector(forward, Math.min(maxDistance, Math.max(minDistance, depth)));
+  }
+
+  /**
+   * Mouse-wheel zoom: move the camera straight toward (or away from) the
+   * thing under the cursor, which therefore stays exactly where it is on
+   * the screen.
+   *
+   * This used to be OrbitControls' own zoom-to-cursor, which scales the
+   * camera's distance to its orbit target and puts the target that same
+   * (shrunk) distance ahead again after every step. A notch moved the camera
+   * a fraction of a distance that shrank on its own, whatever was under the
+   * cursor, and once it reached minDistance a notch moved nothing at all:
+   * zooming at an aircraft a couple of kilometres away stopped dead some 90
+   * notches in, still far short of it, with panning slowed to a crawl too
+   * (it scales with the same distance). Merely re-aiming the target was not
+   * enough: OrbitControls moves along the cursor ray, so a point a few
+   * pixels off it slid away from the cursor as the camera closed in, and
+   * the zoom ran past it into the ground behind.
+   *
+   * Each notch now covers a fraction of the distance to the thing itself,
+   * down to minDistance; scrolling on from there flies on through it, over
+   * the sky too. The zoom slows down at things and never stops.
+   */
+  private wheelZoom(event: WheelEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.deltaY === 0) return;
+    const under = this.pointUnder(event.clientX, event.clientY);
+    if (!under) return;
+    // Same normalisation and rate as OrbitControls' wheel zoom: lines and
+    // pages to pixels, and a trackpad pinch (ctrlKey) ten times as fast.
+    let delta = event.deltaY;
+    if (event.deltaMode === 1) delta *= 16;
+    else if (event.deltaMode === 2) delta *= 100;
+    if (event.ctrlKey) delta *= 10;
+    const scale = Math.pow(0.95, this.controls.zoomSpeed * Math.abs(delta) * 0.01);
+    const { minDistance, maxDistance } = this.controls;
+    const camera = this.camera.position;
+
+    // Toward the thing under the cursor; over the sky, along the cursor ray
+    // by a fraction of the current orbit radius.
+    const toward = under.point
+      ? under.point.clone().sub(camera)
+      : under.ray.direction.clone().multiplyScalar(camera.distanceTo(this.controls.target));
+    const step = wheelZoomStep(toward.length(), scale, delta < 0, minDistance, maxDistance);
+    camera.addScaledVector(toward.normalize(), step);
+    this.aimAt(under.point ?? camera.clone().addScaledVector(toward, minDistance * SKY_AIM_FACTOR));
+    this.controls.update();
+    this.dirty = true;
+  }
+
+  /** A pinch is left to OrbitControls; aim it at what is between the
+   *  fingers so it does not stop short the way the wheel used to. */
+  private aimAtDepthUnder(clientX: number, clientY: number) {
+    const under = this.pointUnder(clientX, clientY);
+    if (under?.point) this.aimAt(under.point);
+  }
+
+  /** The nearest point of the path within a few pixels of `ray`. */
+  private pickPath(ray: THREE.Ray, heightPx: number): THREE.Vector3 | null {
+    const { origin: o, direction: d } = ray;
+    // Pixels -> radians of view at this canvas height.
+    const tolerance = (PICK_TOLERANCE_PX * 2 * Math.tan((this.camera.fov * Math.PI) / 360)) / heightPx;
+    const ex = this.exaggeration;
+    const pts = this.pickPoints;
+    let bestT = Infinity;
+    let best: THREE.Vector3 | null = null;
+    for (let i = 0; i < pts.length; i += 3) {
+      const px = pts[i] - o.x;
+      const py = pts[i + 1] * ex - o.y;
+      const pz = pts[i + 2] - o.z;
+      const t = px * d.x + py * d.y + pz * d.z;
+      if (t <= 0 || t >= bestT) continue;
+      const off2 = px * px + py * py + pz * pz - t * t;
+      if (off2 <= (tolerance * t) ** 2) {
+        bestT = t;
+        best = new THREE.Vector3(pts[i], pts[i + 1] * ex, pts[i + 2]);
+      }
+    }
+    // The point itself, not its foot on the ray: zooming at it keeps it
+    // where it is on the screen.
+    return best;
+  }
+
+  /** Where `ray` meets the ground; null when it points above the horizon. */
+  private pickGround(ray: THREE.Ray): THREE.Vector3 | null {
+    const { origin: o, direction: d } = ray;
+    if (d.y >= -1e-6) return null;
+    const t = (this.groundY - o.y) / d.y;
+    return t > 0 ? o.clone().addScaledVector(d, t) : null;
   }
 
   private resize() {
@@ -500,6 +654,7 @@ class FlightScene {
     this.scene.add(group);
 
     const { points } = path;
+    this.pickPoints = Float32Array.from(points.flatMap((p) => [p.x, p.y, p.z]));
     const ex = opts.exaggeration;
     const bounds = sceneBounds(points);
     const previousExaggeration = this.exaggeration;
@@ -707,7 +862,10 @@ class FlightScene {
     this.camera.near = Math.max(0.5, bounds.span / 20_000);
     this.camera.far = bounds.span * 40;
     this.camera.updateProjectionMatrix();
-    this.controls.minDistance = Math.max(10, bounds.span * 0.01);
+    // Close enough to read one aircraft at its real size. This used to be 1%
+    // of the scene (150 m on an 8 nm capture), which with the target held
+    // wherever the last zoom left it was where the zoom stopped for good.
+    this.controls.minDistance = Math.max(MIN_ZOOM_DISTANCE_M, this.realLength);
     this.controls.maxDistance = bounds.span * 8;
 
     if (!this.framed) {
@@ -846,6 +1004,10 @@ class FlightScene {
   dispose() {
     cancelAnimationFrame(this.animationFrame);
     this.resizeObserver.disconnect();
+    this.host.removeEventListener("wheel", this.onWheel, { capture: true });
+    this.host.removeEventListener("pointerdown", this.onPointerDown, { capture: true });
+    this.host.removeEventListener("pointerup", this.onPointerUp, { capture: true });
+    this.host.removeEventListener("pointercancel", this.onPointerUp, { capture: true });
     this.controls.dispose();
     for (const d of this.contentDisposables) d.dispose();
     this.aircraft.dispose();
@@ -1098,9 +1260,13 @@ export default function FlightPath3D({ track, metrics, airframe }: FlightPath3DP
             <div>
               <dt>迎角</dt>
               <dd>
+                {/* サーバーの記録に AOA は無い。無ければ採点と同じ推定値
+                    (backend: app.grading.aoa) を「推定」と断って出す。 */}
                 {num(cursor.sample.aoa) !== null
                   ? `${(cursor.sample.aoa as number).toFixed(1)}°`
-                  : "-"}
+                  : num(cursor.sample.aoa_est) !== null
+                    ? `${(cursor.sample.aoa_est as number).toFixed(1)}°（推定）`
+                    : "-"}
               </dd>
             </div>
             <div>

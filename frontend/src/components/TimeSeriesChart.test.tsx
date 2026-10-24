@@ -24,7 +24,7 @@ vi.mock("recharts", async (importOriginal) => {
   };
 });
 
-const { TimeSeriesChart, buildRows, hasLoadFactor } = await import("./TimeSeriesChart");
+const { TimeSeriesChart, buildRows, hasLoadFactor, timeTicks } = await import("./TimeSeriesChart");
 
 function track(overrides: Record<string, unknown> = {}) {
   return {
@@ -134,6 +134,28 @@ describe("buildRows", () => {
     );
     expect(rows[0].bank).toBeNull();
     expect(rows[1].bank).toBe(62);
+  });
+
+  it("smooths the speed and the descent rate instead of plotting sample-to-sample noise", () => {
+    // 0.2 s samples, speed alternating 65/75 m/s around 70 and a steady
+    // 3 m/s descent with one jumped height.
+    const samples = Array.from({ length: 50 }, (_, i) => ({
+      time: 100 + i * 0.2,
+      distance_to_go: 1000 - i * 14,
+      speed: i % 2 ? 75 : 65,
+      agl: 100 - 3 * i * 0.2 + (i === 25 ? 30 : 0),
+    }));
+    const rows = buildRows(track({ touchdown_time: 110, samples }) as never);
+    for (const r of rows.slice(5, -5)) {
+      expect(Math.abs((r.kt as number) - 136)).toBeLessThanOrEqual(3); // 70 m/s; raw is +-10 kt
+      expect(Math.abs((r.fpm as number) - 591)).toBeLessThanOrEqual(1); // 3 m/s
+    }
+  });
+
+  it("puts round-second ticks across the record", () => {
+    const rows = [{ t: -109.4 }, { t: -40 }, { t: 5.2 }] as never;
+    expect(timeTicks(rows)).toEqual([-100, -90, -80, -70, -60, -50, -40, -30, -20, -10, 0]);
+    expect(timeTicks([{ t: -6.4 }, { t: 0.2 }] as never)).toEqual([-6, -5, -4, -3, -2, -1, 0]);
   });
 
   it("plots the recorded AOA when there is one and the estimate otherwise, never a mix", () => {
