@@ -15,6 +15,7 @@ from app.acmi.stream import AcmiStreamClient
 from app.config import TacviewSource, get_settings
 from app.detection.detector import DeckAltitudeResolver, DetectionConfig
 from app.ingest import (
+    DEFAULT_BATCH_AGE_S,
     LandingFinalizeListener,
     LandingListener,
     TrackIngestor,
@@ -91,6 +92,8 @@ class MultiSourceAcmiManager:
             client_name=source.client_name,
             password=source.password,
             idle_timeout=source.idle_timeout,
+            on_flush=ingestor.flush,
+            flush_interval=DEFAULT_BATCH_AGE_S,
         )
 
         ctx = SourceContext(
