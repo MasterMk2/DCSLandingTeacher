@@ -171,6 +171,24 @@ async def tracks(factory: async_sessionmaker[AsyncSession]) -> list[tuple[str, f
         )).tuples().all())
 
 
+async def assert_tracks_committed(
+    factory: async_sessionmaker[AsyncSession], expected: list[tuple[str, float]]
+) -> None:
+    """Assert ``tracks`` once a live source's in-flight flush has landed.
+
+    ``TrackIngestor._flush`` detaches its session before it commits, so
+    ``ingestor._session is None`` can be observed while that commit is still
+    running, and on PostgreSQL nothing else orders this read after it.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5
+    rows = await tracks(factory)
+    while rows != expected and loop.time() < deadline:
+        await asyncio.sleep(0.005)
+        rows = await tracks(factory)
+    assert rows == expected
+
+
 async def test_idle_source_releases_batch_without_another_object_update(
     stream_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -181,7 +199,7 @@ async def test_idle_source_releases_batch_without_another_object_update(
         await independent_write(stream_factory)
         await wait_until(lambda: sources.context("default").ingestor._session is None)
         assert sources.context("default").client.connected
-        assert await tracks(stream_factory) == [("default", 0.0)]
+        await assert_tracks_committed(stream_factory, [("default", 0.0)])
 
 
 async def test_eof_flushes_unterminated_tail_before_reconnect_backoff(
@@ -238,8 +256,9 @@ async def test_import_completes_while_live_source_has_gone_idle(
         assert not path.exists()
         # On PostgreSQL nothing makes the import wait for the live batch, so a
         # fast import can finish before the idle release commits the live row.
-        await wait_until(lambda: sources.context("default").ingestor._session is None)
-        assert await tracks(stream_factory) == [("default", 0.0), (import_source_id(job.id), 0.0)]
+        await assert_tracks_committed(
+            stream_factory, [("default", 0.0), (import_source_id(job.id), 0.0)]
+        )
         assert await imports.discard(job.id)
         assert await tracks(stream_factory) == [("default", 0.0)]
 
@@ -294,8 +313,7 @@ async def test_discard_active_import_while_live_source_is_idle(
                 await asyncio.gather(task, return_exceptions=True)
         assert not path.exists()
         assert imports.get_job(job.id) is None
-        await wait_until(lambda: sources.context("default").ingestor._session is None)
-        assert await tracks(stream_factory) == [("default", 0.0)]
+        await assert_tracks_committed(stream_factory, [("default", 0.0)])
 
 
 async def test_frame_only_traffic_does_not_postpone_batch_release(
@@ -318,7 +336,7 @@ async def test_frame_only_traffic_does_not_postpone_batch_release(
             await independent_write(stream_factory)
             await wait_until(lambda: sources.context("default").ingestor._session is None)
             assert not producer.done()
-            assert await tracks(stream_factory) == [("default", 0.0)]
+            await assert_tracks_committed(stream_factory, [("default", 0.0)])
         finally:
             producer.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -374,7 +392,7 @@ async def test_flush_waits_for_the_current_line_handler(
         finally:
             release.set()
         await wait_until(lambda: ingestor._session is None)
-        assert await tracks(stream_factory) == [("default", 0.0)]
+        await assert_tracks_committed(stream_factory, [("default", 0.0)])
 
 
 async def test_cancel_inside_line_handler_rolls_back_incomplete_batch(
