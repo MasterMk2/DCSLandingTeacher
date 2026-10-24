@@ -230,6 +230,21 @@ def test_an_airframe_without_a_band_is_graded_exactly_as_before() -> None:
     )
 
 
+def test_no_aoa_component_when_the_record_cannot_give_one() -> None:
+    """A Harrier's vertical landing, or a row stored before attitude was kept:
+    nothing to estimate from. That is a property of the record, not of the
+    flying, so the landing is graded and worded exactly as an airframe
+    without a band -- no "could not measure AOA" note, no hedged verdict."""
+    analysis = _straight_in(aoa=8.1, airframe="F-16C_50")
+    for sample in analysis.samples:
+        sample.pitch = None
+        sample.roll = None
+    result = grade_land_landing(analysis, CONFIG)
+    assert all(c.name != "aoa" for c in result.components)
+    assert "迎角" not in result.comment
+    assert result.metrics["aoa_band"] is None
+
+
 def test_a_recorded_aoa_wins_over_the_estimate() -> None:
     """Client-side recordings carry AOA; when they do, that is what is judged."""
     analysis = _straight_in(aoa=8.1, airframe="FA-18C_hornet")

@@ -1249,9 +1249,7 @@ def test_rotary_wing_speed_and_glidepath_are_measured_but_not_scored() -> None:
 
     # 同じ軌跡を戦闘機で飛べば、どちらも採点される。
     fighter = grade_land_landing(_pattern_analysis(airframe="F-16C_50"), CONFIG)
-    by_name = {c.name: c for c in fighter.components}
-    assert by_name["touchdown_speed"].score is not None
-    assert by_name["glideslope"].score is not None
+    assert all(c.score is not None for c in fighter.components)
 
 
 def test_the_speed_reference_is_the_speed_held_on_final_not_the_whole_final() -> None:

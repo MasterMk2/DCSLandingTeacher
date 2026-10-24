@@ -496,13 +496,18 @@ def _aoa_component(
     segments: ApproachSegments,
     band: AoaBand,
     weight: float,
-) -> ComponentScore:
+) -> ComponentScore | None:
     """ファイナルで保った迎角を、機体別のオンスピード帯で採点する。
 
     区間は接地速度の基準と同じ「ファイナル開始からフレアの手前まで」。
     フレアでは迎角を上げるのが操作そのものなので入れない。代表値は中央値:
     平均だとファイナル入り口の数秒 (旋回明けで速度が落ち切っていない) に
     引っ張られる。
+
+    迎角を推定できるサンプルが足りなければ ``None`` (項目を付けない)。
+    ハリアーの垂直着陸、姿勢を保存していなかった古い記録などで、帯の無い
+    機種と同じ扱いにする: 「測れなかった」と講評に書いても、記録の性質を
+    述べるだけで操縦について何も伝えない (抜き取り 103 件中 31 件がこれ)。
     """
     flare_s = float(settings.get("speed_flare_exclude_s", 4.0))
     cutoff = analysis.touchdown_time - flare_s
@@ -512,6 +517,8 @@ def _aoa_component(
         start = analysis.touchdown_time - float(settings.get("glideslope_window_s", 30.0))
         window = [s for s in analysis.samples if start <= s.time <= cutoff]
     values, method = aoa_values(window)
+    if len(values) < AOA_MIN_SAMPLES:
+        return None
     evidence: dict[str, Any] = {
         "band": band.name,
         "on_speed_deg": band.on_speed,
@@ -522,10 +529,8 @@ def _aoa_component(
         "source": band.source,
         "method": method,
         "samples": len(values),
+        "window_s": round(cutoff - window[0].time, 1),
     }
-    if len(values) < AOA_MIN_SAMPLES:
-        return ComponentScore("aoa", None, weight, evidence)
-    evidence["window_s"] = round(cutoff - window[0].time, 1) if window else None
     ordered = sorted(values)
     median = statistics.median(ordered)
     in_band = sum(1 for v in values if band.on_speed_min <= v <= band.on_speed_max)
@@ -886,17 +891,20 @@ def grade_land_landing(
     if pattern_component is not None:
         components.append(pattern_component)
 
-    # 進入迎角は、出典のある帯が config に載っている機種だけ。帯の無い機種
-    # (ヘリ・レシプロの多く・出典の見つからない機体) には項目そのものを
-    # 出さない: 「未評価」が並ぶだけで何も伝えないし、重みは正規化で
-    # 消えるので点数も変わらない。
+    # 進入迎角は、出典のある帯が config に載っている機種で、迎角を推定
+    # できたときだけ。帯の無い機種 (ヘリ・レシプロの多く・出典の見つからない
+    # 機体) や推定できない記録には項目そのものを出さない: 「未評価」が並ぶ
+    # だけで何も伝えないし、重みは正規化で消えるので点数も変わらない。
     aoa_band = aoa_band_for(analysis.airframe, config.aoa_bands)
-    if aoa_band is not None:
-        components.append(
-            _aoa_component(
-                analysis, settings, segments, aoa_band, float(weights.get("aoa", 0.0))
-            )
+    aoa_component = (
+        _aoa_component(
+            analysis, settings, segments, aoa_band, float(weights.get("aoa", 0.0))
         )
+        if aoa_band is not None
+        else None
+    )
+    if aoa_component is not None:
+        components.append(aoa_component)
 
     # 測れなかった / このクラスでは採点しない項目には理由を残す。UI は
     # これを見て「未評価」と出す。値そのものは evidence に入ったまま。
