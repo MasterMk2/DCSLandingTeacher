@@ -60,21 +60,40 @@ function num(value: unknown): number | null {
  *  (lib/smoothing.ts explains why they need one). */
 export const SMOOTHING_HALF_WINDOW_S = 1.0;
 
+/**
+ * Run `smooth` separately on the samples before and from `splitTime`.
+ *
+ * The windows must not reach across the touchdown: a trap stops the jet
+ * from 65 m/s in about two seconds, and the sink stops at the wheels, so a
+ * window straddling that instant would draw the deceleration (or the end of
+ * the descent) seconds before it happened -- right where the LSO's FAST /
+ * SLOW and the touchdown sink are judged.
+ */
+function smoothEachSide(
+  times: number[],
+  values: (number | null)[],
+  splitTime: number,
+  smooth: (t: number[], v: (number | null)[]) => (number | null)[],
+): (number | null)[] {
+  const split = times.findIndex((t) => t >= splitTime);
+  if (split <= 0) return smooth(times, values);
+  return [
+    ...smooth(times.slice(0, split), values.slice(0, split)),
+    ...smooth(times.slice(split), values.slice(split)),
+  ];
+}
+
 export function buildRows(
   track: ApproachTrack,
   metrics?: Record<string, unknown> | null,
 ): Row[] {
   const tdTime = track.touchdown_time ?? track.samples.at(-1)?.time ?? 0;
   const times = track.samples.map((s) => s.time);
-  const speeds = robustSmooth(
-    times,
-    track.samples.map((s) => num(s.speed)),
-    SMOOTHING_HALF_WINDOW_S,
+  const speeds = smoothEachSide(times, track.samples.map((s) => num(s.speed)), tdTime, (t, v) =>
+    robustSmooth(t, v, SMOOTHING_HALF_WINDOW_S),
   );
-  const rates = descentRateSmoothed(
-    times,
-    track.samples.map((s) => num(s.agl)),
-    SMOOTHING_HALF_WINDOW_S,
+  const rates = smoothEachSide(times, track.samples.map((s) => num(s.agl)), tdTime, (t, v) =>
+    descentRateSmoothed(t, v, SMOOTHING_HALF_WINDOW_S),
   );
   const breakStart = num(metrics?.["pattern_break_start_time"]);
   const breakEnd = num(metrics?.["pattern_break_end_time"]);

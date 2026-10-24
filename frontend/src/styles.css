@@ -1500,6 +1500,16 @@ main {
   cursor: grabbing;
 }
 
+/* Inert until clicked (FlightScene.active): the page scrolls over it. */
+.flight3d-inert .flight3d-canvas {
+  cursor: pointer;
+}
+
+.flight3d-inert .flight3d-hint {
+  color: var(--text);
+  font-size: 12px;
+}
+
 .flight3d-readout {
   position: absolute;
   top: 10px;

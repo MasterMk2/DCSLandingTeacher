@@ -152,6 +152,27 @@ describe("buildRows", () => {
     }
   });
 
+  it("does not smooth across the touchdown", () => {
+    // A trap: 65 m/s up to touchdown at t=110, then stopped within a second.
+    const samples = Array.from({ length: 50 }, (_, i) => {
+      const time = 105 + i * 0.2;
+      return {
+        time,
+        distance_to_go: 500 - i * 10,
+        speed: time < 110 ? 65 : Math.max(0, 65 - 65 * (time - 110)),
+        agl: time < 110 ? 15 - 3.5 * (time - 105) : -2.5,
+      };
+    });
+    const rows = buildRows(track({ touchdown_time: 110, samples }) as never);
+    const before = rows.filter((r) => r.t < 0 && r.t >= -2);
+    // Still flying at 65 m/s (126 kt) and sinking 3.5 m/s (689 fpm) right up
+    // to the wires, not decelerating or levelling off ahead of them.
+    for (const r of before) {
+      expect(r.kt).toBe(126);
+      expect(Math.abs((r.fpm as number) - 689)).toBeLessThanOrEqual(1);
+    }
+  });
+
   it("puts round-second ticks across the record", () => {
     const rows = [{ t: -109.4 }, { t: -40 }, { t: 5.2 }] as never;
     expect(timeTicks(rows)).toEqual([-100, -90, -80, -70, -60, -50, -40, -30, -20, -10, 0]);
