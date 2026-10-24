@@ -236,6 +236,9 @@ async def test_import_completes_while_live_source_has_gone_idle(
         await asyncio.wait_for(imports.run(job, path), 5)
         assert job.status == "completed", job.error
         assert not path.exists()
+        # On PostgreSQL nothing makes the import wait for the live batch, so a
+        # fast import can finish before the idle release commits the live row.
+        await wait_until(lambda: sources.context("default").ingestor._session is None)
         assert await tracks(stream_factory) == [("default", 0.0), (import_source_id(job.id), 0.0)]
         assert await imports.discard(job.id)
         assert await tracks(stream_factory) == [("default", 0.0)]
@@ -291,6 +294,7 @@ async def test_discard_active_import_while_live_source_is_idle(
                 await asyncio.gather(task, return_exceptions=True)
         assert not path.exists()
         assert imports.get_job(job.id) is None
+        await wait_until(lambda: sources.context("default").ingestor._session is None)
         assert await tracks(stream_factory) == [("default", 0.0)]
 
 
