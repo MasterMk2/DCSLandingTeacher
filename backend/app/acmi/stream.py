@@ -39,6 +39,7 @@ DETECTION_BUFFER_LIMIT = 512
 GZIP_MAGIC = b"\x1f\x8b"
 
 LineHandler = Callable[[str], Awaitable[None]]
+FlushHandler = Callable[[], Awaitable[None]]
 
 
 class StreamDecodeError(ConnectionError):
@@ -212,6 +213,9 @@ class AcmiStreamClient:
       to ``max_delay``), resetting backoff after each successful connection.
     - If no data is received for ``idle_timeout`` seconds, the connection is
       considered stale and a reconnect is triggered (Issue #14).
+    - Optional ``on_flush`` runs every ``flush_interval`` seconds and when a
+      read loop ends, in the same task as ``on_line`` so its batch is never
+      committed concurrently with a line handler.
     - :meth:`stop` requests a graceful shutdown; the running task exits after
       the current read loop unwinds.
     """
@@ -227,7 +231,11 @@ class AcmiStreamClient:
         initial_delay: float = 1.0,
         max_delay: float = 30.0,
         idle_timeout: float = 60.0,
+        on_flush: FlushHandler | None = None,
+        flush_interval: float = 2.0,
     ) -> None:
+        if flush_interval <= 0:
+            raise ValueError("flush_interval must be positive")
         self.host = host
         self.port = port
         self._on_line = on_line
@@ -236,6 +244,8 @@ class AcmiStreamClient:
         self._initial_delay = max(initial_delay, 0.1)
         self._max_delay = max(max_delay, self._initial_delay)
         self._idle_timeout = max(idle_timeout, 1.0) if idle_timeout > 0 else 0.0
+        self._on_flush = on_flush
+        self._flush_interval = flush_interval
         self._stopping = False
         self.connected = False
         self._stop_event: asyncio.Event | None = None
@@ -380,25 +390,57 @@ class AcmiStreamClient:
     async def _read_loop(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         decoder = StreamDecoder()
         assembler = LineAssembler()
+        loop = asyncio.get_running_loop()
+        next_flush = loop.time() + self._flush_interval
+        failed = False
         # Start idle monitor after successful handshake
         self._start_idle_monitor(writer)
         try:
             while not self._stopping:
-                chunk = await reader.read(READ_CHUNK_SIZE)
+                if self._on_flush is None:
+                    chunk = await reader.read(READ_CHUNK_SIZE)
+                else:
+                    flush_timer = asyncio.timeout_at(next_flush)
+                    try:
+                        # Only the read is timed out. Line handling and commit
+                        # remain serialized in this task, without a DB timer
+                        # task accessing the same AsyncSession concurrently.
+                        async with flush_timer:
+                            chunk = await reader.read(READ_CHUNK_SIZE)
+                    except TimeoutError:
+                        # StreamReader may store a socket ETIMEDOUT too. Only
+                        # our expired timer is a periodic flush opportunity.
+                        if not flush_timer.expired():
+                            raise
+                        await self._on_flush()
+                        next_flush = loop.time() + self._flush_interval
+                        continue
                 if not chunk:
                     break
                 # Update idle timer on any data received
                 self._update_last_data_time()
                 for line in assembler.feed(decoder.feed(chunk)):
                     await self._on_line(line)
+                # Header/frame-only traffic must not keep resetting the
+                # deadline of a batch opened by an earlier object update.
+                if self._on_flush is not None and loop.time() >= next_flush:
+                    await self._on_flush()
+                    next_flush = loop.time() + self._flush_interval
             tail_text = decoder.flush()
             if tail_text:
                 for line in assembler.feed(tail_text):
                     await self._on_line(line)
+            tail = assembler.flush()
+            if tail is not None:
+                await self._on_line(tail)
         except StreamDecodeError as exc:
+            failed = True
             # Corrupted compressed payload: log and let the caller treat it
             # like a connection loss so the client reconnects (Issue #2).
             logger.error("ACMI stream decode failed: %s", exc)
+            raise
+        except (Exception, asyncio.CancelledError):
+            failed = True
             raise
         finally:
             # Cancel idle monitor when read loop ends
@@ -408,9 +450,17 @@ class AcmiStreamClient:
                     await self._idle_monitor_task
                 except asyncio.CancelledError:
                     pass
-        tail = assembler.flush()
-        if tail is not None:
-            await self._on_line(tail)
+            # EOF, idle disconnect, read/decode errors and cancellation must
+            # all release the completed batch before reconnect/backoff.
+            if self._on_flush is not None:
+                try:
+                    await self._on_flush()
+                except Exception:
+                    if not failed:
+                        raise
+                    # Cleanup must not turn cancellation into a retryable
+                    # source error, or hide the original transport failure.
+                    logger.exception("ACMI final batch flush failed during stream cleanup")
 
     def _get_stop_event(self) -> asyncio.Event:
         # Created lazily so the client binds to the running event loop,

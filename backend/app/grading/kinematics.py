@@ -44,6 +44,8 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.grading.aoa import estimate_aoa_deg
+
 if TYPE_CHECKING:
     from app.grading.deviations import ApproachAnalysis, DeviationSample
 
@@ -314,7 +316,11 @@ class KinematicsReport:
 def annotate_kinematics(
     analysis: "ApproachAnalysis", half_window_s: float = DEFAULT_HALF_WINDOW_S
 ) -> KinematicsReport:
-    """全サンプルの ``load_factor`` / ``turn_rate_deg_s`` を軌跡から埋める。
+    """全サンプルの ``load_factor`` / ``turn_rate_deg_s`` / ``aoa_est`` を軌跡から埋める。
+
+    ``aoa_est`` (迎角の推定値) は同じフィットの速度ベクトルを姿勢で機体軸に
+    回したもの (:mod:`app.grading.aoa`)。機首方位は ``analysis.course_deg``
+    基準に直してから渡す: 位置の座標系がコース基準 (x = コース方向) だから。
 
     既に値が入っていても **必ず計算し直す**。保存済みの値はそのとき使った
     アルゴリズムの産物なので、再採点のたびに現行の導出で上書きするのが、
@@ -333,6 +339,7 @@ def annotate_kinematics(
     for sample in samples:
         sample.load_factor = None
         sample.turn_rate_deg_s = None
+        sample.aoa_est = None
         position = _position_of(sample)
         if position is None:
             continue
@@ -364,6 +371,12 @@ def annotate_kinematics(
         turn_rate = kinematics.turn_rate_deg_s
         if turn_rate is not None and abs(turn_rate) <= 90.0:
             sample.turn_rate_deg_s = round(turn_rate, 2)
+        heading = (
+            sample.heading - analysis.course_deg if sample.heading is not None else None
+        )
+        aoa = estimate_aoa_deg(kinematics.velocity, heading, sample.pitch, sample.roll)
+        if aoa is not None:
+            sample.aoa_est = round(aoa, 2)
     return KinematicsReport(annotated=count, rejected=len(rejected))
 
 

@@ -94,6 +94,13 @@ class DeviationSample:
     #: row was first written.
     load_factor: float | None = None
     turn_rate_deg_s: float | None = None
+    #: Angle of attack (deg) ESTIMATED from the track and the attitude by
+    #: :mod:`app.grading.aoa` -- the velocity from the same fit as the load
+    #: factor, turned into body axes with heading / pitch / roll. ``aoa``
+    #: above is what the recording itself carried, which DCS servers never
+    #: send; this is what the AOA judgement uses when ``aoa`` is missing.
+    #: Recomputed on every grade / re-grade, like the load factor.
+    aoa_est: float | None = None
     #: Position in an EARTH-FIXED copy of the frame (the moving-deck frame
     #: frozen at the touchdown instant), carrier samples only. The fields
     #: above follow the deck, which is right for everything measured against
@@ -143,6 +150,7 @@ class DeviationSample:
                 if self.turn_rate_deg_s is not None
                 else None
             ),
+            "aoa_est": round(self.aoa_est, 2) if self.aoa_est is not None else None,
             "fixed_along": (
                 round(self.fixed_along, 2) if self.fixed_along is not None else None
             ),
@@ -278,6 +286,7 @@ class ApproachAnalysis:
                         heading=_optional_float(row.get("heading")),
                         load_factor=_optional_float(row.get("load_factor")),
                         turn_rate_deg_s=_optional_float(row.get("turn_rate_deg_s")),
+                        aoa_est=_optional_float(row.get("aoa_est")),
                         fixed_along=_optional_float(row.get("fixed_along")),
                         fixed_lateral=_optional_float(row.get("fixed_lateral")),
                     )

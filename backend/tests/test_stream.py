@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import zlib
+from typing import cast
 
 import pytest
 
@@ -426,3 +427,59 @@ async def test_stream_client_idle_timeout_disabled_when_zero() -> None:
             pass
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.parametrize("failure", ["line", "read", "cancel", "eof"])
+async def test_final_flush_failure_preserves_stream_error_or_cancellation(failure: str) -> None:
+    """Cleanup errors cannot change cancellation/transport failure into another error."""
+    reader = asyncio.StreamReader()
+
+    async def on_line(_line: str) -> None:
+        raise ValueError("line failure")
+
+    async def on_flush() -> None:
+        raise RuntimeError("flush failure")
+
+    client = AcmiStreamClient(
+        "synthetic", 1, on_line, idle_timeout=0, on_flush=on_flush, flush_interval=60,
+    )
+    if failure == "line":
+        reader.feed_data(b"FileVersion=2.2\n")
+        expected, message = ValueError, "line failure"
+    elif failure == "read":
+        reader.set_exception(ConnectionResetError("read failure"))
+        expected, message = ConnectionResetError, "read failure"
+    elif failure == "eof":
+        reader.feed_eof()
+        expected, message = RuntimeError, "flush failure"
+    else:
+        expected, message = asyncio.CancelledError, None
+    # No writer calls are made with the idle monitor disabled.
+    task = asyncio.create_task(client._read_loop(reader, cast(asyncio.StreamWriter, object())))
+    if failure == "cancel":
+        await asyncio.sleep(0)
+        task.cancel()
+    with pytest.raises(expected, match=message):
+        await task
+
+
+async def test_socket_timeout_is_not_a_periodic_flush_deadline() -> None:
+    reader = asyncio.StreamReader()
+    reader.set_exception(TimeoutError(110, "synthetic socket timeout"))
+    flushes = 0
+
+    async def on_line(_line: str) -> None:
+        pass
+
+    async def on_flush() -> None:
+        nonlocal flushes
+        flushes += 1
+        # Make a regression fail instead of spinning forever without yielding
+        # if the stored socket error is mistaken for the timer on every read.
+        if flushes > 1:
+            raise RuntimeError("socket timeout was swallowed")
+
+    client = AcmiStreamClient("synthetic", 1, on_line, idle_timeout=0, on_flush=on_flush)
+    with pytest.raises(TimeoutError, match="synthetic socket timeout"):
+        await client._read_loop(reader, cast(asyncio.StreamWriter, object()))
+    assert flushes == 1  # teardown only; no periodic flush/retry loop

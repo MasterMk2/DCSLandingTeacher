@@ -83,6 +83,10 @@ class DeviationSampleOut(BaseModel):
     #: positive) derived from the track (app.grading.kinematics).
     load_factor: float | None = None
     turn_rate_deg_s: float | None = None
+    #: Angle of attack (deg) estimated from the track and the attitude
+    #: (app.grading.aoa); ``aoa`` above is the recorded one, which DCS
+    #: servers never send.
+    aoa_est: float | None = None
     #: Carrier tracks referenced to the moving deck only: the position in
     #: the earth-fixed frame the load factor was derived in (stored)...
     fixed_along: float | None = None

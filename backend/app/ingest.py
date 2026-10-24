@@ -34,6 +34,7 @@ airborne. New landing events are forwarded to the optional
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
@@ -460,7 +461,7 @@ class TrackIngestor:
                         list(event.object_ids),
                         event.text,
                     )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             # Any write failure has to take the session with it, not just a
             # failure at commit time. The explicit session.flush() calls that
             # fetch row ids for foreign keys raise *before* _flush() is ever
@@ -471,6 +472,8 @@ class TrackIngestor:
             # run() again on the same ingestor, so a single "database is
             # locked" would otherwise wedge ingestion into a permanent
             # reconnect loop that stores nothing until the container restarts.
+            # A cancelled line can leave an incomplete ORM flush too. Roll
+            # it back before the stream's final batch flush or import close.
             await self._discard_session()
             raise
 
@@ -526,13 +529,15 @@ class TrackIngestor:
         if session is None:
             return
         try:
-            await session.rollback()
-        except Exception:  # noqa: BLE001 - already unwinding another error
-            logger.debug("rollback failed while discarding batch", exc_info=True)
-        try:
-            await session.close()
-        except Exception:  # noqa: BLE001 - same
-            logger.debug("close failed while discarding batch", exc_info=True)
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001 - already unwinding another error
+                logger.debug("rollback failed while discarding batch", exc_info=True)
+        finally:
+            try:
+                await session.close()
+            except Exception:  # noqa: BLE001 - same
+                logger.debug("close failed while discarding batch", exc_info=True)
 
     async def _flush(self, force: bool = False) -> None:
         if self._session is None:
@@ -561,6 +566,7 @@ class TrackIngestor:
         dirty_last_seen = self._dirty_last_seen
         pending_tracks = self._pending_tracks
         retained = len(self._pending_retained)
+        failed = False
         try:
             # Track samples as one executemany INSERT instead of one ORM
             # object per line (Issue #47): the ORM unit-of-work state per
@@ -589,14 +595,23 @@ class TrackIngestor:
                     ],
                 )
             await session.commit()
-        except Exception:
-            await session.rollback()
+        except (Exception, asyncio.CancelledError):
+            failed = True
+            try:
+                await session.rollback()
+            except Exception:  # preserve the write error or cancellation
+                logger.debug("rollback failed while flushing batch", exc_info=True)
             raise
         else:
             dirty_last_seen.clear()
             del self._pending_retained[:retained]
         finally:
-            await session.close()
+            try:
+                await session.close()
+            except Exception:
+                if not failed:
+                    raise
+                logger.debug("close failed while flushing batch", exc_info=True)
 
     async def _ensure_flight(self) -> int:
         if self._flight_id is not None:

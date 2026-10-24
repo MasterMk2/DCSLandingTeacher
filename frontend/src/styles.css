@@ -51,6 +51,8 @@
      区間は --leg-break で上書きするので、平面図の脚の色と対応が付く。 */
   --series-load: #c2a76c;
   --series-bank: #8fb2c9;
+  /* 迎角。オンスピード帯は同じ色を薄く敷く。 */
+  --series-aoa: #8faa85;
   /* パターンの脚 — 4 本を色で見分けるので、色相は離したまま彩度だけ落とす。
      ファイナルはアクセント (真鍮)、接地後は破線 + muted で別扱い。 */
   --leg-entry: #8faa85;
@@ -544,11 +546,14 @@ main {
   margin-top: 8px;
 }
 
-/* Factors Section */
-.factors-section {
+/* Factors Section (and the 3D view, which sits between the charts and the
+   factors on screen and shares their heading style) */
+.factors-section,
+.flight3d-section {
   margin-top: 16px;
 }
 
+.flight3d-section h4,
 .factors-section h4 {
   font-size: 13px;
   color: var(--accent);
@@ -1493,6 +1498,16 @@ main {
 
 .flight3d-canvas:active {
   cursor: grabbing;
+}
+
+/* Inert until clicked (FlightScene.active): the page scrolls over it. */
+.flight3d-inert .flight3d-canvas {
+  cursor: pointer;
+}
+
+.flight3d-inert .flight3d-hint {
+  color: var(--text);
+  font-size: 12px;
 }
 
 .flight3d-readout {

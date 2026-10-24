@@ -97,7 +97,7 @@ async def test_a_carrier_row_stored_with_60_s_gets_its_kissoff_back(session_fact
     assert m["pattern_entry"] == "initial"
     assert m["pattern_break_along_ship_m"] == pytest.approx(case.expect["kissoff_x"], abs=80.0)
     assert m["pattern_abeam_distance_m"] == pytest.approx(case.expect["abeam_m"], abs=30.0)
-    assert row.grading_version == "7"
+    assert row.grading_version == "8"
     assert row.grade == "OK"
     assert "キスオフ" in row.comment
 

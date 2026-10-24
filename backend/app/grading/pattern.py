@@ -133,6 +133,8 @@ def segment_approach(
         settings.get("downwind_max_turn_rate_deg_s", 1.5)
     )
     gate_agl_m = float(settings.get("stabilization_gate_agl_m", 305.0))
+    rollout_min_agl_m = float(settings.get("rollout_min_agl_m", 15.0))
+    rollout_min_excursion_s = float(settings.get("rollout_min_excursion_s", 3.0))
 
     inbound = [s for s in analysis.samples if s.time < analysis.touchdown_time]
     track = track_points(analysis, smoothing_s, min_step_m)
@@ -143,12 +145,13 @@ def segment_approach(
         segments.final = _from(inbound, segments.final_start_time)
         return segments
 
-    # --- ロールアウト: 整列を外れていた最後の時刻 -------------------------
-    rollout_index: int | None = None
-    for index in range(len(track) - 1, -1, -1):
-        if abs(track[index].angle_deg) > align_deg:
-            rollout_index = index
-            break
+    # --- ロールアウト: 整列を外れて飛んでいた最後の区間の終わり ---------------
+    rollout_index = _rollout_index(
+        track,
+        align_deg,
+        _flare_entry_time(inbound, rollout_min_agl_m),
+        rollout_min_excursion_s,
+    )
 
     if rollout_index is None:
         # 一度も外れていない = ストレートイン。旋回で切る理由はないので、
@@ -174,6 +177,71 @@ def segment_approach(
         start = track.index(run[0])
         segments.break_leg = _break_leg(track[:start], BreakBounds.from_settings(settings))
     return segments
+
+
+def _flare_entry_time(inbound: list[DeviationSample], min_agl_m: float) -> float | None:
+    """接地前に最後に ``min_agl_m`` を切って降りた時刻 (それ以降がフレア域)。
+
+    「AGL が低い」だけでは決めない: 離陸やタッチアンドゴーから記録が
+    始まる周回は、地面すれすれから旋回を始める。最後に降りてきてから
+    だけを接地直前とみなす。AGL が無い記録では ``None`` (除外しない)。
+    """
+    latest: float | None = None
+    for sample in inbound:
+        if sample.agl is not None and sample.agl >= min_agl_m:
+            latest = sample.time
+    return latest
+
+
+def _rollout_index(
+    track: list[TrackPoint],
+    align_deg: float,
+    flare_entry_time: float | None,
+    min_excursion_s: float,
+) -> int | None:
+    """旋回明け = 最後に「コースを外れて飛んでいた区間」の終わり (``track`` の添字)。
+
+    外れていた区間は |トラック角| > ``align_deg`` が続いた連続区間で、
+    次の 2 つは数えない。どちらも数えていた 2026-10 までは「外れた最後の
+    1 点」をロールアウトとしていたため、ファイナルの起点 (= グライド
+    スロープを採点し始める点) が接地の 0.2〜0.3 秒前に置かれ、旋回を
+    1.5 km 手前で終えた進入のグライドスロープが丸ごと採点されなかった。
+
+    - **フレア域 (``flare_entry_time`` より後) で始まった区間。** フレア・
+      接地直前の横修正や滑走路上でのふらつきで、ファイナルへの旋回では
+      ない。上空から続いてきた旋回がそこまで延びた場合 (曲線進入で閾値の
+      上でロールアウトした、など) は数え、終わりもそのまま使う: その進入は
+      実際に閾値まで整列していなかったのであって、手前の旋回を採点区間に
+      入れるのは誤り。閾値を越えたかどうかでは切らない: オーバーヘッドの
+      ブレイクは滑走路の上空で始まるので、パターンひとつ分の旋回がまるごと
+      消える。
+    - **``min_excursion_s`` 未満の区間。** トラック角そのものが 2 秒の弦
+      なので、位置の 1 点の飛びでも 2 秒前後は外れて見える。
+
+    外れた区間がひとつも残らなければ ``None`` (= ストレートイン)。
+    """
+
+    def in_flare(sample: DeviationSample) -> bool:
+        return flare_entry_time is not None and sample.time > flare_entry_time
+
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, point in enumerate(track):
+        if abs(point.angle_deg) > align_deg:
+            if start is None:
+                start = index
+            continue
+        if start is not None:
+            runs.append((start, index - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(track) - 1))
+    for first, last in reversed(runs):
+        if in_flare(track[first].sample):
+            continue
+        if track[last].sample.time - track[first].sample.time >= min_excursion_s:
+            return last
+    return None
 
 
 @dataclass(frozen=True)

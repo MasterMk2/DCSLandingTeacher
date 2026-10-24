@@ -72,7 +72,14 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
 # 陸上では艦載機 (F/A-18・F-14 等) に専用の接地降下率バンドを当てる
 # (フレアしない接地が前提のため)。既存の空母の行は再採点しても接地前
 # 60 秒・旧座標系のままなので、パターンは出ない。
-GRADING_VERSION = "7"
+# 8 (2026-10-25): 進入迎角を機体別の帯で判定する (config の aoa_bands。
+# F/A-18・F-14・F-16・M-2000C・AJS37・AV-8B)。迎角は記録に無いので軌跡と
+# 姿勢から推定し (app.grading.aoa)、陸上では aoa コンポーネント、空母では
+# FAST / SLOW をこれで出す。帯の無い機種の点数・判定は変わらない。あわせて
+# ロールアウト (ファイナル起点) を、フレアに入ってから始まった横修正と
+# 3 秒未満の逸脱では切らないようにした (pattern._rollout_index)。どちらも
+# 保存済みのサンプルから計算するので、再採点で既存の着陸に反映される。
+GRADING_VERSION = "8"
 
 
 def _row_approach_pattern(

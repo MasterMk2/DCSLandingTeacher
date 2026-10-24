@@ -84,6 +84,9 @@ export interface DeviationSample {
   load_factor?: number | null;
   /** Ground-track turn rate, deg/s, right turn positive. */
   turn_rate_deg_s?: number | null;
+  /** Angle of attack (degrees) estimated from the track and the attitude.
+   *  `aoa` is the recorded one, which DCS servers never send. */
+  aoa_est?: number | null;
   /** Carrier tracks referenced to the moving deck only: position in the
    *  earth-fixed frame the load factor was derived in. */
   fixed_along?: number | null;

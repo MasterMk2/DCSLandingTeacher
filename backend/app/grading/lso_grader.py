@@ -34,9 +34,12 @@ Decision rules (evaluated in order):
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.grading.aoa import MIN_SAMPLES as AOA_MIN_SAMPLES
+from app.grading.aoa import AoaBand, aoa_band_for, aoa_values, aoa_verdict
 from app.grading.carrier_pattern import analyze_carrier_pattern
 from app.grading.carriers import fallback_geometry_payload
 from app.grading.deviations import ApproachAnalysis, DeviationSample
@@ -68,9 +71,76 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _groove_aoa(
+    analysis: ApproachAnalysis, settings: dict[str, Any]
+) -> tuple[float, str, int] | None:
+    """グルーブ (接地前 ``aoa_window_s`` 秒、最後の ``aoa_exclude_s`` 秒を除く)
+    の迎角の中央値、出どころ、サンプル数。測れなければ ``None``。"""
+    window_s = float(settings.get("aoa_window_s", 15.0))
+    exclude_s = float(settings.get("aoa_exclude_s", 1.0))
+    start = analysis.touchdown_time - window_s
+    end = analysis.touchdown_time - exclude_s
+    values, method = aoa_values(s for s in analysis.samples if start <= s.time < end)
+    if len(values) < AOA_MIN_SAMPLES:
+        return None
+    return statistics.median(values), method, len(values)
+
+
+def _aoa_speed_factors(
+    analysis: ApproachAnalysis,
+    settings: dict[str, Any],
+    band: AoaBand,
+    fast_cfg: dict[str, Any],
+    slow_cfg: dict[str, Any],
+) -> list[LsoFactor] | None:
+    """グルーブの迎角から FAST / SLOW を出す。測れなければ ``None``。
+
+    中央値が帯の外なら、Fast / Slow の境目の外で major (AIRBOSS の
+    "F" / "SLO")、帯との間で minor ("(F)" / "(SLO)")。
+    """
+    reading = _groove_aoa(analysis, settings)
+    if reading is None:
+        return None
+    median, method, count = reading
+    window_s = float(settings.get("aoa_window_s", 15.0))
+    exclude_s = float(settings.get("aoa_exclude_s", 1.0))
+    verdict = aoa_verdict(median, band)
+    if verdict == "on speed":
+        return []
+    fast = verdict in ("fast", "slightly fast")
+    cfg = fast_cfg if fast else slow_cfg
+    severity = (
+        str(cfg.get("severity", "major")) if verdict in ("fast", "slow") else "minor"
+    )
+    return [
+        LsoFactor(
+            "FAST" if fast else "SLOW",
+            severity,
+            {
+                "median_aoa_deg": round(median, 2),
+                "verdict": verdict,
+                "method": method,
+                "band": band.name,
+                "on_speed_deg": band.on_speed,
+                "on_speed_min_deg": band.on_speed_min,
+                "on_speed_max_deg": band.on_speed_max,
+                "fast_deg": band.fast,
+                "slow_deg": band.slow,
+                "source": band.source,
+                "samples": count,
+                "window_s": window_s,
+                "exclude_s": exclude_s,
+                "description": cfg.get("description", ""),
+                "details": cfg.get("details", ""),
+            },
+        )
+    ]
+
+
 def _detect_factors(
     analysis: ApproachAnalysis,
     settings: dict[str, Any],
+    aoa_band: AoaBand | None = None,
 ) -> list[LsoFactor]:
     factors: list[LsoFactor] = []
     factor_cfg = settings["factors"]
@@ -133,6 +203,17 @@ def _detect_factors(
     )
     fast_cfg = factor_cfg.get("FAST", {})
     slow_cfg = factor_cfg.get("SLOW", {})
+    # 機体別の迎角の帯がある機種は、FAST / SLOW を迎角で判定する。LSO の
+    # 言う速い・遅いは迎角のことで、その迎角で何 kt になるかは重量次第。
+    # 測れなかったとき (姿勢の無い古い記録など) だけ速度比に戻る。
+    aoa_factors = (
+        _aoa_speed_factors(analysis, settings, aoa_band, fast_cfg, slow_cfg)
+        if aoa_band is not None
+        else None
+    )
+    if aoa_factors is not None:
+        factors.extend(aoa_factors)
+        ratio = None
     if ratio is not None and fast_cfg.get("speed_ratio") is not None:
         threshold = float(fast_cfg["speed_ratio"])
         if ratio > threshold:
@@ -331,7 +412,8 @@ def grade_carrier_approach(
     # 荷重倍数・旋回率の系列を軌跡から付ける (グラフ・CSV とブレイクの G 用。
     # LSO の判定には使っていない)。
     kinematics = annotate_kinematics(analysis)
-    factors = _detect_factors(analysis, settings)
+    aoa_band = aoa_band_for(analysis.airframe, config.aoa_bands)
+    factors = _detect_factors(analysis, settings, aoa_band)
     majors = [f for f in factors if f.severity == "major"]
 
     # 講評は陸上と同じく日本語。グレードの一文を先に置き、パターン
@@ -434,6 +516,20 @@ def grade_carrier_approach(
             pattern.approach_pattern if pattern is not None else analysis.approach_pattern
         ),
     }
+    # グルーブの迎角 (機体別の帯がある機種だけ)。FAST / SLOW が出なかった
+    # パスでも、オンスピードだったことを数字で残す (グラフの帯もここから)。
+    if aoa_band is not None:
+        reading = _groove_aoa(analysis, settings)
+        metrics.update(
+            {
+                "aoa_band": aoa_band.name,
+                "aoa_on_speed_min_deg": aoa_band.on_speed_min,
+                "aoa_on_speed_max_deg": aoa_band.on_speed_max,
+                "aoa_median_deg": round(reading[0], 2) if reading else None,
+                "aoa_verdict": aoa_verdict(reading[0], aoa_band) if reading else None,
+                "aoa_method": reading[1] if reading else None,
+            }
+        )
     if pattern is not None:
         # 接地の沈下はパターンではなくパスの事実なので、接頭辞なしで出す。
         for key in (
