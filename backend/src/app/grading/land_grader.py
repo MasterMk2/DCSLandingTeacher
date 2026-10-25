@@ -1244,13 +1244,18 @@ def _aim_point_comment(gs_error: "GlideslopeError | None") -> str | None:
     source = {"ils": "、DCS の ILS", "default": "、既定値"}.get(gs_error.reference_aim_source or "", "")
     aim = gs_error.aim_point_from_threshold_m
     height = gs_error.threshold_crossing_height_m
-    if aim < 0:
+    # Decide the wording on the rounded metre, not the raw float: a line aimed
+    # at the threshold itself fits to -1e-12 m on one platform and +1e-12 on
+    # another, and "0 m before the threshold" is not what either means.
+    if round(aim) < 0:
         # The line reaches the runway's height before the runway: a negative
         # crossing height is true but reads as nonsense, so say where instead.
         detail = f"延長線は閾値の {-aim:.0f} m 手前で滑走路面の高さに達する"
     else:
-        crossing = f"、閾値通過高 {height * M_TO_FT:.0f} ft" if height is not None else ""
-        detail = f"閾値 +{aim:.0f} m{crossing}"
+        crossing = (
+            f"、閾値通過高 {max(0.0, height) * M_TO_FT:.0f} ft" if height is not None else ""
+        )
+        detail = f"閾値 +{max(0.0, aim):.0f} m{crossing}"
     return (
         f"狙点は基準点（閾値 +{gs_error.reference_aim_point_m:.0f} m{source}）より "
         f"{abs(offset):.0f} m {where}だった（{detail}）"
