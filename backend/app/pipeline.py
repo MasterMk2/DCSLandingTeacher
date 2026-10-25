@@ -22,7 +22,11 @@ from app.grading.carriers import (
     CarrierGeometryBook,
 )
 from app.grading.config import GradingConfig
-from app.grading.deviations import ApproachAnalysis, build_approach_analysis
+from app.grading.deviations import (
+    ApproachAnalysis,
+    build_approach_analysis,
+    reanchor_runway_reference,
+)
 from app.grading.land_grader import LandGradeResult, grade_land_landing
 from app.grading.lso_grader import LsoGradeResult, grade_carrier_approach
 from app.grading.pattern import effective_approach_pattern
@@ -79,7 +83,16 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
 # ロールアウト (ファイナル起点) を、フレアに入ってから始まった横修正と
 # 3 秒未満の逸脱では切らないようにした (pattern._rollout_index)。どちらも
 # 保存済みのサンプルから計算するので、再採点で既存の着陸に反映される。
-GRADING_VERSION = "8"
+# 9 (2026-10-25): 陸上のグライドスロープを「角度」と「狙点」に分けて測る。
+# 採点はファイナルに当てた直線の角度誤差とばらつき (滑走路の有無で同じ
+# 測り方)、狙点 (直線が滑走路面に達する点の閾値からの距離・閾値通過高) は
+# 基準点と並べて講評に出す。基準点は DCS の ILS グライドパスが滑走路に
+# 達する点 (config/runways の glidepath_intercept_m、Beacons.lua から) で、
+# ILS の無い方向は既定の 300 m。それまでの「基準点へのサンプルごとの角度の
+# 平均」は、3.0° で飛んでも狙点が基準点と違えば閾値際で 1° 超の誤差になり、
+# 本番 265 件中 64 件で飛んだ角度と符号が逆だった。評価窓は閾値か 50 ft の
+# 早い方まで。再採点は基準点をシードから引き直してから偏差を作り直す。
+GRADING_VERSION = "9"
 
 
 def _row_approach_pattern(
@@ -341,14 +354,22 @@ class LandingPipeline:
 
     async def _resolve_runway(self, event: LandingEvent):
         """Real runway geometry for a land landing (``None`` when unknown)."""
-        if event.kind != "land" or self._runway_provider is None:
+        if event.kind != "land":
+            return None
+        return await self._resolve_runway_at(
+            event.touchdown.latitude,
+            event.touchdown.longitude,
+            event.touchdown.heading,
+        )
+
+    async def _resolve_runway_at(
+        self, latitude: float | None, longitude: float | None, heading: float | None
+    ):
+        """The runway a touchdown at this position belongs to, or ``None``."""
+        if self._runway_provider is None or latitude is None or longitude is None:
             return None
         try:
-            return await self._runway_provider.resolve(
-                event.touchdown.latitude,
-                event.touchdown.longitude,
-                event.touchdown.heading,
-            )
+            return await self._runway_provider.resolve(latitude, longitude, heading)
         except Exception:
             logger.warning("runway lookup failed", exc_info=True)
             return None
@@ -485,6 +506,16 @@ class LandingPipeline:
         if analysis.airframe is None:
             analysis.airframe = await self._airframe_of(landing)
         if landing.kind != "carrier":
+            # 基準点 (DCS の ILS の GPI か既定の 300 m) もシードから引き直す。
+            # 保存済みのサンプルは基準点からの距離と偏差で持っているので、
+            # シードが ILS を得た後に再採点しても、ここで張り直さない限り
+            # 古い基準点のまま。閾値からの距離は基準点に依らず保存してある
+            # ので、そこから作り直せる (同じ滑走路に解決できたときだけ)。
+            runway = await self._resolve_runway_at(
+                landing.latitude, landing.longitude, landing.heading
+            )
+            if runway is not None:
+                reanchor_runway_reference(analysis, runway)
             # 基準スロープは設定から引き直す。保存済みの値を使い続けると
             # `overhead_glideslope_deg` を変えても既存の着陸に反映されず、
             # 「設定を変えて再採点」が効かない。

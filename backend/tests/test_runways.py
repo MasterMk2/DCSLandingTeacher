@@ -295,31 +295,117 @@ def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> N
     assert anchored_mean < -1.0  # the bias this avoids
 
 
-def test_glidepath_with_a_runway_keeps_the_absolute_aiming_point_error() -> None:
-    """With a real threshold, a displaced approach must still score as one.
+def test_glidepath_with_a_runway_is_judged_by_its_angle_and_reports_where_it_was_aimed() -> None:
+    """A textbook 3.0 deg path aimed 170 m short of the reference origin.
 
-    The path-angle fit cannot see a parallel displacement, so it is only the
-    fallback; when the aiming point is known the per-sample error is the
-    stronger metric and has to stay in use.
+    Until 2026-10-25 this was scored as the mean of the per-sample angles to
+    the origin (-0.05 deg far out, -1.3 deg at the threshold: whatever the
+    window length made it) and worded "low". The angle the pilot flew is
+    3.0 deg; the anchor is a separate fact, reported against the threshold.
     """
     from app.grading.land_grader import _glideslope_errors
 
     slope = math.tan(math.radians(3.0))
+    short_m = 170.0
     window = [
         DeviationSample(
             time=float(i),
-            distance_to_go=d,
+            distance_to_go=distance,
             glideslope_deviation=None,
             centerline_deviation=0.0,
-            agl=d * slope - 40.0,  # correct angle, but 40 m low throughout
-            distance_to_threshold=d - 300.0,
+            agl=(distance - short_m) * slope,
+            distance_to_threshold=distance - 300.0,
         )
-        for i, d in enumerate(range(2600, 1000, -100))
+        for i, distance in enumerate(range(2600, 1000, -100))
     ]
     error = _glideslope_errors(window, 3.0)
-    assert error is not None and error.method == "aiming-point"
-    mean_signed = error.signed_error_deg
-    assert mean_signed < -0.8
+    assert error is not None and error.method == "path-angle"
+    assert error.signed_error_deg == pytest.approx(0.0, abs=0.02)
+    assert error.abs_error_deg == pytest.approx(0.0, abs=0.02)
+    assert error.mean_angle_deg == pytest.approx(3.0, abs=0.02)
+    # Aimed 170 m short of the 300 m origin = 130 m past the threshold, so
+    # the line crosses the threshold at 130 m * tan 3 deg.
+    assert error.reference_aim_point_m == pytest.approx(300.0)
+    assert error.aim_point_from_threshold_m == pytest.approx(130.0, abs=1.0)
+    assert error.threshold_crossing_height_m == pytest.approx(130.0 * slope, abs=0.1)
+    # The anchored per-sample reading still exists for the chart's needle,
+    # and still says "low" -- that is the bias the fit does not inherit.
+    anchored = [s.glideslope_error_deg(3.0) for s in window]
+    assert sum(v for v in anchored if v is not None) / len(anchored) < -0.2
+
+
+def test_glidepath_window_stops_at_fifty_feet_even_before_the_threshold() -> None:
+    """A steady 3 deg path aimed at the threshold itself flares from ~30 ft
+    on, before the threshold: those samples are the flare, not the glidepath,
+    and a line through them would read the approach as shallow."""
+    from app.grading.config import load_grading_config
+    from app.grading.deviations import ApproachAnalysis
+    from app.grading.land_grader import grade_land_landing
+    from tests.conftest import GRADING_YAML
+
+    slope = math.tan(math.radians(3.0))
+    touchdown_time = 100.0
+    samples = []
+    for i, distance in enumerate(range(2500, 300, -50)):
+        agl = (distance - 300.0) * slope  # line reaches the ground at the threshold
+        if agl < 9.0:
+            agl = 9.0  # levelled off: the flare
+        samples.append(
+            DeviationSample(
+                time=touchdown_time - 45.0 + i,
+                distance_to_go=float(distance),
+                glideslope_deviation=agl - distance * slope,
+                centerline_deviation=0.0,
+                speed=70.0,
+                agl=agl,
+                distance_to_threshold=distance - 300.0,
+            )
+        )
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=65.0,
+        touchdown_descent_rate_ms=1.0,
+        approach_pattern="straight_in",
+        airframe="F-16C_50",
+        geometry={
+            "kind": "runway",
+            "airbase": "Test",
+            "name": "36",
+            "aiming_point_m": 300.0,
+            "aiming_point_source": "default",
+        },
+        samples=samples,
+    )
+    result = grade_land_landing(analysis, load_grading_config(GRADING_YAML))
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    # Only samples at or above the 15 m floor were fitted: 3.0 deg, not a
+    # line bent flat by the level-off.
+    assert glideslope.evidence["mean_path_angle_deg"] == pytest.approx(3.0, abs=0.05)
+    assert glideslope.evidence["mean_abs_error_deg"] < 0.1
+    assert glideslope.evidence["aim_point_from_threshold_m"] == pytest.approx(0.0, abs=2.0)
+    assert glideslope.evidence["aim_point_source"] == "default"
+    assert "狙点は基準点（閾値 +300 m、既定値）より 300 m 手前だった" in result.comment
+    assert "閾値通過高 0 ft" in result.comment
+
+
+def test_glidepath_origin_is_the_ils_intercept_when_known_else_the_default() -> None:
+    plain = Runway("Batumi", "13", 41.615005, 41.590119, 10.0, 125.6, 2070.4, 60.0)
+    assert plain.glidepath_intercept_m is None
+    assert plain.glidepath_origin_m() == 300.0
+    assert plain.glidepath_source == "default"
+    assert "glidepath_intercept_m" not in plain.as_dict()
+
+    with_ils = Runway.from_dict({**plain.as_dict(), "glidepath_intercept_m": 155.2})
+    assert with_ils.glidepath_origin_m() == pytest.approx(155.2)
+    assert with_ils.glidepath_source == "ils"
+    # Seeds written before the field existed, and ones that carry a null,
+    # both read back as "no ILS".
+    assert Runway.from_dict({**plain.as_dict(), "glidepath_intercept_m": None}).glidepath_intercept_m is None
+    assert Runway.from_dict(with_ils.as_dict()) == with_ils
 
 
 def test_runways_are_rotated_from_the_dcs_grid_onto_true_north() -> None:

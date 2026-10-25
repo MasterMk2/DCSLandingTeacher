@@ -131,7 +131,8 @@
    "elevation_m": 30.01,
    "heading_deg": 66.7,
    "length_m": 2935.9,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 264.0
   },
   {
    "airbase": "Sochi",
@@ -221,7 +222,8 @@
    "elevation_m": 13.24,
    "heading_deg": 100.86,
    "length_m": 2192.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 202.3
   },
   {
    "airbase": "KOBULETI",
@@ -241,7 +243,8 @@
    "elevation_m": 18.01,
    "heading_deg": 75.93,
    "length_m": 2238.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 237.9
   },
   {
    "airbase": "KUTAISI",
@@ -261,7 +264,8 @@
    "elevation_m": 45.01,
    "heading_deg": 80.36,
    "length_m": 2395.8,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 256.7
   },
   {
    "airbase": "MinVody",
@@ -271,7 +275,8 @@
    "elevation_m": 320.01,
    "heading_deg": 302.47,
    "length_m": 3719.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 150.5
   },
   {
    "airbase": "MinVody",
@@ -281,7 +286,8 @@
    "elevation_m": 320.01,
    "heading_deg": 122.47,
    "length_m": 3719.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 146.1
   },
   {
    "airbase": "Nalchick",
@@ -301,7 +307,8 @@
    "elevation_m": 430.01,
    "heading_deg": 242.79,
    "length_m": 2026.8,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 167.5
   },
   {
    "airbase": "Mozdok",
@@ -341,7 +348,8 @@
    "elevation_m": 479.69,
    "heading_deg": 316.09,
    "length_m": 2315.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 206.0
   },
   {
    "airbase": "TbilisiMilitary",
@@ -371,7 +379,8 @@
    "elevation_m": 464.5,
    "heading_deg": 143.63,
    "length_m": 2361.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 251.8
   },
   {
    "airbase": "Vaziani",
@@ -381,7 +390,8 @@
    "elevation_m": 464.5,
    "heading_deg": 323.63,
    "length_m": 2361.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 259.5
   },
   {
    "airbase": "Beslan",
@@ -391,7 +401,8 @@
    "elevation_m": 524.01,
    "heading_deg": 101.59,
    "length_m": 2805.9,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 209.4
   },
   {
    "airbase": "Beslan",
@@ -421,7 +432,8 @@
    "elevation_m": 10.04,
    "heading_deg": 131.4,
    "length_m": 2056.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 154.7
   }
  ]
 }

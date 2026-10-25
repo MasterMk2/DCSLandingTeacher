@@ -13,12 +13,19 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-#: Standard aiming point: a 3-degree glidepath is flown to a point this far
-#: past the threshold, which is what puts the aircraft over the threshold at
-#: the usual ~15 m (50 ft) threshold crossing height. Anchoring the reference
-#: line here (rather than at the touchdown point, which moves with however
-#: long the pilot floats) is what makes the deviation comparable between
-#: landings.
+#: Fallback glidepath intercept point: where the reference glidepath meets
+#: the runway when DCS gives no ILS for the landing direction. The ICAO
+#: siting -- a 3-degree path through a point this far past the threshold --
+#: crosses the threshold at the usual ~15 m (50 ft). Anchoring the reference
+#: line at a fixed point on the runway (rather than at the touchdown point,
+#: which moves with however long the pilot floats) is what makes the
+#: deviation comparable between landings.
+#:
+#: Where DCS has an ILS, :attr:`Runway.glidepath_intercept_m` takes
+#: precedence: measured against the installed terrains (2026-10-25, 120 ILS
+#: glideslopes over six maps) DCS sites its glideslope antennas a median
+#: 228 m past the threshold (quartiles 171 / 298 m, Caucasus median 206 m),
+#: so an approach flown down DCS's own ILS reads "low" against this default.
 DEFAULT_AIMING_POINT_M = 300.0
 
 
@@ -36,6 +43,12 @@ class Runway:
     heading_deg: float
     length_m: float
     width_m: float
+    #: Metres past the threshold at which DCS's ILS glidepath for this
+    #: landing direction meets the runway (abeam the glideslope antenna, read
+    #: from the terrain's ``Beacons.lua`` by scripts/dlt_ils_from_beacons.py).
+    #: ``None`` when the direction has no ILS in DCS; the grader then anchors
+    #: the reference at :data:`DEFAULT_AIMING_POINT_M`.
+    glidepath_intercept_m: float | None = None
 
     def aiming_point(
         self, aiming_point_m: float = DEFAULT_AIMING_POINT_M
@@ -51,8 +64,20 @@ class Runway:
             0.0,
         )
 
+    def glidepath_origin_m(self, default_m: float = DEFAULT_AIMING_POINT_M) -> float:
+        """Metres past the threshold where the reference glidepath is anchored.
+
+        DCS's own ILS intercept when the seed carries one, else ``default_m``.
+        """
+        return self.glidepath_intercept_m if self.glidepath_intercept_m is not None else default_m
+
+    @property
+    def glidepath_source(self) -> str:
+        """``"ils"`` when the anchor is DCS's ILS glidepath, else ``"default"``."""
+        return "ils" if self.glidepath_intercept_m is not None else "default"
+
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "airbase": self.airbase,
             "name": self.name,
             "threshold_lat": round(self.threshold_lat, 7),
@@ -62,9 +87,13 @@ class Runway:
             "length_m": round(self.length_m, 1),
             "width_m": round(self.width_m, 1),
         }
+        if self.glidepath_intercept_m is not None:
+            data["glidepath_intercept_m"] = round(self.glidepath_intercept_m, 1)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Runway:
+        intercept = data.get("glidepath_intercept_m")
         return cls(
             airbase=data["airbase"],
             name=data["name"],
@@ -74,6 +103,7 @@ class Runway:
             heading_deg=float(data["heading_deg"]),
             length_m=float(data["length_m"]),
             width_m=float(data["width_m"]),
+            glidepath_intercept_m=float(intercept) if intercept is not None else None,
         )
 
 

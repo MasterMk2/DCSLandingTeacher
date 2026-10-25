@@ -17,7 +17,13 @@ from app.grading.land_grader import grade_land_landing
 from app.grading.lso_grader import grade_carrier_approach
 from app.pipeline import LandingPipeline
 from tests.conftest import GRADING_YAML
-from tests.helpers import DECK_ALTITUDE_M, make_approach_samples, make_carrier_state
+from tests.helpers import (
+    DECK_ALTITUDE_M,
+    LAT0,
+    LON0,
+    make_approach_samples,
+    make_carrier_state,
+)
 
 CONFIG = load_grading_config(GRADING_YAML)
 
@@ -292,16 +298,35 @@ def _analysis_with_gs_deviations(devs: list[float]):
     )
 
 
-def test_land_grader_says_low_when_the_approach_was_below_glideslope() -> None:
-    """「低め」が到達不能だった: 向きを絶対値平均から決めていたため、
-    実際には下を飛んでいた進入まで一律「高め」と言われていた。"""
+def test_a_parallel_offset_is_an_aim_point_not_a_slope_error() -> None:
+    """A path 30 m below the reference line everywhere is a 3.0 deg path aimed
+    572 m short of the reference origin (30 m / tan 3 deg). The angle is
+    right, so it is not scored as "low"; the comment says where the line met
+    the runway instead, which is what the pilot has to move."""
     result = grade_land_landing(_analysis_with_gs_deviations([-30.0] * 12), CONFIG)
-    assert "理想より低かった" in result.comment
-    assert "高かった" not in result.comment
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert glideslope.evidence["mean_signed_error_deg"] == pytest.approx(0.0, abs=0.02)
+    assert glideslope.evidence["mean_signed_deviation_m"] == pytest.approx(-30.0)
+    assert glideslope.evidence["aim_point_from_threshold_m"] == pytest.approx(300.0 - 572.0, abs=3.0)
+    assert glideslope.evidence["threshold_crossing_height_m"] == pytest.approx(-14.3, abs=0.3)
+    assert "狙点は基準点（閾値 +300 m）より 572 m 手前だった" in result.comment
+    # The line meets the runway's height 272 m before the threshold; a
+    # "-47 ft crossing height" is true but unreadable, so it says where.
+    assert "延長線は閾値の 272 m 手前で滑走路面の高さに達する" in result.comment
+    assert "低かった" not in result.comment and "高かった" not in result.comment
 
     high = grade_land_landing(_analysis_with_gs_deviations([30.0] * 12), CONFIG)
-    assert "理想より高かった" in high.comment
-    assert "低かった" not in high.comment
+    assert "より 572 m 奥だった（閾値 +872 m、閾値通過高 150 ft）" in high.comment
+    assert "高かった" not in high.comment
+
+
+def test_a_small_aim_point_offset_is_not_remarked_on() -> None:
+    """Within 100 m of the reference origin the anchor is inside the
+    uncertainty of the default origin itself, so the comment stays quiet."""
+    result = grade_land_landing(_analysis_with_gs_deviations([-4.0] * 12), CONFIG)
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert abs(glideslope.evidence["aim_point_from_threshold_m"] - 300.0) < 100.0
+    assert "狙点" not in result.comment
 
 
 def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() -> None:
@@ -2383,3 +2408,89 @@ def test_the_one_percent_ratio_is_left_out_below_a_hundred_knots() -> None:
     metrics = _break_of(circuit)
     assert metrics["break_one_percent_rule_g"] == pytest.approx(0.78, abs=0.02)
     assert metrics["break_max_g_to_one_percent"] is None
+
+
+# ---------------------------------------------------------------------------
+# Runway-anchored reference: DCS's ILS glidepath intercept, and re-anchoring
+# a stored analysis on a re-grade.
+# ---------------------------------------------------------------------------
+
+
+def _runway_behind_touchdown(threshold_short_m: float = 300.0, **fields):
+    """A runway whose threshold is ``threshold_short_m`` before the synthetic
+    touchdown point (the approach in :func:`_land_event` flies north onto
+    ``LAT0``/``LON0``), at the altitude the samples are built on."""
+    from app.detection.geometry import offset_position
+    from app.runways.models import Runway
+
+    lat, lon = offset_position(LAT0, LON0, 0.0, -threshold_short_m, 0.0)
+    return Runway("Test", "36", lat, lon, DECK_ALTITUDE_M, 0.0, 2500.0, 45.0, **fields)
+
+
+def test_runway_reference_is_anchored_at_the_default_aiming_point_without_an_ils() -> None:
+    analysis = build_approach_analysis(_land_event(), 3.0, runway=_runway_behind_touchdown())
+
+    assert analysis.geometry is not None
+    assert analysis.geometry["kind"] == "runway"
+    assert analysis.geometry["aiming_point_m"] == 300.0
+    assert analysis.geometry["aiming_point_source"] == "default"
+    assert "glidepath_intercept_m" not in analysis.geometry
+    inbound = [s for s in analysis.samples if s.time < -5]
+    for sample in inbound:
+        # The synthetic approach flies 3 deg onto the touchdown point, which
+        # is the 300 m aiming point here: on the reference line.
+        assert sample.glideslope_deviation == pytest.approx(0.0, abs=1.5)
+        assert sample.distance_to_threshold == pytest.approx(sample.distance_to_go - 300.0, abs=0.01)
+
+
+def test_runway_reference_is_anchored_at_dcs_ils_glidepath_when_the_seed_has_one() -> None:
+    """DCS puts this ILS 200 m past the threshold: 100 m short of where the
+    synthetic approach is aimed. The reference line now ends 100 m closer to
+    the aircraft, so every sample is 100 m nearer the origin and reads a
+    constant 100 m * tan 3 deg ABOVE the line. The threshold distances do not
+    depend on the anchor."""
+    import math
+
+    event = _land_event()
+    default = build_approach_analysis(event, 3.0, runway=_runway_behind_touchdown())
+    ils = build_approach_analysis(
+        event, 3.0, runway=_runway_behind_touchdown(glidepath_intercept_m=200.0)
+    )
+
+    assert ils.geometry is not None
+    assert ils.geometry["aiming_point_m"] == 200.0
+    assert ils.geometry["aiming_point_source"] == "ils"
+    assert ils.geometry["glidepath_intercept_m"] == 200.0
+    expected_offset = 100.0 * math.tan(math.radians(3.0))
+    for before, after in zip(default.samples, ils.samples):
+        if before.time >= -5:
+            continue
+        assert after.distance_to_go == pytest.approx(before.distance_to_go - 100.0, abs=0.01)
+        assert after.distance_to_threshold == pytest.approx(before.distance_to_threshold, abs=0.01)
+        assert after.glideslope_deviation == pytest.approx(expected_offset, abs=1.5)
+
+
+def test_reanchoring_a_stored_analysis_matches_building_it_on_the_new_anchor() -> None:
+    """A re-grade reads the stored track back; the seed may have gained its
+    ILS since. Rebuilding every origin-relative field from the stored
+    threshold distances must give exactly what a fresh build gives."""
+    from app.grading.deviations import reanchor_runway_reference
+
+    event = _land_event()
+    with_ils = _runway_behind_touchdown(glidepath_intercept_m=200.0)
+    stored = build_approach_analysis(event, 3.0, runway=_runway_behind_touchdown())
+    fresh = build_approach_analysis(event, 3.0, runway=with_ils)
+
+    assert reanchor_runway_reference(stored, with_ils) is True
+    assert stored.geometry == fresh.geometry
+    for moved, built in zip(stored.samples, fresh.samples):
+        assert moved.distance_to_go == pytest.approx(built.distance_to_go, abs=1e-6)
+        assert moved.signed_distance_to_go == pytest.approx(built.signed_distance_to_go, abs=1e-6)
+        assert moved.glideslope_deviation == pytest.approx(built.glideslope_deviation, abs=1e-6)
+    # Idempotent, and silent about a runway that is not the stored one.
+    assert reanchor_runway_reference(stored, with_ils) is False
+    other = _runway_behind_touchdown(glidepath_intercept_m=150.0)
+    other = type(other)(**{**other.__dict__, "name": "18"})
+    before = [s.distance_to_go for s in stored.samples]
+    assert reanchor_runway_reference(stored, other) is False
+    assert [s.distance_to_go for s in stored.samples] == before

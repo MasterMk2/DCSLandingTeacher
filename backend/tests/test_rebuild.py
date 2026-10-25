@@ -24,7 +24,7 @@ from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import apply_config_overrides, load_grading_config
 from app.ingest import TrackIngestor
 from app.models.entities import DcsObject, Landing, Track
-from app.pipeline import LandingPipeline
+from app.pipeline import GRADING_VERSION, LandingPipeline
 from tests.case1 import fly_case1
 from tests.conftest import GRADING_YAML
 from tests.helpers import (
@@ -97,7 +97,9 @@ async def test_a_carrier_row_stored_with_60_s_gets_its_kissoff_back(session_fact
     assert m["pattern_entry"] == "initial"
     assert m["pattern_break_along_ship_m"] == pytest.approx(case.expect["kissoff_x"], abs=80.0)
     assert m["pattern_abeam_distance_m"] == pytest.approx(case.expect["abeam_m"], abs=30.0)
-    assert row.grading_version == "8"
+    # The rebuild stamps whatever version is current, not the one this test
+    # was written against: a bumped GRADING_VERSION must not fail it.
+    assert row.grading_version == GRADING_VERSION
     assert row.grade == "OK"
     assert "キスオフ" in row.comment
 

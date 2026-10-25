@@ -21,7 +21,8 @@
    "elevation_m": 17.0,
    "heading_deg": 53.45,
    "length_m": 2489.4,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 234.2
   },
   {
    "airbase": "Beirut-Rafic Hariri",
@@ -41,7 +42,8 @@
    "elevation_m": 12.0,
    "heading_deg": 166.99,
    "length_m": 2888.3,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 231.4
   },
   {
    "airbase": "Beirut-Rafic Hariri",
@@ -81,7 +83,8 @@
    "elevation_m": 12.0,
    "heading_deg": 32.76,
    "length_m": 2169.4,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 171.9
   },
   {
    "airbase": "Damascus",
@@ -101,7 +104,8 @@
    "elevation_m": 612.0,
    "heading_deg": 228.5,
    "length_m": 3480.9,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 371.8
   },
   {
    "airbase": "Damascus",
@@ -111,7 +115,8 @@
    "elevation_m": 612.0,
    "heading_deg": 48.49,
    "length_m": 3480.8,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 262.2
   },
   {
    "airbase": "Damascus",
@@ -161,7 +166,8 @@
    "elevation_m": 699.2,
    "heading_deg": 285.14,
    "length_m": 2888.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 232.9
   },
   {
    "airbase": "Hatay",
@@ -181,7 +187,8 @@
    "elevation_m": 69.48,
    "heading_deg": 42.58,
    "length_m": 2758.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 203.0
   },
   {
    "airbase": "Jirah",
@@ -231,7 +238,8 @@
    "elevation_m": 28.22,
    "heading_deg": 176.81,
    "length_m": 2005.3,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 176.9
   },
   {
    "airbase": "Bassel Al-Assad",
@@ -431,7 +439,8 @@
    "elevation_m": 11.1,
    "heading_deg": 81.63,
    "length_m": 2085.6,
-   "width_m": 45.0
+   "width_m": 45.0,
+   "glidepath_intercept_m": 208.4
   },
   {
    "airbase": "Gazipasa",
@@ -641,7 +650,8 @@
    "elevation_m": 823.95,
    "heading_deg": 41.93,
    "length_m": 3756.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 169.0
   },
   {
    "airbase": "Tal Siman",
@@ -851,7 +861,8 @@
    "elevation_m": 3.0,
    "heading_deg": 211.34,
    "length_m": 3417.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 303.1
   },
   {
    "airbase": "Chukurova",
@@ -861,7 +872,8 @@
    "elevation_m": 3.0,
    "heading_deg": 31.34,
    "length_m": 3417.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 275.8
   },
   {
    "airbase": "Teyman",
@@ -891,7 +903,8 @@
    "elevation_m": 673.81,
    "heading_deg": 342.62,
    "length_m": 3491.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 272.2
   },
   {
    "airbase": "Diyarbakir",
@@ -901,7 +914,8 @@
    "elevation_m": 673.81,
    "heading_deg": 162.62,
    "length_m": 3491.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 73.2
   },
   {
    "airbase": "Diyarbakir",
@@ -951,7 +965,8 @@
    "elevation_m": 1032.39,
    "heading_deg": 16.67,
    "length_m": 2919.3,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 283.2
   },
   {
    "airbase": "Konya",
@@ -1001,7 +1016,8 @@
    "elevation_m": 26.45,
    "heading_deg": 301.74,
    "length_m": 2582.3,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 303.4
   },
   {
    "airbase": "Ben Gurion",
@@ -1011,7 +1027,8 @@
    "elevation_m": 26.45,
    "heading_deg": 208.64,
    "length_m": 2588.5,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 199.7
   },
   {
    "airbase": "Ben Gurion",
@@ -1031,7 +1048,8 @@
    "elevation_m": 26.45,
    "heading_deg": 259.83,
    "length_m": 2687.2,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 576.5
   },
   {
    "airbase": "Ben Gurion",
@@ -1551,7 +1569,8 @@
    "elevation_m": 47.78,
    "heading_deg": 52.72,
    "length_m": 2940.5,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 195.5
   },
   {
    "airbase": "Incirlik",
@@ -1561,7 +1580,8 @@
    "elevation_m": 47.78,
    "heading_deg": 232.72,
    "length_m": 2940.5,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 284.9
   },
   {
    "airbase": "King Hussein Air College",
@@ -1611,7 +1631,8 @@
    "elevation_m": 40.72,
    "heading_deg": 324.68,
    "length_m": 2320.3,
-   "width_m": 45.0
+   "width_m": 45.0,
+   "glidepath_intercept_m": 173.8
   },
   {
    "airbase": "Ramat David",
@@ -1681,7 +1702,8 @@
    "elevation_m": 20.98,
    "heading_deg": 287.73,
    "length_m": 2509.7,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 191.5
   },
   {
    "airbase": "Paphos",
@@ -1701,7 +1723,8 @@
    "elevation_m": 26.35,
    "heading_deg": 290.33,
    "length_m": 2553.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 249.3
   },
   {
    "airbase": "Larnaca",
@@ -1721,7 +1744,8 @@
    "elevation_m": 5.0,
    "heading_deg": 224.98,
    "length_m": 2435.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 107.0
   },
   {
    "airbase": "H3",
@@ -1841,7 +1865,8 @@
    "elevation_m": 660.0,
    "heading_deg": 310.96,
    "length_m": 2838.9,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 199.7
   },
   {
    "airbase": "King Abdullah II",
@@ -1851,7 +1876,8 @@
    "elevation_m": 700.0,
    "heading_deg": 310.41,
    "length_m": 2146.0,
-   "width_m": 45.0
+   "width_m": 45.0,
+   "glidepath_intercept_m": 352.5
   },
   {
    "airbase": "King Abdullah II",
@@ -1891,7 +1917,8 @@
    "elevation_m": 748.25,
    "heading_deg": 244.1,
    "length_m": 3171.1,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 271.2
   },
   {
    "airbase": "Marka",
@@ -2021,7 +2048,8 @@
    "elevation_m": 33.5,
    "heading_deg": 54.37,
    "length_m": 2286.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 168.0
   },
   {
    "airbase": "Hatzor",

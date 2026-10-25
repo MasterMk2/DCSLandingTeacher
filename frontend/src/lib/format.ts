@@ -91,6 +91,11 @@ export function formatMetric(key: string, value: unknown): { label: string; text
   }
   if (key.endsWith("_m")) {
     const stem = key.slice(0, -"_m".length);
+    // 狙点・基準点は滑走路上の位置なので、講評と同じくメートルで述べる
+    // (閾値 +129 m)。ft にすると滑走路の標示や ILS の位置と比べられない。
+    if (/aim_point|aim_offset/.test(stem)) {
+      return { label: metricLabel(key, stem), text: `${value >= 0 ? "+" : "-"}${Math.abs(Math.round(value))} m` };
+    }
     // パターンの離隔・ブレイク開始位置・グルーブ開始距離は海里で述べる:
     // 1.5 nm を 9000 ft と言われても飛んでいる側の感覚と結びつかない。
     // ただし高度と横ずれは ft ("abeam_altitude" は abeam を含むが高度)。
@@ -236,7 +241,7 @@ const FACTOR_DESCRIPTIONS: Record<string, string> = {
   // 陸上飛行場の採点コンポーネント (LSO ファクターと違い加点式)。
   descent_rate: "接地降下率（機体クラス別の許容幅で判定）",
   touchdown_speed: "接地速度（ファイナル区間の平均速度に対する比）",
-  glideslope: "グライドスロープ追従（ファイナル開始から閾値まで）",
+  glideslope: "ファイナルの経路角（ロールアウトから閾値 / 50 ft まで。傾きとばらつきを採点、狙点は表示のみ）",
   centerline: "センターライン保持（接地直前）",
   pattern: "オーバーヘッドパターン（旋回明けの軸ずれ / ダウンウィンドの方位・高度）",
   aoa: "進入迎角（機体別のオンスピード帯で判定。ファイナル開始からフレアの手前まで）",
@@ -284,6 +289,13 @@ const METRIC_VALUE_JA: Record<string, string> = {
   "aoa_method:recorded": "記録の AOA",
   "method:estimated": "軌跡と姿勢から推定（風は補正していない）",
   "method:recorded": "記録の AOA",
+  // グライドスロープの測り方と基準点。
+  "method:path-angle": "ファイナルに当てた直線の角度とばらつき（狙点は別に表示）",
+  "glideslope_method:path-angle": "ファイナルに当てた直線の角度とばらつき（狙点は別に表示）",
+  "aim_point_source:ils": "DCS の ILS グライドパスが滑走路面に達する点",
+  "aim_point_source:default": "既定値（閾値 +300 m。この方向に DCS の ILS が無い）",
+  "glidepath_aim_point_source:ils": "DCS の ILS グライドパスが滑走路面に達する点",
+  "glidepath_aim_point_source:default": "既定値（閾値 +300 m。この方向に DCS の ILS が無い）",
 };
 
 /** パターンのメトリクスは `pattern_` 付きで metrics に、素のキーで
@@ -321,7 +333,17 @@ const METRIC_LABELS: Record<string, string> = {
   crosswind_crab: "クラブ角（接地ヘディング − 対地トラック）",
   kinematics_rejected_samples: "位置の飛びとして G の算出から外したサンプル数",
   path_angle_spread: "直線からの浮き沈み",
-  aim_offset: "狙点のずれ（+ = 接地点より手前）",
+  aim_offset: "狙点のずれ（+ = 基準点より手前）",
+  // 滑走路が解決できたときの狙点: 飛んだ直線が滑走路面に達する点と、採点の
+  // 基準点 (DCS の ILS か既定値) の、閾値からの距離。
+  aim_point_from_threshold: "狙点（閾値から、+ = 奥）",
+  reference_aim_point: "基準点（閾値から）",
+  aim_point_source: "基準点の出どころ",
+  threshold_crossing_height: "閾値通過高（飛んだ直線）",
+  glidepath_aim_point_from_threshold: "狙点（閾値から、+ = 奥）",
+  glidepath_reference_aim_point: "基準点（閾値から）",
+  glidepath_aim_point_source: "基準点の出どころ",
+  glidepath_threshold_crossing_height: "閾値通過高（飛んだ直線）",
   glideslope: "基準スロープ",
   samples: "サンプル数",
   method: "測定方法",

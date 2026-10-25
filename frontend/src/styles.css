@@ -771,6 +771,13 @@ main {
   background: var(--leg-base);
 }
 
+/* The straight line fitted to the final: a measurement derived from the
+   actual-AGL series, so it takes the text colour rather than a series colour
+   of its own. */
+.legend-color.flown {
+  background: var(--text);
+}
+
 .metrics-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
