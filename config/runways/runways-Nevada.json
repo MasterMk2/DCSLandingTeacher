@@ -311,7 +311,8 @@
    "elevation_m": 952.94,
    "heading_deg": 146.05,
    "length_m": 1861.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 479.1
   },
   {
    "airbase": "Creech",
@@ -331,7 +332,8 @@
    "elevation_m": 1369.87,
    "heading_deg": 337.25,
    "length_m": 3360.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 158.1
   },
   {
    "airbase": "Groom Lake",
@@ -361,7 +363,8 @@
    "elevation_m": 661.38,
    "heading_deg": 269.96,
    "length_m": 3156.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 239.2
   },
   {
    "airbase": "McCarran International",
@@ -381,7 +384,8 @@
    "elevation_m": 661.38,
    "heading_deg": 269.97,
    "length_m": 3156.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 326.7
   },
   {
    "airbase": "Nellis",
@@ -401,7 +405,8 @@
    "elevation_m": 561.31,
    "heading_deg": 221.16,
    "length_m": 2877.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 254.6
   },
   {
    "airbase": "Nellis",
@@ -471,7 +476,8 @@
    "elevation_m": 679.28,
    "heading_deg": 134.5,
    "length_m": 1362.7,
-   "width_m": 20.0
+   "width_m": 20.0,
+   "glidepath_intercept_m": 356.6
   },
   {
    "airbase": "North Las Vegas",
@@ -511,7 +517,8 @@
    "elevation_m": 1686.81,
    "heading_deg": 337.28,
    "length_m": 3551.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 107.3
   },
   {
    "airbase": "Tonopah Test Range",
@@ -521,7 +528,8 @@
    "elevation_m": 1686.81,
    "heading_deg": 157.28,
    "length_m": 3551.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 160.7
   }
  ]
 }

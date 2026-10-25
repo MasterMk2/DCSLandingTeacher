@@ -67,6 +67,7 @@ Frontend (from frontend/):
 
 - Host grading/carrier files take priority. Missing files fall back with WARNING to the copies bundled outside the `/app/config` mount. Existing malformed files remain errors.
 - Host seed files take priority over bundled seeds for the same theatre. Exact seeds take priority over live caches; missing host maps remain available from bundled seeds. Cache files live in `/data/cache` on Compose's `runway_cache` volume.
+- The land glidepath reference is anchored where DCS's own ILS glidepath meets the runway (`glidepath_intercept_m` in the seeds, written by `scripts/dlt_ils_from_beacons.py` from a DCS install's `Mods/terrains/<Terrain>/Beacons.lua`); directions without an ILS use `DEFAULT_AIMING_POINT_M` (300 m). A live DCSServerBot sweep does not know the ILS, so re-run the script after re-capturing a map. The land grader scores the fitted path angle and its scatter; the aim point is reported, not scored (`docs/grading-references.md` §8).
 - Keep coordinate conversion independent of theatre names. DCS capture supplies geographic coordinates; live conversion derives meridian convergence from the returned geometry. Map-specific corrections would drift between capture, provider, and grading.
 - DCSServerBot sweeps call the live DCS hook on the simulation thread. Preserve `DLT_DCSSB_REQUEST_SPACING_MS`; lowering the spacing increases simulation-thread work and can affect server frame time.
 

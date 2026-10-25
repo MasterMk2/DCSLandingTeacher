@@ -41,7 +41,8 @@
    "elevation_m": 5.59,
    "heading_deg": 207.62,
    "length_m": 3557.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 367.9
   },
   {
    "airbase": "Bandar Lengeh",
@@ -71,7 +72,8 @@
    "elevation_m": 5.0,
    "heading_deg": 301.55,
    "length_m": 3349.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 132.3
   },
   {
    "airbase": "Dubai Intl",
@@ -81,7 +83,8 @@
    "elevation_m": 5.0,
    "heading_deg": 121.55,
    "length_m": 3349.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 227.8
   },
   {
    "airbase": "Dubai Intl",
@@ -91,7 +94,8 @@
    "elevation_m": 5.0,
    "heading_deg": 301.56,
    "length_m": 3349.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 278.1
   },
   {
    "airbase": "Dubai Intl",
@@ -101,7 +105,8 @@
    "elevation_m": 5.0,
    "heading_deg": 121.56,
    "length_m": 3349.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 111.6
   },
   {
    "airbase": "Al Maktoum Intl",
@@ -131,7 +136,8 @@
    "elevation_m": 18.52,
    "heading_deg": 292.53,
    "length_m": 2874.9,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 201.0
   },
   {
    "airbase": "Fujairah Intl",
@@ -181,7 +187,8 @@
    "elevation_m": 15.48,
    "heading_deg": 78.64,
    "length_m": 2222.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 219.6
   },
   {
    "airbase": "Khasab",
@@ -191,7 +198,8 @@
    "elevation_m": 14.49,
    "heading_deg": 193.61,
    "length_m": 2298.4,
-   "width_m": 20.0
+   "width_m": 20.0,
+   "glidepath_intercept_m": 211.8
   },
   {
    "airbase": "Khasab",
@@ -211,7 +219,8 @@
    "elevation_m": 58.15,
    "heading_deg": 269.31,
    "length_m": 3610.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 111.9
   },
   {
    "airbase": "Al Minhad AFB",
@@ -221,7 +230,8 @@
    "elevation_m": 58.15,
    "heading_deg": 89.31,
    "length_m": 3610.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 200.3
   },
   {
    "airbase": "Qeshm Island",
@@ -251,7 +261,8 @@
    "elevation_m": 30.0,
    "heading_deg": 302.5,
    "length_m": 3166.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 97.4
   },
   {
    "airbase": "Sharjah Intl",
@@ -261,7 +272,8 @@
    "elevation_m": 30.0,
    "heading_deg": 122.5,
    "length_m": 3166.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 189.4
   },
   {
    "airbase": "Sharjah Intl",
@@ -391,7 +403,8 @@
    "elevation_m": 1487.0,
    "heading_deg": 294.63,
    "length_m": 4033.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 225.2
   },
   {
    "airbase": "Shiraz Intl",
@@ -711,7 +724,8 @@
    "elevation_m": 16.0,
    "heading_deg": 127.09,
    "length_m": 3475.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 233.8
   },
   {
    "airbase": "Al Dhafra AFB",
@@ -721,7 +735,8 @@
    "elevation_m": 16.0,
    "heading_deg": 307.09,
    "length_m": 3475.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 407.3
   },
   {
    "airbase": "Al Dhafra AFB",
@@ -731,7 +746,8 @@
    "elevation_m": 16.0,
    "heading_deg": 127.1,
    "length_m": 3475.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 231.2
   },
   {
    "airbase": "Al Dhafra AFB",

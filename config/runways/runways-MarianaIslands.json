@@ -31,7 +31,8 @@
    "elevation_m": 65.0,
    "heading_deg": 67.64,
    "length_m": 2373.8,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 198.5
   },
   {
    "airbase": "Saipan Intl",
@@ -91,7 +92,8 @@
    "elevation_m": 77.79,
    "heading_deg": 64.82,
    "length_m": 2851.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 196.3
   },
   {
    "airbase": "Antonio B. Won Pat Intl",
@@ -111,7 +113,8 @@
    "elevation_m": 77.79,
    "heading_deg": 64.79,
    "length_m": 2851.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 382.2
   },
   {
    "airbase": "Antonio B. Won Pat Intl",
@@ -131,7 +134,8 @@
    "elevation_m": 166.31,
    "heading_deg": 65.75,
    "length_m": 3195.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 231.7
   },
   {
    "airbase": "Andersen AFB",
@@ -141,7 +145,8 @@
    "elevation_m": 166.31,
    "heading_deg": 245.75,
    "length_m": 3195.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 119.6
   },
   {
    "airbase": "Andersen AFB",
@@ -151,7 +156,8 @@
    "elevation_m": 166.31,
    "heading_deg": 65.75,
    "length_m": 3195.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 280.2
   },
   {
    "airbase": "Andersen AFB",
@@ -161,7 +167,8 @@
    "elevation_m": 166.31,
    "heading_deg": 245.75,
    "length_m": 3195.7,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 332.2
   },
   {
    "airbase": "Pagan Airstrip",

@@ -31,7 +31,8 @@
    "elevation_m": 5.65,
    "heading_deg": 270.18,
    "length_m": 2817.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 420.6
   },
   {
    "airbase": "Abu Suwayr",
@@ -51,7 +52,8 @@
    "elevation_m": 2.29,
    "heading_deg": 17.43,
    "length_m": 2837.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 255.6
   },
   {
    "airbase": "As Salihiyah",
@@ -91,7 +93,8 @@
    "elevation_m": 3.5,
    "heading_deg": 308.84,
    "length_m": 3022.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 309.8
   },
   {
    "airbase": "Al Ismailiyah",
@@ -111,7 +114,8 @@
    "elevation_m": 228.26,
    "heading_deg": 15.15,
    "length_m": 3458.9,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 254.8
   },
   {
    "airbase": "Wadi al Jandali",
@@ -191,7 +195,8 @@
    "elevation_m": 28.0,
    "heading_deg": 349.03,
    "length_m": 2797.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 202.2
   },
   {
    "airbase": "Bilbeis Air Base",
@@ -251,7 +256,8 @@
    "elevation_m": 120.0,
    "heading_deg": 49.07,
    "length_m": 3754.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 318.8
   },
   {
    "airbase": "Cairo International Airport",
@@ -261,7 +267,8 @@
    "elevation_m": 120.0,
    "heading_deg": 229.07,
    "length_m": 3754.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 297.9
   },
   {
    "airbase": "Cairo International Airport",
@@ -281,7 +288,8 @@
    "elevation_m": 120.0,
    "heading_deg": 229.06,
    "length_m": 3754.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 474.3
   },
   {
    "airbase": "Cairo International Airport",
@@ -291,7 +299,8 @@
    "elevation_m": 120.0,
    "heading_deg": 49.05,
    "length_m": 3752.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 532.2
   },
   {
    "airbase": "Cairo International Airport",
@@ -311,7 +320,8 @@
    "elevation_m": 134.03,
    "heading_deg": 345.83,
    "length_m": 3455.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 204.4
   },
   {
    "airbase": "Cairo West",
@@ -621,7 +631,8 @@
    "elevation_m": 26.0,
    "heading_deg": 322.99,
    "length_m": 3245.3,
-   "width_m": 20.0
+   "width_m": 20.0,
+   "glidepath_intercept_m": 269.2
   },
   {
    "airbase": "Borg El Arab International Airport",
@@ -641,7 +652,8 @@
    "elevation_m": 26.0,
    "heading_deg": 322.99,
    "length_m": 3245.3,
-   "width_m": 20.0
+   "width_m": 20.0,
+   "glidepath_intercept_m": 269.2
   },
   {
    "airbase": "Borg El Arab International Airport",
@@ -661,7 +673,8 @@
    "elevation_m": 26.0,
    "heading_deg": 323.0,
    "length_m": 3252.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 269.2
   },
   {
    "airbase": "Borg El Arab International Airport",
@@ -681,7 +694,8 @@
    "elevation_m": 26.0,
    "heading_deg": 322.98,
    "length_m": 3252.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 269.2
   },
   {
    "airbase": "El Minya",
@@ -801,7 +815,8 @@
    "elevation_m": 13.0,
    "heading_deg": 345.23,
    "length_m": 3868.1,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 385.5
   },
   {
    "airbase": "Jiyanklis Air Base",
@@ -891,7 +906,8 @@
    "elevation_m": 69.0,
    "heading_deg": 193.67,
    "length_m": 3457.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 201.3
   },
   {
    "airbase": "Ramon International Airport",
@@ -901,7 +917,8 @@
    "elevation_m": 69.0,
    "heading_deg": 13.67,
    "length_m": 3457.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 199.3
   },
   {
    "airbase": "Sharm El Sheikh International Airport",
@@ -911,7 +928,8 @@
    "elevation_m": 30.0,
    "heading_deg": 42.63,
    "length_m": 2936.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 224.5
   },
   {
    "airbase": "Sharm El Sheikh International Airport",
@@ -961,7 +979,8 @@
    "elevation_m": 300.0,
    "heading_deg": 13.78,
    "length_m": 3847.5,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 204.9
   },
   {
    "airbase": "Wadi Abu Rish",
@@ -1051,7 +1070,8 @@
    "elevation_m": 6.0,
    "heading_deg": 167.01,
    "length_m": 3159.6,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 276.0
   },
   {
    "airbase": "Rafic Hariri Intl",
@@ -1101,7 +1121,8 @@
    "elevation_m": 775.0,
    "heading_deg": 312.45,
    "length_m": 2827.9,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 252.0
   },
   {
    "airbase": "Tabuk",
@@ -1111,7 +1132,8 @@
    "elevation_m": 775.0,
    "heading_deg": 244.92,
    "length_m": 2823.7,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 99.0
   },
   {
    "airbase": "Tabuk",
@@ -1131,7 +1153,8 @@
    "elevation_m": 611.33,
    "heading_deg": 48.35,
    "length_m": 3377.5,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 294.0
   },
   {
    "airbase": "Damascus Intl",
@@ -1161,7 +1184,8 @@
    "elevation_m": 611.33,
    "heading_deg": 228.36,
    "length_m": 3377.5,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 216.9
   },
   {
    "airbase": "Mezzeh Air Base",
@@ -1301,7 +1325,8 @@
    "elevation_m": 709.0,
    "heading_deg": 41.68,
    "length_m": 3843.5,
-   "width_m": 65.0
+   "width_m": 65.0,
+   "glidepath_intercept_m": 213.3
   },
   {
    "airbase": "King Feisal Air Base",
@@ -1411,7 +1436,8 @@
    "elevation_m": 8.49,
    "heading_deg": 270.35,
    "length_m": 2811.3,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 176.6
   },
   {
    "airbase": "Fayed",
@@ -1521,7 +1547,8 @@
    "elevation_m": 47.1,
    "heading_deg": 226.69,
    "length_m": 2424.1,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 482.6
   },
   {
    "airbase": "Inshas Airbase",
@@ -1701,7 +1728,8 @@
    "elevation_m": 619.02,
    "heading_deg": 246.83,
    "length_m": 2530.1,
-   "width_m": 45.0
+   "width_m": 45.0,
+   "glidepath_intercept_m": 465.3
   },
   {
    "airbase": "Ramon Airbase",
@@ -1741,7 +1769,8 @@
    "elevation_m": 437.18,
    "heading_deg": 201.76,
    "length_m": 2461.0,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 217.5
   },
   {
    "airbase": "Ovda",
@@ -1791,7 +1820,8 @@
    "elevation_m": 30.61,
    "heading_deg": 54.25,
    "length_m": 2202.0,
-   "width_m": 50.0
+   "width_m": 50.0,
+   "glidepath_intercept_m": 87.3
   },
   {
    "airbase": "Hatzor",
@@ -1891,7 +1921,8 @@
    "elevation_m": 43.28,
    "heading_deg": 2.61,
    "length_m": 2210.8,
-   "width_m": 50.0
+   "width_m": 50.0,
+   "glidepath_intercept_m": 338.6
   },
   {
    "airbase": "Tel Nof",
@@ -1961,7 +1992,8 @@
    "elevation_m": 30.13,
    "heading_deg": 208.65,
    "length_m": 2575.4,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 178.8
   },
   {
    "airbase": "Ben-Gurion",
@@ -1971,7 +2003,8 @@
    "elevation_m": 30.13,
    "heading_deg": 79.78,
    "length_m": 2566.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 66.9
   },
   {
    "airbase": "Ben-Gurion",
@@ -1981,7 +2014,8 @@
    "elevation_m": 30.13,
    "heading_deg": 259.78,
    "length_m": 2566.2,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 85.5
   },
   {
    "airbase": "Ben-Gurion",
@@ -1991,7 +2025,8 @@
    "elevation_m": 30.13,
    "heading_deg": 301.51,
    "length_m": 2894.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 262.8
   },
   {
    "airbase": "Ben-Gurion",
@@ -2001,7 +2036,8 @@
    "elevation_m": 30.13,
    "heading_deg": 121.51,
    "length_m": 2894.6,
-   "width_m": 60.0
+   "width_m": 60.0,
+   "glidepath_intercept_m": 415.4
   },
   {
    "airbase": "St Catherine",

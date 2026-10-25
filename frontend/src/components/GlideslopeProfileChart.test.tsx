@@ -174,3 +174,100 @@ describe("rolloutDistanceNm", () => {
     expect(rolloutDistanceNm(t, { pattern_rollout_time: 10 })).toBeNull();
   });
 });
+
+describe("GlideslopeProfileChart, resolved runway", () => {
+  const TAN3 = Math.tan((3 * Math.PI) / 180);
+  /** A 3.0 deg path aimed 129 m past the threshold, on a runway whose ILS
+   *  glidepath meets it 206 m past the threshold: the production case. The
+   *  reference origin is 206 m past the threshold, so distance_to_go is the
+   *  threshold distance plus 206. */
+  const runway = (overrides: Record<string, unknown> = {}) => {
+    const samples = Array.from({ length: 20 }, (_, i) => {
+      const toThreshold = 2000 - i * 120; // 2000 m out .. 280 m past the threshold
+      const agl = Math.max(0, (toThreshold - 129) * TAN3);
+      return {
+        time: 80 + i,
+        distance_to_go: Math.max(0, toThreshold + 206),
+        signed_distance_to_go: toThreshold + 206,
+        distance_to_threshold: toThreshold,
+        glideslope_deviation: agl - Math.max(0, toThreshold + 206) * TAN3,
+        centerline_deviation: 0,
+        speed: 70,
+        aoa: null,
+        agl,
+      };
+    });
+    return {
+      kind: "land",
+      outcome: "full_stop",
+      glideslope_deg: 3.0,
+      course_deg: 76.0,
+      touchdown_time: 97.5,
+      geometry: {
+        kind: "runway",
+        airbase: "KOBULETI",
+        name: "07",
+        aiming_point_m: 206.0,
+        aiming_point_source: "ils",
+        glidepath_intercept_m: 206.0,
+        length_m: 2238.2,
+        width_m: 60.0,
+      },
+      samples,
+      ...overrides,
+    };
+  };
+  const metrics = { mean_path_angle_deg: 3.0, glidepath_aim_point_from_threshold_m: 129.0 };
+
+  it("measures the x axis to the threshold and names the reference point", () => {
+    const { container } = render(
+      <GlideslopeProfileChart track={runway() as never} metrics={metrics} />,
+    );
+    expect(container.textContent).toContain("滑走路末端（閾値）までの距離");
+    expect(container.textContent).toContain("基準点 閾値+206 m（DCS の ILS）");
+    expect(container.textContent).toContain("飛んだ直線（3.0°、閾値+129 m）");
+    expect(container.textContent).not.toContain("接地点までの距離");
+  });
+
+  it("brings the reference and the flown line down to where each meets the runway", async () => {
+    const { buildProfilePoints } = await import("./GlideslopeProfileChart");
+    const points = buildProfilePoints(runway() as never, metrics);
+    // x is the threshold distance: the first sample sits 2000 m out.
+    expect(points[0].distance_nm).toBeCloseTo(2000 / 1852, 3);
+    // The reference line is a 3 deg path through x = -206 m, so 80 m before
+    // the threshold it stands (80 + 206) m * tan 3 deg up; the flown line,
+    // aimed at +129 m, has already reached the ground there.
+    const near = points.find((p) => Math.abs(p.distance_nm - 80 / 1852) < 1e-6);
+    expect(near).toBeDefined();
+    expect(near!.ideal_ft).toBeCloseTo((286 * TAN3) / 0.3048, 1);
+    expect(near!.flown_ft).toBe(0);
+    // Far out the two are parallel: the gap is the aim-point difference
+    // (206 - (-129)... the reference origin sits at -206 m on this axis and
+    // the aim point at +129 m) times tan 3 deg, at every distance. That is
+    // what "aimed short, not flown low" looks like.
+    const farOut = points[0];
+    expect(farOut.ideal_ft! - farOut.flown_ft!).toBeCloseTo(((206 + 129) * TAN3) / 0.3048, 1);
+    // Samples past the touchdown time (the ground roll) are not plotted: the
+    // trace ends at the last sample before touchdown, 40 m onto the runway.
+    expect(points.length).toBe(18);
+    expect(points.at(-1)!.distance_nm).toBeCloseTo(-40 / 1852, 4);
+  });
+
+  it("keeps the touchdown frame for runway rows stored before threshold distances existed", () => {
+    const old = runway({
+      samples: runway().samples.map(({ distance_to_threshold: _d, ...s }) => s),
+    });
+    const { container } = render(<GlideslopeProfileChart track={old as never} />);
+    expect(container.textContent).toContain("接地点までの距離");
+    expect(container.textContent).not.toContain("飛んだ直線");
+  });
+
+  it("marks the roll-out in the same frame as the trace", async () => {
+    const { rolloutDistanceNm } = await import("./GlideslopeProfileChart");
+    // Sample at t=85 sits 1400 m from the threshold.
+    expect(rolloutDistanceNm(runway() as never, { pattern_rollout_time: 85 })).toBeCloseTo(
+      1400 / 1852,
+      3,
+    );
+  });
+});

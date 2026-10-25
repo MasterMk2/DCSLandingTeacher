@@ -17,7 +17,12 @@ Reference frames (Issue #3):
   AGL = height above the deck. What an LSO and the FLOLS see.
 - Carrier with geometry but no ship track (analyses built by hand): the
   same, frozen at the touchdown instant.
-- A resolved runway: the aiming point and the published heading.
+- A resolved runway: the glidepath intercept point on the runway -- where
+  DCS's own ILS glidepath meets it when the seed knows that, else the
+  default aiming point -- and the published heading. The reference line
+  is anchored at a fixed point on the runway, not at wherever the aircraft
+  happened to touch down; the land grader separately fits the path that was
+  actually flown and reports its angle and its own intercept.
 - Nothing resolved: the legacy approximation, referenced to the touchdown
   point itself.
 
@@ -680,13 +685,19 @@ def build_approach_analysis(
     deck, course = ship heading plus the angled-deck offset, AGL against the
     deck, slope from the geometry.
 
-    With ``runway`` (land landings) the origin is the runway's *aiming
-    point* -- ``aiming_point_m`` past the threshold -- and the course is the
-    published runway heading. This matters: anchoring at the touchdown point
-    instead makes the reference line move with however long the pilot
+    With ``runway`` (land landings) the origin is the runway's *glidepath
+    intercept point* -- where DCS's ILS glidepath meets the runway when the
+    seed carries it (:attr:`Runway.glidepath_intercept_m`), else
+    ``aiming_point_m`` past the threshold -- and the course is the published
+    runway heading. Two things matter here. Anchoring at the touchdown point
+    instead would make the reference line move with however long the pilot
     floats in the flare, which reads as a systematic "low" bias on every
     correctly flown approach (a 600 m float alone shifts the whole approach
-    down by 600 m * tan 3 deg = 31 m).
+    down by 600 m * tan 3 deg = 31 m). And anchoring at a point DCS does not
+    use reads as a constant offset on every approach flown down the game's
+    own ILS: DCS sites its glideslopes a median 228 m past the threshold, so
+    the 300 m default alone showed such an approach 4 m "low" the whole way
+    in (72 m * tan 3 deg), which is a 0.75 deg error at the threshold.
 
     Without either, the legacy approximation applies: everything is
     referenced to the touchdown point and a course estimated from it.
@@ -724,17 +735,21 @@ def build_approach_analysis(
         threshold_along = geometry.touchdown_target_m
     elif runway is not None:
         course = runway.heading_deg
-        ref_lat, ref_lon = runway.aiming_point(aiming_point_m)
+        origin_m = runway.glidepath_origin_m(aiming_point_m)
+        ref_lat, ref_lon = runway.aiming_point(origin_m)
         deck_elevation = runway.elevation_m
         slope_deg = glideslope_deg
         geometry_payload = {
             "kind": "runway",
-            "aiming_point_m": aiming_point_m,
+            # Metres from the threshold to the origin, whatever decided it;
+            # the plan / 3D views place the runway from this.
+            "aiming_point_m": origin_m,
+            "aiming_point_source": runway.glidepath_source,
             **runway.as_dict(),
         }
-        # The threshold sits ``aiming_point_m`` short of the origin, so a
-        # sample's distance-to-threshold is its distance-to-go minus that.
-        threshold_along = aiming_point_m
+        # The threshold sits ``origin_m`` short of the origin, so a sample's
+        # distance-to-threshold is its distance-to-go minus that.
+        threshold_along = origin_m
     else:
         course = estimate_course_deg(
             event.approach,
@@ -826,3 +841,55 @@ def build_approach_analysis(
             )
         )
     return analysis
+
+
+def reanchor_runway_reference(
+    analysis: ApproachAnalysis,
+    runway: Runway,
+    aiming_point_m: float = DEFAULT_AIMING_POINT_M,
+) -> bool:
+    """Move a stored runway analysis onto the runway's current glidepath origin.
+
+    A re-grade reads the deviations back from the stored approach track, so a
+    seed that gained (or corrected) its ILS intercept would otherwise never
+    reach the rows graded before it. ``distance_to_threshold`` is stored per
+    sample and does not depend on the origin, so every origin-relative field
+    can be rebuilt from it: the signed and the clamped distance-to-go, and the
+    deviation against the reference slope.
+
+    Only applies when ``runway`` is the same landing direction the analysis
+    was built against; a different resolution means the stored threshold
+    distances are in another frame and nothing here can be trusted. Returns
+    whether anything changed.
+    """
+    geometry = analysis.geometry
+    if not geometry or geometry.get("kind") != "runway":
+        return False
+    if geometry.get("airbase") != runway.airbase or geometry.get("name") != runway.name:
+        return False
+    origin_m = runway.glidepath_origin_m(aiming_point_m)
+    stored = geometry.get("aiming_point_m")
+    changed = False
+    if stored is None or abs(float(stored) - origin_m) > 1e-6:
+        tan_slope = math.tan(math.radians(analysis.glideslope_deg))
+        for sample in analysis.samples:
+            if sample.distance_to_threshold is None:
+                continue
+            signed = sample.distance_to_threshold + origin_m
+            sample.signed_distance_to_go = signed
+            sample.distance_to_go = max(0.0, signed)
+            if sample.agl is not None:
+                sample.glideslope_deviation = sample.agl - sample.distance_to_go * tan_slope
+        geometry["aiming_point_m"] = origin_m
+        changed = True
+    if geometry.get("aiming_point_source") != runway.glidepath_source:
+        geometry["aiming_point_source"] = runway.glidepath_source
+        changed = True
+    if runway.glidepath_intercept_m is not None:
+        if geometry.get("glidepath_intercept_m") != round(runway.glidepath_intercept_m, 1):
+            geometry["glidepath_intercept_m"] = round(runway.glidepath_intercept_m, 1)
+            changed = True
+    elif "glidepath_intercept_m" in geometry:
+        del geometry["glidepath_intercept_m"]
+        changed = True
+    return changed
