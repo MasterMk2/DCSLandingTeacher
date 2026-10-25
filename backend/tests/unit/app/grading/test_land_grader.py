@@ -72,22 +72,94 @@ def test_glidepath_without_a_runway_is_judged_by_the_angle_actually_flown() -> N
     assert sum(value for value in anchored if value is not None) / len(anchored) < -1.0
 
 
-def test_glidepath_with_a_runway_keeps_the_absolute_aiming_point_error() -> None:
+def test_glidepath_with_a_runway_is_judged_by_its_angle_and_reports_where_it_was_aimed() -> None:
+    """A textbook 3.0 deg path aimed 170 m short of the reference origin.
+
+    Until 2026-10-25 this was scored as the mean of the per-sample angles to
+    the origin (-0.05 deg far out, -1.3 deg at the threshold: whatever the
+    window length made it) and worded "low". The angle the pilot flew is
+    3.0 deg; the anchor is a separate fact, reported against the threshold.
+    """
     slope = math.tan(math.radians(3.0))
+    short_m = 170.0
     window = [
         DeviationSample(
             time=float(i),
             distance_to_go=distance,
             glideslope_deviation=None,
             centerline_deviation=0.0,
-            agl=distance * slope - 40.0,
+            agl=(distance - short_m) * slope,
             distance_to_threshold=distance - 300.0,
         )
         for i, distance in enumerate(range(2600, 1000, -100))
     ]
     error = _glideslope_errors(window, 3.0)
-    assert error is not None and error.method == "aiming-point"
-    assert error.signed_error_deg < -0.8
+    assert error is not None and error.method == "path-angle"
+    assert error.signed_error_deg == pytest.approx(0.0, abs=0.02)
+    assert error.abs_error_deg == pytest.approx(0.0, abs=0.02)
+    assert error.mean_angle_deg == pytest.approx(3.0, abs=0.02)
+    # Aimed 170 m short of the 300 m origin = 130 m past the threshold, so
+    # the line crosses the threshold at 130 m * tan 3 deg.
+    assert error.reference_aim_point_m == pytest.approx(300.0)
+    assert error.aim_point_from_threshold_m == pytest.approx(130.0, abs=1.0)
+    assert error.threshold_crossing_height_m == pytest.approx(130.0 * slope, abs=0.1)
+    # The anchored per-sample reading still exists for the chart's needle,
+    # and still says "low" -- that is the bias the fit does not inherit.
+    anchored = [s.glideslope_error_deg(3.0) for s in window]
+    assert sum(v for v in anchored if v is not None) / len(anchored) < -0.2
+
+
+def test_glidepath_window_stops_at_fifty_feet_even_before_the_threshold() -> None:
+    """A steady 3 deg path aimed at the threshold itself flares from ~30 ft
+    on, before the threshold: those samples are the flare, not the glidepath,
+    and a line through them would read the approach as shallow."""
+    slope = math.tan(math.radians(3.0))
+    touchdown_time = 100.0
+    samples = []
+    for i, distance in enumerate(range(2500, 300, -50)):
+        agl = (distance - 300.0) * slope  # line reaches the ground at the threshold
+        if agl < 9.0:
+            agl = 9.0  # levelled off: the flare
+        samples.append(
+            DeviationSample(
+                time=touchdown_time - 45.0 + i,
+                distance_to_go=float(distance),
+                glideslope_deviation=agl - distance * slope,
+                centerline_deviation=0.0,
+                speed=70.0,
+                agl=agl,
+                distance_to_threshold=distance - 300.0,
+            )
+        )
+    analysis = ApproachAnalysis(
+        kind="land",
+        outcome="full_stop",
+        glideslope_deg=3.0,
+        course_deg=0.0,
+        touchdown_time=touchdown_time,
+        touchdown_speed_ms=65.0,
+        touchdown_descent_rate_ms=1.0,
+        approach_pattern="straight_in",
+        airframe="F-16C_50",
+        geometry={
+            "kind": "runway",
+            "airbase": "Test",
+            "name": "36",
+            "aiming_point_m": 300.0,
+            "aiming_point_source": "default",
+        },
+        samples=samples,
+    )
+    result = grade_land_landing(analysis, CONFIG)
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    # Only samples at or above the 15 m floor were fitted: 3.0 deg, not a
+    # line bent flat by the level-off.
+    assert glideslope.evidence["mean_path_angle_deg"] == pytest.approx(3.0, abs=0.05)
+    assert glideslope.evidence["mean_abs_error_deg"] < 0.1
+    assert glideslope.evidence["aim_point_from_threshold_m"] == pytest.approx(0.0, abs=2.0)
+    assert glideslope.evidence["aim_point_source"] == "default"
+    assert "狙点は基準点（閾値 +300 m、既定値）より 300 m 手前だった" in result.comment
+    assert "閾値通過高 0 ft" in result.comment
 
 
 def _land_event(**kwargs):
@@ -234,16 +306,35 @@ def test_land_grader_comment_states_deviations_in_feet() -> None:
     assert f"{dev_m / 0.3048:.0f} ft" in result.comment
 
 
-def test_land_grader_says_low_when_the_approach_was_below_glideslope() -> None:
-    """「低め」が到達不能だった: 向きを絶対値平均から決めていたため、
-    実際には下を飛んでいた進入まで一律「高め」と言われていた。"""
+def test_a_parallel_offset_is_an_aim_point_not_a_slope_error() -> None:
+    """A path 30 m below the reference line everywhere is a 3.0 deg path aimed
+    572 m short of the reference origin (30 m / tan 3 deg). The angle is
+    right, so it is not scored as "low"; the comment says where the line met
+    the runway instead, which is what the pilot has to move."""
     result = grade_land_landing(analysis_with_gs_deviations([-30.0] * 12), CONFIG)
-    assert "理想より低かった" in result.comment
-    assert "高かった" not in result.comment
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert glideslope.evidence["mean_signed_error_deg"] == pytest.approx(0.0, abs=0.02)
+    assert glideslope.evidence["mean_signed_deviation_m"] == pytest.approx(-30.0)
+    assert glideslope.evidence["aim_point_from_threshold_m"] == pytest.approx(300.0 - 572.0, abs=3.0)
+    assert glideslope.evidence["threshold_crossing_height_m"] == pytest.approx(-14.3, abs=0.3)
+    assert "狙点は基準点（閾値 +300 m）より 572 m 手前だった" in result.comment
+    # The line meets the runway's height 272 m before the threshold; a
+    # "-47 ft crossing height" is true but unreadable, so it says where.
+    assert "延長線は閾値の 272 m 手前で滑走路面の高さに達する" in result.comment
+    assert "低かった" not in result.comment and "高かった" not in result.comment
 
     high = grade_land_landing(analysis_with_gs_deviations([30.0] * 12), CONFIG)
-    assert "理想より高かった" in high.comment
-    assert "低かった" not in high.comment
+    assert "より 572 m 奥だった（閾値 +872 m、閾値通過高 150 ft）" in high.comment
+    assert "高かった" not in high.comment
+
+
+def test_a_small_aim_point_offset_is_not_remarked_on() -> None:
+    """Within 100 m of the reference origin the anchor is inside the
+    uncertainty of the default origin itself, so the comment stays quiet."""
+    result = grade_land_landing(analysis_with_gs_deviations([-4.0] * 12), CONFIG)
+    glideslope = next(c for c in result.components if c.name == "glideslope")
+    assert abs(glideslope.evidence["aim_point_from_threshold_m"] - 300.0) < 100.0
+    assert "狙点" not in result.comment
 
 
 def test_land_grader_reports_wander_instead_of_a_direction_when_oscillating() -> None:

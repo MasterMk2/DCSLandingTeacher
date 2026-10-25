@@ -267,15 +267,18 @@ def _glideslope_window(
     settings: dict[str, Any],
     segments: ApproachSegments,
 ) -> list[DeviationSample]:
-    """Samples to judge the glidepath on: the approach up to the threshold.
+    """Samples to judge the glidepath on: the approach down to the flare.
 
-    Past the threshold the aircraft is flaring, and being *above* a slope
-    anchored at the aiming point is then the correct thing to do -- grading
-    it against the slope would penalise a good landing. Touchdown quality is
-    already covered by the descent-rate component.
-
-    With a resolved runway the cut is the real threshold. Without one, an
-    AGL floor (about the usual threshold crossing height) approximates it.
+    In the flare the aircraft leaves the glidepath on purpose, and fitting a
+    line through it would read a good landing as a shallow, wandering
+    approach. Touchdown quality is already covered by the descent-rate
+    component. The flare is cut two ways, and the earlier cut wins: the
+    runway threshold when one is resolved, and an AGL floor at the usual
+    threshold crossing height (``glideslope_min_agl_m``, 50 ft) always. The
+    floor is not only the fallback for an unresolved runway: on this server
+    approaches flown at a steady 3 deg cross the threshold at a median 26 ft
+    (2026-10-25, 38 of 288 runway-resolved landings), i.e. the flare begins
+    before the threshold, and the threshold cut alone kept it in the window.
 
     The window runs from the start of final to the threshold, where "start
     of final" is the LATER of the roll-out out of the turn and the
@@ -312,79 +315,88 @@ def _glideslope_window(
     min_distance = float(settings.get("glideslope_min_distance_m", 200.0))
     candidates = [s for s in candidates if s.distance_to_go >= min_distance]
 
+    floor = float(settings.get("glideslope_min_agl_m", 15.0))
+    candidates = [s for s in candidates if s.agl is not None and s.agl >= floor]
     with_threshold = [s for s in candidates if s.distance_to_threshold is not None]
     if with_threshold:
         return [s for s in with_threshold if s.distance_to_threshold > 0.0]
-    floor = float(settings.get("glideslope_min_agl_m", 15.0))
-    return [s for s in candidates if s.agl is not None and s.agl >= floor]
+    return candidates
 
 
 @dataclass
 class GlideslopeError:
-    """Angular glidepath error over the graded window."""
+    """The glidepath actually flown over the graded window: its angle and its anchor.
 
-    #: Scored composite: how far off the reference glidepath, in degrees.
+    A glidepath has two independent parameters -- how steep it is and where
+    it meets the runway -- and the pilot controls them separately (the
+    velocity vector sets the angle, the aim point sets the anchor). The score
+    is about the angle and its steadiness; the anchor is reported next to the
+    reference's so the reader can see where the approach was aimed.
+    """
+
+    #: Scored composite: angle error and scatter combined, degrees.
     abs_error_deg: float
-    #: Signed: positive = steep / above. Drives the wording of the comment.
+    #: Signed angle error: flown path angle minus the reference. Positive =
+    #: steep. Drives the wording of the comment.
     signed_error_deg: float
     method: str
-    #: Mean of the per-sample path angles (path-angle method only).
+    #: Reference glidepath angle the error is against.
+    reference_deg: float | None = None
+    #: Path angle of the straight line fitted through the window.
     mean_angle_deg: float | None = None
-    #: Spread of the per-sample angles / errors about their mean.
+    #: RMS angular scatter of the samples about that line: how steady it was.
     spread_deg: float | None = None
-    #: Where the flown straight line would have reached the ground, relative
-    #: to the touchdown point: positive = short of it (path-angle only).
+    #: Where the fitted line meets the runway surface, metres SHORT (+) of the
+    #: reference origin (the touchdown point when no runway is resolved).
     aim_offset_m: float | None = None
+    #: With a resolved runway: metres past the threshold where the fitted
+    #: line meets the runway, the reference origin's own distance from the
+    #: threshold, and the fitted height over the threshold.
+    aim_point_from_threshold_m: float | None = None
+    reference_aim_point_m: float | None = None
+    threshold_crossing_height_m: float | None = None
+    #: Where the reference origin came from: ``"ils"`` (DCS's glideslope for
+    #: this runway) or ``"default"`` (the fixed aiming point).
+    reference_aim_source: str | None = None
 
 
 def _glideslope_errors(
-    window: list[DeviationSample], reference_slope_deg: float
+    window: list[DeviationSample],
+    reference_slope_deg: float,
+    reference_aim_source: str | None = None,
 ) -> GlideslopeError | None:
-    """Angular glidepath error over ``window``.
+    """The glidepath flown over ``window``: a straight line fitted to it.
 
-    Two cases, because the honest metric differs:
+    The error that is scored is the line's angle against the reference plus
+    the scatter about the line. Where the line meets the runway is reported
+    separately, never folded into the angle:
 
-    - With a resolved runway the reference is anchored at the real aiming
-      point, so each sample's angle to it is meaningful and the mean of the
-      per-sample errors measures how far off the published glidepath the
-      aircraft actually was.
+    - Until 2026-10-25 a resolved runway was judged by the mean of the
+      per-sample angles to the reference origin. That conflates the two
+      parameters: a textbook 3.0 deg path aimed 170 m short of the origin
+      reads -0.05 deg at 8 km and -1.3 deg at the threshold, so its "error"
+      was whatever the window length made it (-0.25 deg on a long straight-in,
+      -0.9 deg on a short overhead final), and it disagreed in sign with the
+      flown angle on 64 of 265 production landings. The pilot, who flew 3.0
+      deg by the velocity vector, saw a deviation they could not account for.
 
-    - Without one, the only anchor available is the touchdown point, which
-      sits wherever the aircraft happened to float to. But an ideal path to
-      that anchor is still a straight line THROUGH it, and a straight line
-      through the origin is exactly the locus of constant path angle. So
-      measure the per-sample path angle: its mean against the reference, and
-      its spread, which is what "stabilized" means.
+    - Without a runway the only anchor is the touchdown point, which sits
+      wherever the aircraft floated to, so the fit was always the only honest
+      reading there. Measuring the per-sample angle to that anchor was tried
+      and reverted: it IS the anchored measurement, and brings the float
+      bias straight back.
 
-      Measuring the per-sample angle to that anchor instead was tried and
-      reverted: it IS the anchored measurement, so it brings the float bias
-      straight back. The two readings are geometrically identical -- "flew a
-      constant angle aimed short, then floated" and "flattened out on the
-      way in" produce the same track, and no amount of maths on this data
-      separates them. What can be reported is where the flown line was aimed
-      (``aim_offset_m``); judging that is the resolved runway's job.
+    With a runway the line's intercept is converted into where it meets the
+    runway relative to the threshold (``aim_point_from_threshold_m``) and the
+    height it crosses the threshold at, next to the reference origin's own
+    distance, so "aimed short of the ILS glidepath" is stated as such
+    instead of as "low". Without one, only the offset from the touchdown
+    point can be given (``aim_offset_m``): "flew a constant angle aimed
+    short, then floated" and "flattened out on the way in" produce the same
+    track, and nothing in this data separates them.
     """
     if not window:
         return None
-
-    if any(s.distance_to_threshold is not None for s in window):
-        errors = [
-            e
-            for e in (s.glideslope_error_deg(reference_slope_deg) for s in window)
-            if e is not None
-        ]
-        if not errors:
-            return None
-        mean_error = sum(errors) / len(errors)
-        spread = math.sqrt(
-            sum((e - mean_error) ** 2 for e in errors) / len(errors)
-        )
-        return GlideslopeError(
-            abs_error_deg=sum(abs(e) for e in errors) / len(errors),
-            signed_error_deg=mean_error,
-            method="aiming-point",
-            spread_deg=spread,
-        )
 
     points = [
         (s.distance_to_go, s.agl)
@@ -415,19 +427,40 @@ def _glideslope_errors(
         math.degrees(math.atan((y - (slope * x + intercept)) / x)) for x, y in points
     ]
     scatter = math.sqrt(sum(a * a for a in residual_angles) / count)
-    # 飛んだ直線がどこを狙っていたか: 正 = 接地点より手前。フレアで浮いても
-    # 狙点を手前に取って寝かせても同じ値になる --- 同じ軌跡なので区別できない。
-    # 採点はせず値だけ出す (landing #1 は 489 m 手前狙いで、接地点基準の
-    # トレースが +144 → -54 ft と振れて見えるのはこれが理由)。
+    # 飛んだ直線がどこを狙っていたか: 正 = 基準点より手前。滑走路が解決
+    # できていなければ基準点は接地点で、フレアで浮いても狙点を手前に取って
+    # 寝かせても同じ値になる --- 同じ軌跡なので区別できない。採点はせず値
+    # だけ出す (landing #1 は 489 m 手前狙いで、接地点基準のトレースが
+    # +144 → -54 ft と振れて見えるのはこれが理由)。
     aim_offset = -intercept / slope if abs(slope) > 1e-9 else None
+    # 滑走路があれば、同じ直線を閾値からの距離に直す。基準点 (ILS の GPI か
+    # 既定の 300 m) の閾値からの距離は、どのサンプルでも
+    # distance_to_go - distance_to_threshold で一定。
+    aim_from_threshold = reference_aim = crossing_height = None
+    anchored = next(
+        (s for s in window if s.distance_to_threshold is not None), None
+    )
+    if (
+        anchored is not None
+        and anchored.distance_to_threshold is not None
+        and aim_offset is not None
+    ):
+        reference_aim = anchored.distance_to_go - anchored.distance_to_threshold
+        aim_from_threshold = reference_aim - aim_offset
+        crossing_height = slope * reference_aim + intercept
     # Trend and scatter are independent contributions to being off the slope.
     return GlideslopeError(
         abs_error_deg=math.hypot(trend_error, scatter),
         signed_error_deg=trend_error,
         method="path-angle",
+        reference_deg=reference_slope_deg,
         mean_angle_deg=trend_angle,
         spread_deg=scatter,
         aim_offset_m=aim_offset,
+        aim_point_from_threshold_m=aim_from_threshold,
+        reference_aim_point_m=reference_aim,
+        threshold_crossing_height_m=crossing_height,
+        reference_aim_source=reference_aim_source if reference_aim is not None else None,
     )
 
 
@@ -751,10 +784,19 @@ def grade_land_landing(
     # 絶対値と符号付きを分けて持つ: 絶対値は上下に振れた進入が相殺されて
     # 「完璧」にならないようにするため、符号付きは「高め / 低め」の向きを
     # 述べるため (絶対値平均は常に非負なので向きを判定できない)。
-    gs_error = _glideslope_errors(gs_window, analysis.glideslope_deg)
+    gs_error = _glideslope_errors(
+        gs_window,
+        analysis.glideslope_deg,
+        (analysis.geometry or {}).get("aiming_point_source"),
+    )
     mean_gs_err = gs_error.abs_error_deg if gs_error else None
     mean_signed_gs_err = gs_error.signed_error_deg if gs_error else None
     gs_method = gs_error.method if gs_error else "none"
+
+    def gs_value(attr: str, ndigits: int) -> float | None:
+        value = getattr(gs_error, attr, None) if gs_error else None
+        return round(value, ndigits) if value is not None else None
+
     # メートル値も参考として残す (UI の既存表示・過去データとの比較用)。
     gs_devs = [
         s.glideslope_deviation for s in gs_window if s.glideslope_deviation is not None
@@ -845,24 +887,20 @@ def grade_land_landing(
                     else None
                 ),
                 "glideslope_deg": analysis.glideslope_deg,
-                # 実際に飛んだ経路角 (接地点基準の測り方のときのみ)。
-                "mean_path_angle_deg": (
-                    round(gs_error.mean_angle_deg, 3)
-                    if gs_error and gs_error.mean_angle_deg is not None
-                    else None
-                ),
+                # 実際に飛んだ経路角 (ファイナルに当てた直線の傾き)。
+                "mean_path_angle_deg": gs_value("mean_angle_deg", 3),
                 # 直線からの浮き沈み。大きいほど不安定。
-                "path_angle_spread_deg": (
-                    round(gs_error.spread_deg, 3)
-                    if gs_error and gs_error.spread_deg is not None
-                    else None
-                ),
-                # 飛んだ直線が接地点の何 m 手前を狙っていたか (採点には未使用)。
-                "aim_offset_m": (
-                    round(gs_error.aim_offset_m, 1)
-                    if gs_error and gs_error.aim_offset_m is not None
-                    else None
-                ),
+                "path_angle_spread_deg": gs_value("spread_deg", 3),
+                # 飛んだ直線が基準点の何 m 手前で滑走路面に達するか (採点には
+                # 未使用)。滑走路が解決できていなければ基準点は接地点。
+                "aim_offset_m": gs_value("aim_offset_m", 1),
+                # 滑走路が解決できたときだけ: 飛んだ直線が滑走路面に達する点と
+                # 基準点 (DCS の ILS の GPI か既定の 300 m) の閾値からの距離、
+                # その直線の閾値通過高。角度は点数、狙点は講評で述べる。
+                "aim_point_from_threshold_m": gs_value("aim_point_from_threshold_m", 1),
+                "reference_aim_point_m": gs_value("reference_aim_point_m", 1),
+                "aim_point_source": (analysis.geometry or {}).get("aiming_point_source"),
+                "threshold_crossing_height_m": gs_value("threshold_crossing_height_m", 2),
                 "samples": len(gs_window),
                 "method": gs_method,
                 "reference": _reference_label(analysis),
@@ -1007,16 +1045,14 @@ def grade_land_landing(
         "mean_signed_glideslope_error_deg": (
             round(mean_signed_gs_err, 3) if mean_signed_gs_err is not None else None
         ),
-        "mean_path_angle_deg": (
-            round(gs_error.mean_angle_deg, 3)
-            if gs_error and gs_error.mean_angle_deg is not None
-            else None
-        ),
-        "path_angle_spread_deg": (
-            round(gs_error.spread_deg, 3)
-            if gs_error and gs_error.spread_deg is not None
-            else None
-        ),
+        "mean_path_angle_deg": gs_value("mean_angle_deg", 3),
+        "path_angle_spread_deg": gs_value("spread_deg", 3),
+        # 飛んだ直線が滑走路面に達する点 (閾値から) と、基準点の閾値からの
+        # 距離・出どころ、閾値通過高。滑走路が解決できたときだけ入る。
+        "glidepath_aim_point_from_threshold_m": gs_value("aim_point_from_threshold_m", 1),
+        "glidepath_reference_aim_point_m": gs_value("reference_aim_point_m", 1),
+        "glidepath_aim_point_source": (analysis.geometry or {}).get("aiming_point_source"),
+        "glidepath_threshold_crossing_height_m": gs_value("threshold_crossing_height_m", 2),
         "mean_glideslope_deviation_m": (
             round(mean_gs_dev, 2) if mean_gs_dev is not None else None
         ),
@@ -1181,6 +1217,46 @@ def _unscored_note(
     return "".join(notes)
 
 
+#: 狙点が基準点からこれ以上離れていれば講評で述べる。3° で 100 m は高さ
+#: 5.2 m (17 ft) の差で、閾値通過高の規定 50 ft に対して読み手が気にする
+#: 大きさ。これより近ければ、基準点そのものの不確かさ (ILS の無い滑走路は
+#: 既定の 300 m) に埋もれる。
+AIM_POINT_FLAG_M = 100.0
+
+
+def _aim_point_comment(gs_error: "GlideslopeError | None") -> str | None:
+    """飛んだ直線が滑走路面に達する点を、基準点との差で述べる一文。
+
+    滑走路が解決できたときだけ。角度の講評とは独立に出す: 3.0° のパスを
+    閾値の数字に向けて飛べば角度は満点で狙点だけが手前になり、それを
+    「低かった」と言うと角度を直させてしまう。
+    """
+    if (
+        gs_error is None
+        or gs_error.aim_point_from_threshold_m is None
+        or gs_error.reference_aim_point_m is None
+    ):
+        return None
+    offset = gs_error.aim_point_from_threshold_m - gs_error.reference_aim_point_m
+    if abs(offset) < AIM_POINT_FLAG_M:
+        return None
+    where = "手前" if offset < 0 else "奥"
+    source = {"ils": "、DCS の ILS", "default": "、既定値"}.get(gs_error.reference_aim_source or "", "")
+    aim = gs_error.aim_point_from_threshold_m
+    height = gs_error.threshold_crossing_height_m
+    if aim < 0:
+        # The line reaches the runway's height before the runway: a negative
+        # crossing height is true but reads as nonsense, so say where instead.
+        detail = f"延長線は閾値の {-aim:.0f} m 手前で滑走路面の高さに達する"
+    else:
+        crossing = f"、閾値通過高 {height * M_TO_FT:.0f} ft" if height is not None else ""
+        detail = f"閾値 +{aim:.0f} m{crossing}"
+    return (
+        f"狙点は基準点（閾値 +{gs_error.reference_aim_point_m:.0f} m{source}）より "
+        f"{abs(offset):.0f} m {where}だった（{detail}）"
+    )
+
+
 def _build_comment(
     grade: str | None,
     rate_label: str,
@@ -1211,41 +1287,41 @@ def _build_comment(
         parts.append(f"速度は{_SPEED_JA.get(speed_label, speed_label)}")
     if aoa is not None:
         parts.append(_aoa_comment(aoa))
-    gs_method = gs_error.method if gs_error is not None else "none"
     if mean_gs_err is not None and mean_signed_gs_err is not None:
+        angle = gs_error.mean_angle_deg if gs_error else None
+        reference = gs_error.reference_deg if gs_error else None
+        basis = f"基準 {reference:.1f}°" if reference is not None else "基準"
         if mean_gs_err <= gs_good_deg:
-            # 良好なものを「高め」「低め」と述べると、直すところが無い
-            # 相手に修正指示を出すことになる。
-            parts.append(
-                f"閾値までのグライドスロープは安定していた"
-                f"（平均誤差 {mean_gs_err:.2f}°）"
+            # 良好なものを「急」「浅い」と述べると、直すところが無い相手に
+            # 修正指示を出すことになる。角度そのものは確認用に添える。
+            detail = (
+                f"{angle:.1f}°、{basis}"
+                if angle is not None
+                else f"平均誤差 {mean_gs_err:.2f}°"
             )
+            parts.append(f"ファイナルの経路角は安定していた（{detail}）")
         elif abs(mean_signed_gs_err) < mean_gs_err / 2:
-            # ばらつきが支配的。この状態で「高め」「低め」と言い切ると、
-            # 実際にやるべき修正 (安定させること) を取り違えさせる。
+            # ばらつきが支配的。この状態で「急」「浅い」と言い切ると、実際に
+            # やるべき修正 (安定させること) を取り違えさせる。
             spread = gs_error.spread_deg if gs_error else None
             detail = (
                 f"±{spread:.2f}°" if spread is not None else f"平均誤差 {mean_gs_err:.2f}°"
             )
             parts.append(f"進入経路角が安定しなかった（{detail}）")
-        elif gs_method == "path-angle":
-            # 滑走路が解決できていないので基準は接地点。フレアで浮いた分だけ
-            # 経路角は浅く出るので、「低かった」と位置で言い切らず、実測の
-            # 平均経路角を数字で述べる。
+        else:
+            # 角度の話として述べる。「高い / 低い」は基準線に対する位置で、
+            # 基準点と違うところを狙えば 3.0° のパスでもそう読めてしまう。
+            # 狙点は次の一文で別に述べる (_aim_point_comment)。
             slope = "急だった" if mean_signed_gs_err > 0 else "浅かった"
-            angle = gs_error.mean_angle_deg if gs_error else None
             detail = (
-                f"{angle:.2f}°、接地点基準"
+                f"{angle:.2f}°、{basis}"
                 if angle is not None
-                else f"{abs(mean_signed_gs_err):.2f}° 差、接地点基準"
+                else f"{abs(mean_signed_gs_err):.2f}° 差"
             )
             parts.append(f"進入経路の傾きが理想より{slope}（{detail}）")
-        else:
-            direction = "高かった" if mean_signed_gs_err > 0 else "低かった"
-            parts.append(
-                f"閾値までのグライドスロープは理想より{direction}"
-                f"（平均 {abs(mean_signed_gs_err):.2f}°）"
-            )
+        aim_note = _aim_point_comment(gs_error)
+        if aim_note is not None:
+            parts.append(aim_note)
     if max_cl_dev is not None and max_cl_dev > CENTERLINE_DEVIATION_FLAG_M:
         parts.append(f"センターラインから最大 {max_cl_dev * M_TO_FT:.0f} ft ずれた")
     parts.extend(_pattern_comment_parts(pattern))

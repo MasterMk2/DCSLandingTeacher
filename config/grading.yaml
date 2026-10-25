@@ -26,9 +26,13 @@ geometry:
   # AFMAN 11-217 puts ILS glideslopes at 2.5-3.0 deg depending on siting,
   # and the overhead pattern itself is specified geometrically (roll out no
   # lower than 300 ft AGL, no closer than 1/4 mile) rather than as an angle.
-  # Measured on this server (2026-08-27, 4 overhead landings with a usable
-  # final): mean path angle median 2.72 deg, range 1.56-3.28. Too few
-  # samples to conclude; set this to 2.5 and re-grade if you want to try it.
+  # Measured on this server (2026-10-25, 192 overhead finals with a resolved
+  # runway; straight line fitted from the roll-out to the threshold / 50 ft):
+  # path angle median 3.93 deg, quartiles 3.11-5.21, F-16C 3.86 / F/A-18C
+  # 3.32 / F-14B 3.87. Straight-ins: median 2.84 deg (34). Whether the
+  # overhead final should be held to 3.0 is a choice; set this and re-grade
+  # to try another reference. (The earlier note here -- 2.72 deg from 4
+  # landings in 2026-08 -- is superseded by that sample.)
   overhead_glideslope_deg: null
   earth_radius_m: 6371000.0
 

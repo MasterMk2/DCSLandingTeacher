@@ -116,3 +116,19 @@ def test_runways_are_rotated_from_the_dcs_grid_onto_true_north() -> None:
     # The runway number still comes from DCS, not from the rotated heading:
     # runway designators are magnetic and are not ours to renumber.
     assert rotated[0].name == "06"
+
+
+def test_glidepath_origin_is_the_ils_intercept_when_known_else_the_default() -> None:
+    plain = _runways()[0]
+    assert plain.glidepath_intercept_m is None
+    assert plain.glidepath_origin_m() == 300.0
+    assert plain.glidepath_source == "default"
+    assert "glidepath_intercept_m" not in plain.as_dict()
+
+    with_ils = Runway.from_dict({**plain.as_dict(), "glidepath_intercept_m": 155.2})
+    assert with_ils.glidepath_origin_m() == pytest.approx(155.2)
+    assert with_ils.glidepath_source == "ils"
+    # Seeds written before the field existed, and ones that carry a null,
+    # both read back as "no ILS".
+    assert Runway.from_dict({**plain.as_dict(), "glidepath_intercept_m": None}).glidepath_intercept_m is None
+    assert Runway.from_dict(with_ils.as_dict()) == with_ils
