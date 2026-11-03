@@ -106,11 +106,11 @@ async def import_acmi_file(
     settings = request.app.state.settings
     max_bytes = settings.import_max_upload_mb * 1024 * 1024
 
-    # The Content-Length pre-check for Issue #29 lives in middleware
-    # (app.api.main._reject_oversized_uploads), because by the time this
-    # function runs FastAPI has already parsed the multipart body and spooled
-    # the upload to disk. _save_upload enforces the real limit while
-    # streaming, for clients that omit or forge Content-Length.
+    # The request-body limit for Issue #29 is enforced while the body arrives
+    # (app.api.upload_limit), because by the time this function runs FastAPI
+    # has already parsed the multipart body and spooled the upload to disk.
+    # _save_upload re-checks the file itself in case that middleware is not
+    # in front of this router.
     temp_path = await _save_upload(file, max_bytes)
 
     job = manager.create_job(filename)
