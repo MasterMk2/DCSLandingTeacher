@@ -21,6 +21,7 @@ from app.api.imports import router as import_router
 from app.api.notifier import LandingNotifier
 from app.api.routes import protected_router
 from app.api.routes import router as api_router
+from app.api.upload_limit import UploadSizeLimitMiddleware
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
@@ -268,33 +269,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    @app.middleware("http")
-    async def _reject_oversized_uploads(request: Request, call_next):
-        """Reject an over-limit upload before its body is read (Issue #29).
-
-        This has to be middleware. FastAPI reads and spools the *entire*
-        multipart body (``await request.form()`` in the route handler) before
-        the endpoint function or any of its dependencies run, so the
-        Content-Length test that used to sit at the top of ``import_acmi_file``
-        only fired once the multi-GB file was already written to the container
-        filesystem -- exactly the denial of service it was meant to stop.
-
-        Content-Length can be absent or forged, so this is a cheap early
-        rejection, not the limit itself: ``_save_upload`` still enforces the
-        cap while streaming.
-        """
-        if request.method == "POST" and request.url.path.rstrip("/").endswith("/import"):
-            declared = request.headers.get("content-length")
-            if declared is not None and declared.isdigit():
-                max_bytes = settings.import_max_upload_mb * 1024 * 1024
-                if int(declared) > max_bytes:
-                    return error_envelope(
-                        413,
-                        "UPLOAD_TOO_LARGE",
-                        f"upload exceeds the {settings.import_max_upload_mb} MB limit",
-                        {"max_upload_mb": settings.import_max_upload_mb},
-                    )
-        return await call_next(request)
+    # Upload size limit (Issue #29). It must run while the body is received:
+    # FastAPI parses and spools the whole multipart body before the endpoint
+    # and its auth dependency run. Added before CORS so CORS stays outermost
+    # and a cross-origin 413 still carries its headers.
+    app.add_middleware(UploadSizeLimitMiddleware, settings=settings)
 
     # CORS: only enabled when explicitly configured. The default (empty list)
     # is the single-container deployment where this app also serves the

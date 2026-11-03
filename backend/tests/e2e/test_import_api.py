@@ -250,6 +250,95 @@ async def test_import_rejects_oversized_upload_via_content_length(tmp_path) -> N
     assert response.status_code == 413
 
 
+_BOUNDARY = "dlt-test-boundary"
+_CHUNK = 64 * 1024
+
+
+class _ChunkedUpload:
+    """A multipart upload sent chunked (no Content-Length), counting what the
+    server actually pulled from it."""
+
+    def __init__(self, filename: str, payload: bytes) -> None:
+        self.parts = [
+            (
+                f"--{_BOUNDARY}\r\n"
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                "Content-Type: text/plain\r\n\r\n"
+            ).encode(),
+            *(payload[i : i + _CHUNK] for i in range(0, len(payload), _CHUNK)),
+            f"\r\n--{_BOUNDARY}--\r\n".encode(),
+        ]
+        self.total = sum(len(part) for part in self.parts)
+        self.sent = 0
+
+    async def stream(self):
+        for part in self.parts:
+            self.sent += len(part)
+            yield part
+
+    async def post(self, http: httpx2.AsyncClient, **headers: str) -> httpx2.Response:
+        return await http.post(
+            "/api/import",
+            content=self.stream(),
+            headers={"Content-Type": f"multipart/form-data; boundary={_BOUNDARY}", **headers},
+        )
+
+
+async def test_import_stops_reading_chunked_upload_at_the_limit(tmp_path) -> None:
+    """Issue #29: a chunked upload declares no Content-Length, so the early
+    check cannot see its size. The server must still stop reading at the
+    limit instead of spooling the whole body before answering 413."""
+    app = create_app(
+        make_api_settings(tmp_path, database_filename="import.db", import_max_upload_mb=1)
+    )
+    upload = _ChunkedUpload("big.acmi", b"x" * (8 * 1024 * 1024))
+    async with app.router.lifespan_context(app):
+        async with open_api_client(app) as http:
+            response = await upload.post(http)
+
+    assert upload.sent <= 1024 * 1024 + 2 * _CHUNK < upload.total
+    assert response.status_code == 413
+    assert response.json()["error"] == "UPLOAD_TOO_LARGE"
+
+
+async def test_import_limit_applies_before_authentication(tmp_path) -> None:
+    """Issue #29: FastAPI reads the multipart body before the auth dependency
+    runs, so without the cap an unauthenticated client could make the server
+    spool an unbounded chunked body before getting its 401."""
+    app = create_app(
+        make_api_settings(
+            tmp_path,
+            database_filename="import.db",
+            import_max_upload_mb=1,
+            auth_token="secret",
+        )
+    )
+    upload = _ChunkedUpload("big.acmi", b"x" * (8 * 1024 * 1024))
+    async with app.router.lifespan_context(app):
+        async with open_api_client(app) as http:
+            response = await upload.post(http)
+
+    assert upload.sent <= 1024 * 1024 + 2 * _CHUNK < upload.total
+    assert response.status_code == 413
+
+
+async def test_import_accepts_chunked_upload_within_the_limit(tmp_path) -> None:
+    """The cap must pass a chunked body under the limit through untouched."""
+    app = create_app(
+        make_api_settings(tmp_path, database_filename="import.db", import_max_upload_mb=1)
+    )
+    upload = _ChunkedUpload("session.acmi", _sample_acmi().encode())
+    async with app.router.lifespan_context(app):
+        async with open_api_client(app) as http:
+            response = await upload.post(http)
+            assert response.status_code == 202
+            job = await _wait_for_job(http, response.json()["id"])
+
+    assert upload.sent == upload.total
+    assert job["status"] == "completed"
+    assert job["landings_detected"] == 1
+
+
 async def test_list_and_get_import_jobs(tmp_path) -> None:
     app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):
