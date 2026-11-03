@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime
+from logging import getLogger
 from typing import Any
 
 from fastapi import (
@@ -51,6 +52,8 @@ from app.api.schemas import (
     TouchdownState,
 )
 from app.models.entities import DcsObject, Flight, ImportJobRow, Landing
+
+logger = getLogger(__name__)
 
 # No prefix here: the version prefix (/api/v1) and the legacy /api alias are
 # applied at include time in app.api.main (Issue #38).
@@ -137,7 +140,11 @@ async def _check_database(request: Request) -> dict:
         latency_ms = (time.monotonic() - start) * 1000
         return {"connected": True, "latency_ms": round(latency_ms, 1)}
     except Exception as exc:
-        return {"connected": False, "error": str(exc)}
+        # The driver's message can name the database host, port and user, and
+        # /health needs no token: the detail goes to the server log only. No
+        # traceback: Compose polls this every 2 s during an outage.
+        logger.warning("health check: database unavailable: %s: %s", type(exc).__name__, exc)
+        return {"connected": False, "error": "database unavailable"}
 
 
 # ---------------------------------------------------------------------------

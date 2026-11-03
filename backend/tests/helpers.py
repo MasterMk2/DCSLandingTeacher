@@ -58,6 +58,7 @@ class ApiSettingsOverrides(TypedDict, total=False):
     auth_token: str
     grading_config_path: str
     import_max_upload_mb: int
+    api_max_body_kb: int
 
 
 class AircraftTrack(TypedDict):

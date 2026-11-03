@@ -16,12 +16,12 @@ from sqlalchemy import update
 
 from app.acmi.multi_source import MultiSourceAcmiManager
 from app.acmi.stream import AcmiStreamClient
+from app.api.body_limit import BodySizeLimitMiddleware
 from app.api.errors import AppError, error_envelope
 from app.api.imports import router as import_router
 from app.api.notifier import LandingNotifier
 from app.api.routes import protected_router
 from app.api.routes import router as api_router
-from app.api.upload_limit import UploadSizeLimitMiddleware
 from app.config import Settings
 from app.grading.carriers import load_carrier_geometry_book
 from app.grading.config import load_grading_config
@@ -269,11 +269,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Upload size limit (Issue #29). It must run while the body is received:
-    # FastAPI parses and spools the whole multipart body before the endpoint
-    # and its auth dependency run. Added before CORS so CORS stays outermost
-    # and a cross-origin 413 still carries its headers.
-    app.add_middleware(UploadSizeLimitMiddleware, settings=settings)
+    # Request-body limits: uploads (Issue #29) and every other body, such as
+    # a regrade's JSON. They must run while the body is received: FastAPI
+    # reads the whole body before the endpoint and its auth dependency run.
+    # Added before CORS so CORS stays outermost and a cross-origin 413 still
+    # carries its headers.
+    app.add_middleware(BodySizeLimitMiddleware, settings=settings)
 
     # CORS: only enabled when explicitly configured. The default (empty list)
     # is the single-container deployment where this app also serves the

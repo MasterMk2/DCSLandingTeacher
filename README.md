@@ -116,6 +116,7 @@ docker compose up --build
 | `DLT_ACMI_ENABLED` | `true` | `false` で ACMI 受信を停止（API 単体運用向け） |
 | `DLT_AUTH_TOKEN` | （空） | 簡易トークン認証の共有トークン。空なら認証なし（既定）。詳細は「簡易トークン認証」の節を参照 |
 | `DLT_IMPORT_MAX_UPLOAD_MB` | `200` | ACMI ファイルインポートのアップロードサイズ上限（MB）。詳細は「ACMI ファイルのインポート」の節を参照 |
+| `DLT_API_MAX_BODY_KB` | `64` | アップロード以外の要求本文（再評価のオーバーライドの JSON など）の上限（KB）。超えると HTTP 413 |
 
 既存の Tacview 設定で `31010` を使っている場合は、`.env` に
 `DLT_TACVIEW_PORT=31010` を明示してください。複数ソースの JSON 設定でも

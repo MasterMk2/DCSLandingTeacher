@@ -107,7 +107,7 @@ async def import_acmi_file(
     max_bytes = settings.import_max_upload_mb * 1024 * 1024
 
     # The request-body limit for Issue #29 is enforced while the body arrives
-    # (app.api.upload_limit), because by the time this function runs FastAPI
+    # (app.api.body_limit), because by the time this function runs FastAPI
     # has already parsed the multipart body and spooled the upload to disk.
     # _save_upload re-checks the file itself in case that middleware is not
     # in front of this router.
