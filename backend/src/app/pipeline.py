@@ -92,7 +92,13 @@ def _reapply_reference_slope(analysis: ApproachAnalysis, slope_deg: float) -> No
 # 平均」は、3.0° で飛んでも狙点が基準点と違えば閾値際で 1° 超の誤差になり、
 # 本番 265 件中 64 件で飛んだ角度と符号が逆だった。評価窓は閾値か 50 ft の
 # 早い方まで。再採点は基準点をシードから引き直してから偏差を作り直す。
-GRADING_VERSION = "9"
+# 10 (2026-11-03): 導出する対地速度を、位置が初めて報告された時刻どうしで
+# 測る (ingest._position_fixes、Issue #27)。部分更新が繰り返す直前の位置を
+# その行の時刻で数えていたので、位置の更新が行より遅いストリームでは速度が
+# 最大で数倍に出ていた。接地速度・進入速度比 (FAST / SLOW)・空母の POWER に
+# 入る。導出は生データから行うので、反映には再採点ではなく作り直し
+# (/landings/{id}/rebuild か rescan) が要る。毎行位置が来るストリームは変わらない。
+GRADING_VERSION = "10"
 
 
 def _row_approach_pattern(

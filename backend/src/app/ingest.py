@@ -37,7 +37,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from itertools import chain
 from logging import getLogger
@@ -124,6 +124,39 @@ GROUND_SPEED_MAX_PLAUSIBLE_MS = 1000.0
 POSITION_JUMP_SPEED_MS = 1000.0
 
 
+def _position_fixes(
+    history_newest_first: Iterable[TrackSample], oldest: float
+) -> Iterator[tuple[float, float, float]]:
+    """Each distinct position in the history as ``(lat, lon, first_seen)``.
+
+    An ACMI partial update repeats the last known position verbatim, so a run
+    of consecutive samples with identical coordinates is one position report.
+    It was true when it was first seen, not at the time of the later lines
+    that only carried it forward. Runs are yielded newest first.
+    ``first_seen`` is the run's earliest sample.
+
+    Samples without coordinates (rejected jumps) are skipped. The walk stops
+    at the first sample older than ``oldest``. If that sample continues the
+    open run, the run is dropped as well: it started too long ago to be timed.
+    """
+    run: tuple[float, float, float] | None = None
+    for sample in history_newest_first:
+        if sample.latitude is None or sample.longitude is None:
+            continue
+        if run is not None and sample.latitude == run[0] and sample.longitude == run[1]:
+            if sample.time < oldest:
+                return
+            run = (run[0], run[1], sample.time)
+            continue
+        if run is not None:
+            yield run
+        if sample.time < oldest:
+            return
+        run = (sample.latitude, sample.longitude, sample.time)
+    if run is not None:
+        yield run
+
+
 def ground_speed_from_history(
     history_newest_first: Iterable[TrackSample],
     time: float,
@@ -132,11 +165,17 @@ def ground_speed_from_history(
 ) -> float | None:
     """Two-point ground speed against an earlier position of the same object.
 
-    Walks back through ``history_newest_first`` for a sample at least
-    ``GROUND_SPEED_MIN_BASELINE_S`` old -- but never past
-    ``GROUND_SPEED_MAX_BASELINE_S`` of stale data (Issue #27) -- that the
-    object has moved at least ``GROUND_SPEED_MIN_DISTANCE_M`` from, and
-    returns the implied speed unless it is implausible.
+    Differentiates position reports, not lines (:func:`_position_fixes`).
+    When positions refresh more slowly than the object's other properties,
+    timing a position by the newest line that repeated it would shorten
+    ``dt`` and inflate the speed. A position refreshed every 2 s against
+    lines every 0.05 s read up to twice the true speed (Issue #27).
+
+    Walks back for a position first seen at least
+    ``GROUND_SPEED_MIN_BASELINE_S`` before the current one, but never past
+    ``GROUND_SPEED_MAX_BASELINE_S`` of stale data, that the object has moved
+    at least ``GROUND_SPEED_MIN_DISTANCE_M`` from. Returns the implied speed
+    unless it is implausible.
 
     A function rather than a method because two places must compute it the
     same way: live ingest (over the rolling buffer) and the rebuild of a
@@ -144,22 +183,21 @@ def ground_speed_from_history(
     derived differently there would change FAST / SLOW on a row that was
     only being re-cut.
     """
-    for previous in history_newest_first:
-        if previous.latitude is None or previous.longitude is None:
+    fixes = _position_fixes(history_newest_first, time - GROUND_SPEED_MAX_BASELINE_S)
+    fix_time = time
+    for index, (fix_lat, fix_lon, first_seen) in enumerate(fixes):
+        if index == 0 and fix_lat == latitude and fix_lon == longitude:
+            # This line only repeats the newest report; time it by that.
+            fix_time = first_seen
             continue
-        dt = time - previous.time
-        if dt < GROUND_SPEED_MIN_BASELINE_S:
+        if fix_time - first_seen < GROUND_SPEED_MIN_BASELINE_S:
             continue
-        if dt > GROUND_SPEED_MAX_BASELINE_S:
-            # Everything further back is even staler; no usable baseline.
-            return None
-        distance = haversine_m(previous.latitude, previous.longitude, latitude, longitude)
+        distance = haversine_m(fix_lat, fix_lon, latitude, longitude)
         if distance < GROUND_SPEED_MIN_DISTANCE_M:
-            # ACMI repeats the last position on partial updates; a tiny delta
-            # is noise, not a standstill -- keep walking back within the fresh
-            # window for a sample that actually moved.
+            # Too close to tell motion from noise: keep walking back within
+            # the fresh window for a report that actually moved.
             continue
-        speed = distance / dt
+        speed = distance / (fix_time - first_seen)
         if speed > GROUND_SPEED_MAX_PLAUSIBLE_MS:
             return None
         return speed
@@ -167,30 +205,44 @@ def ground_speed_from_history(
 
 
 def reject_impossible_position(
-    previous: TrackSample | None, sample: TrackSample
+    history_newest_first: Iterable[TrackSample], sample: TrackSample
 ) -> TrackSample:
     """``sample`` without its coordinates if it jumped impossibly far.
 
-    Returns ``sample`` itself when kept. See
-    ``TrackIngestor.POSITION_JUMP_SPEED_MS`` for why; shared with the
+    Returns ``sample`` itself when kept. The implied speed is measured from
+    when the newest position was first seen, for the same reason as in
+    :func:`ground_speed_from_history`. A real position report that arrives
+    after a run of repeated lines would otherwise look like a jump over one
+    line's ``dt`` and lose its coordinates. A newest sample without
+    coordinates (itself rejected) means no comparison, so a respawn costs one
+    sample. See ``TrackIngestor.POSITION_JUMP_SPEED_MS``. Shared with the
     rebuild for the same reason as :func:`ground_speed_from_history`.
     """
+    if sample.latitude is None or sample.longitude is None:
+        return sample
+    history = iter(history_newest_first)
+    newest = next(history, None)
     if (
-        previous is None
-        or sample.latitude is None
-        or sample.longitude is None
-        or previous.latitude is None
-        or previous.longitude is None
+        newest is None
+        or newest.latitude is None
+        or newest.longitude is None
+        or sample.time <= newest.time
     ):
         return sample
-    dt = sample.time - previous.time
-    if dt <= 0:
-        return sample
-    speed = (
-        haversine_m(previous.latitude, previous.longitude, sample.latitude, sample.longitude)
-        / dt
-    )
-    if speed <= POSITION_JUMP_SPEED_MS:
+    distance = haversine_m(newest.latitude, newest.longitude, sample.latitude, sample.longitude)
+    first_seen = newest.time
+    for previous in history:
+        if distance <= POSITION_JUMP_SPEED_MS * (sample.time - first_seen):
+            # Plausible already; an earlier first report only lowers the speed.
+            return sample
+        if (
+            previous.latitude != newest.latitude
+            or previous.longitude != newest.longitude
+            or newest.time - previous.time > GROUND_SPEED_MAX_BASELINE_S
+        ):
+            break
+        first_seen = previous.time
+    if distance <= POSITION_JUMP_SPEED_MS * (sample.time - first_seen):
         return sample
     return replace(sample, latitude=None, longitude=None)
 
@@ -1278,7 +1330,7 @@ class TrackIngestor:
         sample = self._reject_impossible_position(obj_id, buffer, sample)
         buffer.append(sample)
 
-    #: Above this implied speed between consecutive position samples the new
+    #: Above this implied speed since the previous position report the new
     #: position is physically impossible for a crewed aircraft and its
     #: coordinates are discarded (alt/AGL/speed/heading are kept). A corrupted
     #: recording (observed live: a TacView client capture whose lat/lon cycled
@@ -1291,7 +1343,7 @@ class TrackIngestor:
     def _reject_impossible_position(
         self, obj_id: str, buffer: RollingTrackBuffer, sample: TrackSample
     ) -> TrackSample:
-        kept = reject_impossible_position(buffer.last(), sample)
+        kept = reject_impossible_position(buffer.iter_reverse(), sample)
         if kept is not sample:
             logger.debug(
                 "position jump rejected: obj=%s at t=%.2f", obj_id, sample.time

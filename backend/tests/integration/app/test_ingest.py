@@ -120,7 +120,9 @@ async def test_ground_speed_ignores_duplicate_position_from_partial_updates(
         "FileVersion=2.2",
         "0,ReferenceTime=2011-06-02T05:00:00Z",
         "#0.00",
-        "301,T=0|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
+        # Close enough to the next position (~56 m/s) not to be dropped as a
+        # position jump, which would move the start of the repeated run.
+        "301,T=0.00095|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
         "#0.10",
         "301,T=0.001|0|1000",  # real movement
         "#0.15",
@@ -136,7 +138,8 @@ async def test_ground_speed_ignores_duplicate_position_from_partial_updates(
 
     samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
     assert len(samples) == 5
-    # The two partial updates repeat the t=0.10 position verbatim.
+    # The t=0.10 report is kept, and the two partial updates repeat it verbatim.
+    assert samples[1].longitude == pytest.approx(0.001)
     assert samples[2].longitude == pytest.approx(0.001)
     assert samples[3].longitude == pytest.approx(0.001)
     # Not enough baseline yet (< 1.0s since the first sample) -> unknown,
@@ -144,12 +147,13 @@ async def test_ground_speed_ignores_duplicate_position_from_partial_updates(
     assert samples[1].speed is None
     assert samples[2].speed is None
     assert samples[3].speed is None
-    # The final sample has exactly 1.0s of baseline against the last
-    # distinct position (t=0.20, which repeats t=0.10's 0.001) -- not the
-    # inflated/zeroed reading a naive immediately-previous-sample diff
-    # would produce.
+    # The final sample is differentiated against the previous distinct
+    # position, timed by when it was first reported (t=0.10), not by the
+    # later lines that only repeated it (t=0.20): 1.1 s of travel, not 1.0
+    # (Issue #27). Neither the inflated/zeroed reading of a naive
+    # immediately-previous-sample diff.
     last = samples[-1]
-    expected = haversine_m(0.001, 0.0, 0.004, 0.0) / 1.0
+    expected = haversine_m(0.001, 0.0, 0.004, 0.0) / 1.1
     assert last.speed == pytest.approx(expected, rel=1e-6)
 
 
@@ -196,6 +200,77 @@ async def test_ground_speed_rejects_stale_baseline(session_factory) -> None:
 
     samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
     assert samples[-1].speed is None
+
+
+_ACMI_HEADER = [
+    "FileType=text/acmi/tacview",
+    "FileVersion=2.2",
+    "0,ReferenceTime=2011-06-02T05:00:00Z",
+    "#0.00",
+    "301,T=0|0|1000|0|0|90,Type=Air+FixedWing,Name=F-16,Pilot=Test",
+]
+
+
+async def test_ground_speed_times_a_position_by_its_first_report(session_factory) -> None:
+    """Issue #27: when positions refresh more slowly than the object's other
+    properties, the lines in between repeat the last position verbatim. The
+    speed must be timed by when each position was first reported, not by the
+    latest line that repeated it: that shortened dt and read up to twice the
+    true speed for a position refreshed every 2 s. Nor is the fresh report
+    after such a run a position jump."""
+    from app.detection.geometry import haversine_m
+
+    deg_per_s = 70.0 / 111_320.0  # ~70 m/s east along the equator
+    lines = list(_ACMI_HEADER)
+    for step in range(1, 600):  # 30 s of lines every 0.05 s
+        t = step * 0.05
+        lines.append(f"#{t:.2f}")
+        if step % 40 == 0:  # a fresh position every 2 s
+            lines.append(f"301,T={deg_per_s * t:.9f}|0|1000")
+        else:
+            lines.append(f"301,AGL={900 + step % 7}")
+    ingestor = TrackIngestor(session_factory)
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
+    assert len(samples) == 600
+    assert all(s.latitude is not None and s.longitude is not None for s in samples)
+    true_speed = haversine_m(0.0, 0.0, 0.0, deg_per_s)
+    measured = [s.speed for s in samples if s.time >= 2.0]
+    assert measured and all(
+        speed == pytest.approx(true_speed, rel=1e-3) for speed in measured
+    ), (min(m or 0.0 for m in measured), max(m or 0.0 for m in measured))
+
+
+async def test_ground_speed_does_not_time_a_position_held_past_the_window(
+    session_factory,
+) -> None:
+    """A position repeated for longer than GROUND_SPEED_MAX_BASELINE_S (parked,
+    or a stream that stopped refreshing it) cannot be timed, so it is not a
+    baseline. After the aircraft starts moving there is no speed until it has
+    moved for a full minimum baseline. This pins the taxi-start behaviour;
+    grading reads speeds only in flight and at touchdown."""
+    from app.detection.geometry import haversine_m
+
+    lines = list(_ACMI_HEADER)
+    for step in range(1, 61):  # parked for 30 s, lines every 0.5 s
+        lines += [f"#{step * 0.5:.2f}", f"301,AGL={1 + step % 3}"]
+    deg_per_s = 10.0 / 111_320.0  # then ~10 m/s, a fresh position every 0.1 s
+    for step in range(1, 31):
+        lines += [f"#{30 + step * 0.1:.2f}", f"301,T={deg_per_s * step * 0.1:.9f}|0|1000"]
+    ingestor = TrackIngestor(session_factory)
+    for line in lines:
+        await ingestor.handle_line(line)
+    await ingestor.close()
+
+    samples = ingestor._aircraft_buffers["301"].snapshot()  # noqa: SLF001
+    starting = [s.speed for s in samples if 30.0 < s.time <= 30.9]
+    rolling = [s.speed for s in samples if s.time >= 31.3]
+    assert starting and all(speed is None for speed in starting)
+    true_speed = haversine_m(0.0, 0.0, 0.0, deg_per_s)
+    assert rolling and all(speed == pytest.approx(true_speed, rel=1e-3) for speed in rolling)
 
 
 async def test_ingest_ignores_unparsable_lines(session_factory) -> None:
