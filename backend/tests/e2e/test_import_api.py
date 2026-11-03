@@ -339,6 +339,26 @@ async def test_import_accepts_chunked_upload_within_the_limit(tmp_path) -> None:
     assert job["landings_detected"] == 1
 
 
+async def test_import_is_held_to_its_own_limit_not_the_json_body_limit(tmp_path) -> None:
+    """Any recording is bigger than a JSON body; the KB cap for other
+    requests must not catch an upload that is within the MB cap."""
+    app = create_app(
+        make_api_settings(
+            tmp_path, database_filename="import.db", import_max_upload_mb=1, api_max_body_kb=1
+        )
+    )
+    upload = _ChunkedUpload("session.acmi", _sample_acmi().encode())
+    assert upload.total > 1024
+    async with app.router.lifespan_context(app):
+        async with open_api_client(app) as http:
+            response = await upload.post(http)
+            assert response.status_code == 202
+            job = await _wait_for_job(http, response.json()["id"])
+
+    assert job["status"] == "completed"
+    assert job["landings_detected"] == 1
+
+
 async def test_list_and_get_import_jobs(tmp_path) -> None:
     app = create_app(make_api_settings(tmp_path, database_filename="import.db"))
     async with app.router.lifespan_context(app):

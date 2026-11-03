@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     # megabytes. Larger uploads are rejected with 413.
     import_max_upload_mb: int = 200
 
+    # Every other request body, in kilobytes; larger bodies are rejected with
+    # 413 while they are received, before authentication. The largest body
+    # the API reads is the JSON of a regrade's overrides, which is at most the
+    # whole grading config: about 19 KB even indented and ASCII-escaped.
+    api_max_body_kb: int = 64
+
     # Emit structured (JSON) log lines instead of plain text (Issue #32).
     # Off by default: this deployment is read with `docker logs`, and JSON
     # would only be half the picture anyway -- uvicorn's access logger keeps

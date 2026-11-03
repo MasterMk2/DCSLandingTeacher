@@ -1,17 +1,26 @@
-"""Request-body cap for ACMI uploads (Issue #29).
+"""Request-body caps, enforced while the body is received.
 
-FastAPI parses the whole multipart body -- spooling the file part to disk --
-before the endpoint or any of its dependencies run, authentication included.
-A limit checked in the endpoint is checked after the bytes are already on
-disk. This middleware enforces the limit while the body is received, so
-neither an over-limit ``Content-Length`` nor a chunked body that declares no
-length gets more than ``import_max_upload_mb`` into the process.
+FastAPI reads the whole body before the endpoint or any of its dependencies
+run, authentication included: a multipart upload is spooled to disk, a JSON
+body is held in memory. A limit checked in the endpoint is checked after the
+bytes have arrived. This middleware enforces the limit while the body is
+received, so neither an over-limit ``Content-Length`` nor a chunked body that
+declares no length gets more than the limit into the process.
+
+- ACMI uploads (``POST .../import``, Issue #29): ``import_max_upload_mb``,
+  answered with 413 ``UPLOAD_TOO_LARGE``.
+- Every other HTTP request: ``api_max_body_kb``, answered with 413
+  ``REQUEST_TOO_LARGE``. The largest of those bodies is a regrade's
+  ``overrides``, which is at most the whole grading config.
 
 It is a plain ASGI middleware rather than ``@app.middleware("http")``: the cap
 has to sit inside ``receive``, which the decorator form does not expose.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from functools import partial
 
 from starlette.datastructures import Headers
 from starlette.responses import Response
@@ -33,7 +42,7 @@ def _is_import_upload(scope: Scope) -> bool:
     )
 
 
-def _too_large(limit_mb: int) -> Response:
+def _upload_too_large(limit_mb: int) -> Response:
     return error_envelope(
         413,
         "UPLOAD_TOO_LARGE",
@@ -42,8 +51,17 @@ def _too_large(limit_mb: int) -> Response:
     )
 
 
-class UploadSizeLimitMiddleware:
-    """Answer 413 as soon as an import upload's body exceeds the limit."""
+def _body_too_large(limit_kb: int) -> Response:
+    return error_envelope(
+        413,
+        "REQUEST_TOO_LARGE",
+        f"request body exceeds the {limit_kb} KB limit",
+        {"max_body_kb": limit_kb},
+    )
+
+
+class BodySizeLimitMiddleware:
+    """Answer 413 as soon as a request body exceeds its limit."""
 
     app: ASGIApp
     settings: Settings
@@ -53,17 +71,24 @@ class UploadSizeLimitMiddleware:
         self.settings = settings
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not _is_import_upload(scope):
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        limit_mb = self.settings.import_max_upload_mb
-        max_bytes = limit_mb * 1024 * 1024
+        too_large: Callable[[], Response]
+        if _is_import_upload(scope):
+            limit_mb = self.settings.import_max_upload_mb
+            max_bytes = limit_mb * 1024 * 1024
+            too_large = partial(_upload_too_large, limit_mb)
+        else:
+            limit_kb = self.settings.api_max_body_kb
+            max_bytes = limit_kb * 1024
+            too_large = partial(_body_too_large, limit_kb)
 
         # A declared length over the limit is refused without reading a byte.
         declared = Headers(scope=scope).get("content-length")
         if declared is not None and declared.isdigit() and int(declared) > max_bytes:
-            await _too_large(limit_mb)(scope, receive, send)
+            await too_large()(scope, receive, send)
             return
 
         received = 0
@@ -98,4 +123,4 @@ class UploadSizeLimitMiddleware:
             if not exceeded or response_started:
                 raise
         if exceeded and not response_started:
-            await _too_large(limit_mb)(scope, receive, send)
+            await too_large()(scope, receive, send)
