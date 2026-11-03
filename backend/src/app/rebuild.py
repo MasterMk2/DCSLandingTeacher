@@ -127,7 +127,7 @@ def samples_from_rows(rows: Iterable[Any]) -> list[TrackSample]:
             roll=row.roll,
             pitch=row.pitch,
         )
-        samples.append(reject_impossible_position(samples[-1] if samples else None, sample))
+        samples.append(reject_impossible_position(reversed(samples), sample))
     return samples
 
 
