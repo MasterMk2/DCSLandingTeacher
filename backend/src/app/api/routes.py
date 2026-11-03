@@ -141,8 +141,8 @@ async def _check_database(request: Request) -> dict:
         return {"connected": True, "latency_ms": round(latency_ms, 1)}
     except Exception as exc:
         # The driver's message can name the database host, port and user, and
-        # /health needs no token: the detail goes to the server log only. One
-        # line, no traceback: Compose polls this every 2 s during an outage.
+        # /health needs no token: the detail goes to the server log only. No
+        # traceback: Compose polls this every 2 s during an outage.
         logger.warning("health check: database unavailable: %s: %s", type(exc).__name__, exc)
         return {"connected": False, "error": "database unavailable"}
 
